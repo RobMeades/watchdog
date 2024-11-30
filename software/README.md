@@ -1,10 +1,25 @@
 # Introduction
-Here you will find all of the software aspects, running in Python, using [PiCamera2](https://github.com/raspberrypi/picamera2), [OpenCV](https://opencv.org/), [matplotlib](https://matplotlib.org/) and [gradio](https://www.gradio.app/).  Note that these instructions are for the V3 Pi camera; this camera can ONLY be accessed through `libcamera` (which [PiCamera2](https://github.com/raspberrypi/picamera2) wraps) and which [OpenCV](https://opencv.org/) does NOT understand natively (different from the V2 camera, which [OpenCV](https://opencv.org/) could use directly).
+Here you will find all of the software aspects, running in C++, using [libcamera](https://libcamera.org/) and [OpenCV](https://opencv.org/).  I did try doing this stuff from Python but it was taking soooo lonnnngggggg: up to 60 seconds just to import the Python modules, hence I switched to C instead.  Note that these instructions are for the V3 Pi camera; this camera can ONLY be accessed through `libcamera`, which the Python module [PiCamera2](https://github.com/raspberrypi/picamera2) wraps, and which [OpenCV](https://opencv.org/) does NOT understand natively (different from the V2 camera, which [OpenCV](https://opencv.org/) could use directly).
+
+In writing the software here I was guided by:
+
+- [this tutorial](https://learnopencv.com/moving-object-detection-with-opencv) from Learn OpenCV (in Python),
+- [this article](https://pyimagesearch.com/2019/09/02/opencv-stream-video-to-web-browser-html-page/) about using a V3 Pi camera for video monitoring (from Python),
+- OpenCV's [excellent tutorials](https://docs.opencv.org/4.x/d9/df8/tutorial_root.html), particularly the ones on [background subtraction](https://docs.opencv.org/4.x/d1/dc5/tutorial_background_subtraction.html) and [contour detection](https://docs.opencv.org/4.x/df/d0d/tutorial_find_contours.html),
+- the equally excellent [documentation for libcamera](https://libcamera.org/guides/application-developer.html),
+- the source code for [libcamera's cam application](https://git.libcamera.org/libcamera/libcamera.git/tree/src/apps/cam).
 
 # Installation
-For the PiZero2W, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution for PiZero2W to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.
+For the PiZero2W, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution for PiZero2W to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.  It is worth waiting a good 10 minutes for the PiZero2W to sort itself out and become available to `ssh` on your Wifi network at first boot; I've no idea why.
 
 Throughout this section, `ssh` (or [PuTTY](https://www.putty.org/) if you prefer) is used to access the Pi and `sftp` (or [FileZilla](https://filezilla-project.org/) if you prefer) to download (`get`) files from the Pi, so make sure that both of those work to access the Pi from another computer on your LAN, a computer that has a display attached.
+
+Log into the Pi over `ssh`.  Make sure the Pi is up to date with:
+
+```
+sudo apt update
+sudo apt upgrade
+```
 
 Power the Pi down again and plug in the V3 camera.  Power-up the Pi once more, log in over `ssh` and check that an image can be captured from the camera with:
 
@@ -14,71 +29,70 @@ rpicam-jpeg --output test.jpg
 
 `sftp`->`get` the `test.jpg` file and view it to check that it contains a good image.
 
-Install [PiCamera2](https://github.com/raspberrypi/picamera2), [OpenCV](https://opencv.org/) and [matplotlib](https://matplotlib.org/) with:
+Install the dependencies required to develop with [libcamera](https://libcamera.org/):
 
 ```
-sudo apt install python3-picamera2
-sudo apt install python3-opencv
-sudo apt install python3-matplotlib
+sudo apt install git cmake meson ninja-build pkg-config libyaml-dev python3-yaml python3-ply python3-jinja2 libssl-dev openssl libdw-dev libunwind-dev libudev-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpython3-dev pybind11-dev libevent-dev libdrm-dev libjpeg-dev libsdl2-dev pybind11-dev
 ```
 
-Start a Python3 interpreter and check that you can capture an image from the camera in Python with:
+Fetch and build [libcamera](https://libcamera.org/) (this will take a few hours) with:
 
 ```
-from picamera2 import Picamera2
-picam2 = Picamera2()
-camera_config = picam2.create_still_configuration(main={"size": (1920, 1080)}, lores={"size": (640, 480)}, display="lores")
-picam2.configure(camera_config)
-picam2.start()
-picam2.capture_file("test_from_python.jpg")
+git clone https://git.libcamera.org/libcamera/libcamera.git
+cd libcamera
+meson setup build
+sudo ninja -C build install
 ```
 
-`sftp`->`get` the `test_from_python.jpg` file and check that it is a good image.
-
-To check that [OpenCV](https://opencv.org/) can handle image data (as a `NumPy` array), add the following lines of Python to the above in the same Python interpreter session:
+Once that has cooked, run:
 
 ```
-import cv2
-image_array=picam2.capture_array()
-cv2.imwrite("test_through_opencv.jpg", image_array)
+cam -l
 ```
 
-`sftp`->`get` the `test_through_opencv.jpg` file and check that it is a good image.
-
-The rest of the application is based on LearnOpenCV's article "[moving object detection with OpenCV](https://learnopencv.com/moving-object-detection-with-opencv)".  In that article they use [gradio](https://www.gradio.app/) to provide a web app interface, which seemed very useful when operating headless.  Install [gradio](https://www.gradio.app/) with:
+...and you should see something like:
 
 ```
-sudo apt install python3-dev python3-setuptools libtiff5-dev libjpeg-dev libopenjp2-7-dev zlib1g-dev libfreetype6-dev liblcms2-dev libwebp-dev tcl8.6-dev tk8.6-dev python3-tk libharfbuzz-dev libfribidi-dev libxcb1-dev libopenblas-dev
-python -m venv gradio-env --system-site-packages
-source gradio-env/bin/activate
-pip install gradio
+INFO Camera camera_manager.cpp:325 libcamera v0.3.2+27-7330f29b
+WARN RPiSdn sdn.cpp:40 Using legacy SDN tuning - please consider moving SDN inside rpi.denoise
+INFO RPI vc4.cpp:447 Registered camera /base/soc/i2c0mux/i2c@1/imx708@1a to Unicam device /dev/media3 and ISP device /dev/media0
+Available cameras:
+1: 'imx708_wide_noir' (/base/soc/i2c0mux/i2c@1/imx708@1a)
 ```
 
-Note: the first line installs a load of pre-requisites for `pillow`, which is compiled as part of the [gradio](https://www.gradio.app/) installation.
-Note: `--system-site-packages` allows the `gradio-env` virtual environment to see the system-wide Python packages you installed further up; if you later want to install a package locally in the virtual environment, overriding a system one, use `pip install --ignore-installed blah`.
+The little `cam` application does a few useful things, `cam -h` for help.  For example:
 
-Open a new Python interpreter and run the following, which is largely the [gradio](https://www.gradio.app/) [standard test application](https://github.com/gradio-app/gradio?tab=readme-ov-file#building-your-first-demo):
+`cam -c 1 -p`
 
-```python
-from picamera2 import Picamera2
-import cv2 as cv
-import matplotlib.pyplot as plt
-import gradio as gr
+...displays the properties of camera 1 while:
 
-def greet(name, intensity):
-    return "Hello, " + name + "!" * int(intensity)
+`cam -c 1 -I`
 
-demo = gr.Interface(
-    fn=greet,
-    inputs=["text", "slider"],
-    outputs=["text"],
-)
+...displays the pixel formats supported, etc.
 
-demo.launch(server_name="0.0.0.0")
-```
-
-[gradio](https://www.gradio.app/) makes its applications available on port 7860, so check that it has worked by accessing the PiZero2W from a browser on another machine of your LAN with:
+Finally, install [OpenCV](https://opencv.org/) and its development libraries with:
 
 ```
-http://ip-address-of-PiZero2W:7860/
+sudo apt install python3-opencv libopencv-dev
 ```
+
+# Build/Run
+Clone this repo to the PiZero2W, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:
+
+```
+meson setup build
+cd build
+ninja
+./watchdog
+```
+
+To run with maximum debug, use:
+
+```
+LIBCAMERA_LOG_LEVELS=0 ./watchdog
+```
+
+Otherwise, the default (log level 1) is to run with information, warning and error messages but not debug messages.
+
+# A Note On Developing
+I couldn't find a way to set up Github authentication (required to push code back to Github) on a 32-bit ARM Linux Raspberry Pi, which is what the PiZero2W is: most of the applications required to store authentication keys don't seem to be available for that platform combination and I didn't fancy compiling them myself.  Since this is a simple application, a single source file, I just used `nano` as an editor on the Pi itself and had an `sftp` session running from a PC so that I could `get` the single source file I was working on from there and do all of the archive pushing stuff on the PC.  The only thing to remember was to open the source file on the PC in something like [Notepad++](https://notepad-plus-plus.org/) and do an `Edit`->`EOL Conversion` to switch the file to Windows line-endings on the PC before doing any pushing.
