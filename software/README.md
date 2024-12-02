@@ -1,10 +1,11 @@
 # Introduction
-Here you will find all of the software aspects, running in C++, using [libcamera](https://libcamera.org/) and [OpenCV](https://opencv.org/).  I did try doing this stuff from Python but it was taking soooo lonnnngggggg: up to 60 seconds just to import the Python modules, hence I switched to C instead.  Note that these instructions are for the V3 Pi camera; this camera can ONLY be accessed through `libcamera`, which the Python module [PiCamera2](https://github.com/raspberrypi/picamera2) wraps, and which [OpenCV](https://opencv.org/) does NOT understand natively (different from the V2 camera, which [OpenCV](https://opencv.org/) could use directly).
+Here you will find all of the software aspects, running in C++, using [libcamera](https://libcamera.org/), [OpenCV](https://opencv.org/) and [FFmpeg](https://www.ffmpeg.org/).  I did try doing this stuff from Python but it was taking soooo lonnnngggggg: up to 60 seconds just to import the Python modules, hence I switched to C instead.  Note that these instructions are for the V3 Pi camera; this camera can ONLY be accessed through `libcamera`, which the Python module [PiCamera2](https://github.com/raspberrypi/picamera2) wraps, and which [OpenCV](https://opencv.org/) does NOT understand natively (different from the V2 camera, which [OpenCV](https://opencv.org/) could use directly).
 
 In writing the software here I was guided by:
 
 - [this tutorial](https://learnopencv.com/moving-object-detection-with-opencv) from Learn OpenCV (in Python),
 - [this article](https://pyimagesearch.com/2019/09/02/opencv-stream-video-to-web-browser-html-page/) about using a V3 Pi camera for video monitoring (from Python),
+- [this article](https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124) about streaming using [FFmpeg](https://www.ffmpeg.org/),
 - OpenCV's [excellent tutorials](https://docs.opencv.org/4.x/d9/df8/tutorial_root.html), particularly the ones on [background subtraction](https://docs.opencv.org/4.x/d1/dc5/tutorial_background_subtraction.html) and [contour detection](https://docs.opencv.org/4.x/df/d0d/tutorial_find_contours.html),
 - the equally excellent [documentation for libcamera](https://libcamera.org/guides/application-developer.html),
 - the source code for [libcamera's cam application](https://git.libcamera.org/libcamera/libcamera.git/tree/src/apps/cam).
@@ -62,18 +63,39 @@ Available cameras:
 
 The little `cam` application does a few useful things, `cam -h` for help.  For example:
 
-`cam -c 1 -p`
+```
+cam -c 1 -p
+```
 
 ...displays the properties of camera 1 while:
 
-`cam -c 1 -I`
+```
+cam -c 1 -I
+```
 
 ...displays the pixel formats supported, etc.
 
-Finally, install [OpenCV](https://opencv.org/) and its development libraries with:
+Install [OpenCV](https://opencv.org/) and its development libraries with:
 
 ```
 sudo apt install python3-opencv libopencv-dev
+```
+
+Install the dependencies for [FFmpeg](https://www.ffmpeg.org/) as follows; you probably don't actually need half of these but it does no harm to have them:
+
+```
+sudo apt install imagemagick libasound2-dev libass-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libfreetype6-dev libgmp-dev libmp3lame-dev libopencore-amrnb-dev libopencore-amrwb-dev libopus-dev librtmp-dev libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-net-dev libsdl2-ttf-dev libsnappy-dev libsoxr-dev libssh-dev libtool libv4l-dev libva-dev libvdpau-dev libvo-amrwbenc-dev libvorbis-dev libwebp-dev libx264-dev libx265-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb1-dev libxml2-dev lzma-dev nasm python3-dev python3-pip texinfo yasm zlib1g-dev libdrm-dev
+```
+
+Then fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) (compiling will take a little while) with:
+
+```
+cd ~
+git clone git://source.ffmpeg.org/ffmpeg --depth=1
+cd ffmpeg
+./configure --extra-ldflags="-latomic" --extra-cflags="-Wno-format-truncation" --arch=armel --target-os=linux --enable-gpl --enable-libx264 --enable-nonfree --enable-v4l2-m2m
+make -j4
+sudo make install
 ```
 
 # Build/Run
@@ -86,13 +108,13 @@ ninja
 ./watchdog
 ```
 
-To run with maximum debug, use:
+To run with maximum debug from [libcamera](https://libcamera.org/), use:
 
 ```
 LIBCAMERA_LOG_LEVELS=0 ./watchdog
 ```
 
-Otherwise, the default (log level 1) is to run with information, warning and error messages but not debug messages.
+Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
 # A Note On Developing
-I couldn't find a way to set up Github authentication (required to push code back to Github) on a 32-bit ARM Linux Raspberry Pi, which is what the PiZero2W is: most of the applications required to store authentication keys don't seem to be available for that platform combination and I didn't fancy compiling them myself.  Since this is a simple application, a single source file, I just used `nano` as an editor on the Pi itself and had an `sftp` session running from a PC so that I could `get` the single source file I was working on from there and do all of the archive pushing stuff on the PC.  The only thing to remember was to open the source file on the PC in something like [Notepad++](https://notepad-plus-plus.org/) and do an `Edit`->`EOL Conversion` to switch the file to Windows line-endings on the PC before doing any pushing.
+I couldn't find a way to set up Github authentication (required to push code back to Github) on a 32-bit ARM Linux Raspberry Pi, which is what the PiZero2W is: most of the applications required to store authentication keys don't seem to be available for that platform combination and I didn't fancy compiling them myself.  Since this is a simple application, a single source file, I just used `nano` as an editor on the Pi itself and had an `sftp` session running from a PC so that I could `get` the single source file I was working on from there and do all of the archive pushing stuff on the PC.  The only thing to remember was to open the source file on the PC in something like [Notepad++](https://notepad-plus-plus.org/) and do an `Edit`->`EOL Conversion` to switch the file to Windows line-endings on the PC before doing any pushing.  I guess you could equally do it the other way around: edit your `.c` file on the PC and `sftp`->`put` the file to the Pi before compiling, but if you do that then you will likely need to open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write in order to switch to the correct line endings.
