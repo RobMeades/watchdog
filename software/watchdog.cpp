@@ -37,6 +37,7 @@
 #include <thread>
 
 #include <sys/mman.h>
+#include <sys/time.h>
 
 #include <libcamera/libcamera.h>
 
@@ -158,7 +159,7 @@ using namespace cv;
 
 #ifndef W_FRAME_RATE_HERTZ
 // Frames per second.
-# define W_FRAME_RATE_HERTZ 30
+# define W_FRAME_RATE_HERTZ 25
 #endif
 
 /* ----------------------------------------------------------------
@@ -173,11 +174,33 @@ using namespace cv;
 #define W_ANSI_COLOUR_BRIGHT_GREEN "\u001b[32;1m"
 #define W_ANSI_COLOUR_BRIGHT_YELLOW "\u001b[33;1m"
 #define W_ANSI_COLOUR_BRIGHT_RED "\u001b[31;1m"
+#define W_ANSI_COLOUR_BRIGHT_MAGENTA "\u001b[35;1m"
 
 // Prefixes for info, warning and error strings.
-#define W_INFO W_ANSI_COLOUR_BRIGHT_GREEN "INFO " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG " " W_ANSI_COLOUR_RESET
-#define W_WARN W_ANSI_COLOUR_BRIGHT_YELLOW "WARN " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG " " W_ANSI_COLOUR_RESET
-#define W_ERROR W_ANSI_COLOUR_BRIGHT_RED "ERROR " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG " " W_ANSI_COLOUR_RESET
+#define W_INFO W_ANSI_COLOUR_BRIGHT_GREEN "INFO  " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
+#define W_WARN W_ANSI_COLOUR_BRIGHT_YELLOW "WARN  " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
+#define W_ERROR W_ANSI_COLOUR_BRIGHT_RED "ERROR " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
+#define W_DEBUG W_ANSI_COLOUR_BRIGHT_MAGENTA "DEBUG " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
+
+// Logging macros: one-call.
+#define W_LOG_INFO(...) log(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
+#define W_LOG_WARN(...) log(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
+#define W_LOG_ERROR(...) log(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
+#define W_LOG_DEBUG(...) log(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
+
+// Logging macros: multiple calls.
+#define W_LOG_INFO_START(...) logStart(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
+#define W_LOG_WARN_START(...) logStart(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
+#define W_LOG_ERROR_START(...) logStart(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
+#define W_LOG_DEBUG_START(...) logStart(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
+#define W_LOG_INFO_MORE(...) logMore(W_LOG_TYPE_INFO, __VA_ARGS__)
+#define W_LOG_WARN_MORE(...) logMore(W_LOG_TYPE_WARN, __VA_ARGS__)
+#define W_LOG_ERROR_MORE(...) logMore(W_LOG_TYPE_ERROR, __VA_ARGS__)
+#define W_LOG_DEBUG_MORE(...) logMore(W_LOG_TYPE_DEBUG, __VA_ARGS__)
+#define W_LOG_INFO_END logEnd(W_LOG_TYPE_INFO)
+#define W_LOG_WARN_END logEnd(W_LOG_TYPE_WARN)
+#define W_LOG_ERROR_END logEnd(W_LOG_TYPE_ERROR)
+#define W_LOG_DEBUG_END logEnd(W_LOG_TYPE_DEBUG)
 
 /* ----------------------------------------------------------------
  * TYPES
@@ -189,6 +212,15 @@ typedef enum {
     W_STREAM_TYPE_VIDEO_RECORDING = 0,
     W_STREAM_TYPE_MOTION_DETECTION = 1
 } wStreamType_t;
+
+// The types of log print.  Values are important as they are
+// used as indexes into arrays.
+typedef enum {
+    W_LOG_TYPE_INFO = 0,
+    W_LOG_TYPE_WARN = 1,
+    W_LOG_TYPE_ERROR = 2,
+    W_LOG_TYPE_DEBUG = 3
+} wLogType_t;
 
 /* ----------------------------------------------------------------
  * VARIABLES
@@ -213,6 +245,9 @@ static AVStream *gVideoOutputStream = nullptr;
 // callback will use it.
 static AVFrame *gVideoOutputFrame = nullptr;
 
+// Count of video recording frames received.
+static unsigned int gVideoRecordingFrameCount = 0;
+
 // Pointer to the OpenCV background subtractor: global as the
 // bufferCompleted() callback will use it.
 static std::shared_ptr<BackgroundSubtractor> gBackgroundSubtractor = nullptr;
@@ -223,6 +258,85 @@ static Mat gForegroundMask;
 
 // Names for the stream types, for debug purposes.
 static const char *gStreamName[] = {"video recording", "motion detection"};
+
+// Array of log prefixes for the different log types.
+static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
+
+// Arra of log destinations for the different log types.
+static FILE *gLogDestination[] = {stdout, stdout, stderr, stdout};
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: LOGGING
+ * -------------------------------------------------------------- */
+
+// Return the right output stream for a log type.
+static FILE *logDestination(wLogType_t type)
+{
+    FILE *destination = stderr;
+
+    if (type < W_ARRAY_COUNT(gLogDestination)) {
+        destination = gLogDestination[type];
+    }
+
+    return destination;
+}
+
+// Return the prefix for a log type.
+static const char *logPrefix(wLogType_t type)
+{
+    const char *prefix = W_ERROR;
+
+    if (type < W_ARRAY_COUNT(gLogDestination)) {
+        prefix = gLogPrefix[type];
+    }
+
+    return prefix;
+}
+
+// Print the start of a logging message.
+template<typename ... Args>
+static void logStart(wLogType_t type, unsigned int line, Args ... args)
+{
+    FILE *destination = logDestination(type);
+    const char *prefix = logPrefix(type);
+    char buffer[32];
+    timeval now;
+
+    gettimeofday(&now, NULL);
+    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", gmtime(&(now.tv_sec)));
+
+    fprintf(destination, "%s.%06ldZ ", buffer, now.tv_usec);
+    fprintf(destination, "%s[%4d]: ", prefix, line);
+    fprintf(destination, args...);
+}
+
+// Print the middle of a logging message, after logStart()
+// has been called and before logEnd() is called.
+template<typename ... Args>
+static void logMore(wLogType_t type, Args ... args)
+{
+    FILE *destination = logDestination(type);
+
+    fprintf(destination, args...);
+}
+
+// Print the end of a logging message, after logStart()
+// or logMore() has been called.
+template<typename ... Args>
+static void logEnd(wLogType_t type)
+{
+    FILE *destination = logDestination(type);
+
+    fprintf(destination, "\n");
+}
+
+// Print a single-line logging message.
+template<typename ... Args>
+static void log(wLogType_t type, unsigned int line, Args ... args)
+{
+    logStart(type, line, args...);
+    logEnd(type);
+}
 
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS: MISC
@@ -274,15 +388,14 @@ static bool streamConfigure(wStreamType_t streamType,
     bool formatFound = false;
     bool sizeFound = false;
 
-    std::cout << W_INFO "desired " << gStreamName[streamType]
-              << " stream configuration (" << streamType << "): "
-              << widthPixels << "x" << heightPixels << "-"
-              << pixelFormatStr << std::endl;
+    W_LOG_DEBUG("desired %s stream configuration %dx%d-%s.",
+                gStreamName[streamType], widthPixels,
+                heightPixels, pixelFormatStr.c_str());
 
     // Print out the current configuration
-    std::cout << W_INFO "existing " << gStreamName[streamType]
-              << " stream configuration (" << streamType << "): "
-              << streamCfg.toString() << std::endl;
+    W_LOG_DEBUG("existing %s stream configuration %s.",
+                gStreamName[streamType],
+                streamCfg.toString().c_str());
 
     // Set it up as we'd like
     streamCfg.pixelFormat = streamCfg.pixelFormat.fromString(pixelFormatStr);
@@ -310,40 +423,74 @@ static bool streamConfigure(wStreamType_t streamType,
     }
 
     if (!formatFound) {
-        std::cerr << W_ERROR "format " << pixelFormatStr << " not found, possible format(s): ";
+        W_LOG_ERROR_START("format %s not found, possible format(s): ",
+                          pixelFormatStr.c_str());
         unsigned int x = 0;
         for (auto pixelFormat: streamCfg.formats().pixelformats()) {
             if (x > 0) {
-                std::cout << ", ";
+                W_LOG_ERROR_MORE(", ");
             }
-            std::cout << pixelFormat.toString();
+            W_LOG_ERROR_MORE(pixelFormat.toString().c_str());
             x++;
         }
-        std::cout << "." << std::endl;
+        W_LOG_ERROR_MORE(".");
+        W_LOG_ERROR_END;
     } else {
         if (!sizeFound) {
-            std::cerr << W_ERROR "size " << widthPixels << "x" << heightPixels
-                      << " not found, possible size(s): ";
+            W_LOG_ERROR_START("size %dx%d not found, possible size(s): ",
+                              widthPixels, heightPixels);
             unsigned int x = 0;
             for (auto size: streamCfg.formats().sizes(streamCfg.pixelFormat)) {
                 if (x > 0) {
-                    std::cout << ", ";
+                    W_LOG_ERROR_MORE(", ");
                 }
-                std::cout << size.toString();
+                W_LOG_ERROR_MORE(size.toString().c_str());
                 x++;
             }
-            std::cout << "." << std::endl;
+            W_LOG_ERROR_MORE(".");
+            W_LOG_ERROR_END;
         }
     }
 
     if (formatFound && sizeFound) {
         // Print where we ended up
-        std::cout << W_INFO "nearest " << gStreamName[streamType]
-                  << " stream configuration (" << streamType
-                  << "): " << streamCfg.toString() << std::endl;
+        W_LOG_DEBUG("nearest %s stream configuration %s.",
+                    gStreamName[streamType],
+                    streamCfg.toString().c_str());
     }
 
     return formatFound && sizeFound;
+}
+
+// Flush the video output.
+static int videoOutputFlush()
+{
+    int errorCode = 0;
+
+    W_LOG_DEBUG("flushing codec.");
+
+    if ((gVideoOutputContextCodec != nullptr) &&
+        (gVideoOutputContextFormat != nullptr)) {
+        errorCode = -ENOMEM;
+        AVPacket *packet = av_packet_alloc();
+        if (packet) {
+            // This puts the codec into flush mode
+            errorCode = avcodec_send_frame(gVideoOutputContextCodec, nullptr);
+            // Read out packets into we get back EOF
+            while ((errorCode == 0) &&
+                   (avcodec_receive_packet(gVideoOutputContextCodec, packet) != AVERROR_EOF)) {
+                errorCode = av_interleaved_write_frame(gVideoOutputContextFormat, packet);
+                av_packet_unref(packet);
+            }
+
+            av_packet_free(&packet);
+        }
+
+        // In case we want to use the codec again
+        avcodec_flush_buffers(gVideoOutputContextCodec);
+    }
+
+    return errorCode;
 }
 
 /* ----------------------------------------------------------------
@@ -357,6 +504,8 @@ static void bufferCompleted(Request *request, FrameBuffer *buffer)
     if (request->status() != Request::RequestCancelled) {
         const FrameMetadata &metadata = buffer->metadata();
 
+        W_LOG_DEBUG("bufferCompleted() sequence number %06d started.",
+                    metadata.sequence);
         // Grab the stream's width, height, stride and which stream
         // this is, all of which is encoded in the buffer's cookie
         // when we associated it with the stream
@@ -382,7 +531,7 @@ static void bufferCompleted(Request *request, FrameBuffer *buffer)
         // the buffer came from
         switch (streamType) {
             case W_STREAM_TYPE_MOTION_DETECTION:
-            { 
+            {
                 // From the comment on this post:
                 // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
                 // ...we can bring in just the Y portion of the frame as effectively
@@ -396,9 +545,9 @@ static void bufferCompleted(Request *request, FrameBuffer *buffer)
 
                     // Update the background model of the motion detection stream
                     //gBackgroundSubtractor->apply(frameOpenCv, gForegroundMask);
-                    std::string sequenceStr = std::to_string(metadata.sequence);
-                    std::string fileName = "lores" + sequenceStr + ".jpg";
-                    imwrite(fileName, frameOpenCv, imageCompression);
+                    //std::string sequenceStr = std::to_string(metadata.sequence);
+                    //std::string fileName = "lores" + sequenceStr + ".jpg";
+                    //imwrite(fileName, frameOpenCv, imageCompression);
                 }
             }
             break;
@@ -410,44 +559,68 @@ static void bufferCompleted(Request *request, FrameBuffer *buffer)
                     // Point the FFmpeg frame buffer at the three data planes,
                     // Y, U and V, which are at their various offsets in the
                     // DMA buffer (no copying)
-                    for (unsigned int plane = 0; plane < 3; plane++) {
+                    int errorCode = 0;
+                    for (unsigned int plane = 0; (plane < 3) && (errorCode == 0); plane++) {
+                        gVideoOutputFrame->buf[plane] = nullptr;
                         gVideoOutputFrame->buf[plane] = av_buffer_create(dmaBuffer + buffer->planes()[plane].offset,
                                                                          buffer->planes()[plane].length,
                                                                          av_buffer_default_free,
                                                                          nullptr, 0);
-                    }
-                    av_image_fill_pointers(gVideoOutputFrame->data, AV_PIX_FMT_YUV420P,
-                                           gVideoOutputFrame->height,
-                                           gVideoOutputFrame->buf[0]->data,
-                                           gVideoOutputFrame->linesize);
-                    av_frame_make_writable(gVideoOutputFrame);
-                    gVideoOutputFrame->pts = metadata.sequence * (gVideoOutputContextFormat->streams[0]->time_base.den) / W_FRAME_RATE_HERTZ;
-                    if (avcodec_send_frame(gVideoOutputContextCodec, gVideoOutputFrame) == 0) {
-                        if (avcodec_receive_packet(gVideoOutputContextCodec, packet) == 0) {
-                            av_interleaved_write_frame(gVideoOutputContextFormat, packet);
+                        if (!gVideoOutputFrame->buf[plane]) {
+                            errorCode = -ENOMEM;
                         }
+                    }
+                    if (errorCode == 0) {
+                        errorCode =  av_image_fill_pointers(gVideoOutputFrame->data, AV_PIX_FMT_YUV420P,
+                                                            gVideoOutputFrame->height,
+                                                            gVideoOutputFrame->buf[0]->data,
+                                                            gVideoOutputFrame->linesize);
+                    }
+                    if (errorCode >= 0) {
+                        errorCode = av_frame_make_writable(gVideoOutputFrame);
+                    }
+                    if (errorCode == 0) {
+                        gVideoOutputFrame->pts = gVideoRecordingFrameCount * (gVideoOutputContextFormat->streams[0]->time_base.den) / W_FRAME_RATE_HERTZ;
+                        W_LOG_DEBUG("### calling avcodec_send_frame() for video recording frame %d.", gVideoRecordingFrameCount);
+                        errorCode = avcodec_send_frame(gVideoOutputContextCodec, gVideoOutputFrame);
+                    }
+                    if (errorCode == 0) {
+                        // Receive packet may legitimately return AVERROR(EAGAIN) (needs more
+                        // frames before it can produce an output) as well as 0 (there's a packet).
+                        W_LOG_DEBUG("### calling avcodec_receive_packet().");
+                        errorCode = avcodec_receive_packet(gVideoOutputContextCodec, packet);
+                    }
+                    if (errorCode == 0) {
+                        W_LOG_DEBUG("### calling av_interleaed_write_frame().");
+                        errorCode = av_interleaved_write_frame(gVideoOutputContextFormat, packet);
+                        W_LOG_DEBUG("### write frame returned %d.", errorCode);
+                    }
+                    if ((errorCode != 0) && (errorCode != AVERROR(EAGAIN))) {
+                        W_LOG_ERROR("error %d from FFmpeg!", errorCode);
                     }
                     av_packet_free(&packet);
                 }
+                gVideoRecordingFrameCount++;
             }
             break;
             default:
-                std::cerr << W_ERROR "unknown stream type (" << streamType << ")!" << std::endl;
+                W_LOG_ERROR("unknown stream type %d!", streamType);
                 break;
         }
 
         // Print out some metadata just so that we can see what's going on
-        std::cout << W_INFO "seq: " << std::setw(6) << std::setfill('0')
-                  << metadata.sequence << " bytes used: ";
+        W_LOG_DEBUG_START("%s sequence number %06d, bytes used: ",
+                          gStreamName[streamType], metadata.sequence);
         unsigned int x = 0;
         for (const FrameMetadata::Plane &plane: metadata.planes()) {
             if (x > 0) {
-                std::cout << "/";
+                W_LOG_DEBUG_MORE("/");
             }
-            std::cout << plane.bytesused;
+            W_LOG_DEBUG_MORE("%d", plane.bytesused);
             x++;
         }
-        std::cout << std::endl;
+        W_LOG_DEBUG_MORE(".");
+        W_LOG_DEBUG_END;
     }
 }
 
@@ -474,24 +647,30 @@ int main()
 
     // List the available cameras
     for (auto const &camera: cm->cameras()) {
-        std::cout << W_INFO "found camera ID " << camera->id()
-                  << " with properties:" << std::endl;
+        W_LOG_INFO("found camera ID %s.", camera->id().c_str());
+        W_LOG_DEBUG_START("camera properties:\n");
         auto cameraProperties =  camera->properties();
         auto idMap = cameraProperties.idMap();
+        unsigned int x = 0;
         for(auto &controlValue: cameraProperties) {
             auto controlId = idMap->at(controlValue.first);
-            std::string value = controlValue.second.toString();
-            std::cout << "  " << std::setw(6) << controlValue.first
-                      << " [" << controlId->name() << "]" << ": " << value
-                      << std::endl;
+            if (x > 0) {
+                W_LOG_DEBUG_MORE("\n");
+            }
+            W_LOG_DEBUG_MORE("  %06d [%s]: %s",
+                             controlValue.first,
+                             controlId->name().c_str(),
+                             controlValue.second.toString().c_str());
+            x++;
         }
+        W_LOG_DEBUG_END;
     }
 
     // Acquire the first (and probably only) camera
     auto cameras = cm->cameras();
     if (!cameras.empty()) {
         std::string cameraId = cameras[0]->id();
-        std::cout << W_INFO "acquiring camera " << cameraId << std::endl;
+        W_LOG_INFO("acquiring camera %s.", cameraId.c_str());
         gCamera = cm->get(cameraId);
         gCamera->acquire();
 
@@ -515,14 +694,20 @@ int main()
 
         // Validate and apply the configuration
         if (cameraCfg->validate() != CameraConfiguration::Valid) {
-            std::cout << W_WARN "libcamera will adjust those values." << std::endl;
+            W_LOG_DEBUG("libcamera will adjust those values.");
         }
         gCamera->configure(cameraCfg.get());
 
-        std::cout << W_INFO "validated/applied camera configuration:" << std::endl;
+        W_LOG_INFO_START("validated/applied camera configuration: ");
         for (std::size_t x = 0; x < cameraCfg->size(); x++) {
-            std::cout << "  " << x << ": " << cameraCfg->at(x).toString() << std::endl;
+            if (x > 0) {
+                W_LOG_INFO_MORE(", ");
+            }
+            W_LOG_INFO_MORE("%s", cameraCfg->at(x).toString().c_str());
+            x++;
         }
+        W_LOG_INFO_MORE(".");
+        W_LOG_INFO_END;
 
         // Allocate frame buffers
         FrameBufferAllocator *allocator = new FrameBufferAllocator(gCamera);
@@ -530,17 +715,16 @@ int main()
         for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
             errorCode = allocator->allocate(cfg->stream());
             if (errorCode >= 0) {
-                std::cout << W_INFO "allocated " << errorCode << " buffer(s) for stream "
-                          << cfg->toString() << std::endl;
+                W_LOG_DEBUG("allocated %d buffer(s) for stream %s.", errorCode,
+                            cfg->toString().c_str());
                 errorCode = 0;
             } else {
-                std::cerr << W_ERROR "unable to allocate frame buffers (error code "
-                          << errorCode << ")!" << std::endl;
+                W_LOG_ERROR("unable to allocate frame buffers (error code %d)!.",
+                            errorCode);
             }
         }
         if (errorCode == 0) {
-            std::cout << W_INFO "creating requests to the camera for each stream using the allocated buffers."
-                      << std::endl;
+            W_LOG_DEBUG("creating requests to the camera for each stream using the allocated buffers.");
             // Create a queue of requests on each stream using the allocated buffers
             std::vector<std::unique_ptr<Request>> requests;
             int streamIndex = 0;
@@ -557,19 +741,19 @@ int main()
                             // Encode the width, height, stride and index of the
                             // stream into the cookie of the FrameBuffer as we will
                             // need that information later when converting the
-                            // FrameBuffer to a form that OpenCV understands
+                            // FrameBuffer to a form that OpenCV or FFmpeg understands
                             buffer->setCookie(cookieEncode(stream->configuration().size.width,
                                                            stream->configuration().size.height,
                                                            stream->configuration().stride,
                                                            (wStreamType_t) streamIndex));
                             requests.push_back(std::move(request));
                         } else {
-                            std::cerr << W_ERROR "can't attach buffer to request (" << errorCode << ")!"
-                                      << std::endl;
+                            W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
+                                         errorCode);
                         }
                     } else {
                         errorCode = -ENOMEM;
-                        std::cerr << W_ERROR "unable to create request!" << std::endl;
+                        W_LOG_ERROR("unable to create request to camera!");
                     }
                 }
                 streamIndex++;
@@ -607,6 +791,8 @@ int main()
                                     gVideoOutputContextCodec->height = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.height;
                                     gVideoOutputContextCodec->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
                                     gVideoOutputContextCodec->framerate = av_make_q(W_FRAME_RATE_HERTZ, 1);
+                                    // TODO whether this is correct or not: ensure a key frame every HLS segment
+                                    gVideoOutputContextCodec->keyint_min = W_HLS_SEGMENT_DURATION_SECONDS * W_FRAME_RATE_HERTZ;
                                     gVideoOutputContextCodec->pix_fmt = AV_PIX_FMT_YUV420P;
                                     gVideoOutputContextCodec->codec_id = AV_CODEC_ID_H264;
                                     gVideoOutputContextCodec->codec_type = AVMEDIA_TYPE_VIDEO;
@@ -623,7 +809,7 @@ int main()
                                             // though there is actually no packing in our case; the width of the
                                             // plane is, for instance, 1920.  But in YUV420 only the Y plane is
                                             // at full resolution, the U and V planes are at half resolution
-                                            // (e.g. 960), hence the divide by two below
+                                            // (e.g. 960), hence the divide by two for planes 1 and 2 below
                                             gVideoOutputFrame->linesize[0] = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).stride;
                                             gVideoOutputFrame->linesize[1] = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).stride >> 1;
                                             gVideoOutputFrame->linesize[2] = gVideoOutputFrame->linesize[1];
@@ -633,65 +819,71 @@ int main()
                                             // the camera
                                             errorCode = 0;
                                         } else {
-                                            std::cerr << W_ERROR "unable to allocate memory for video output frame!" << std::endl;
+                                            W_LOG_ERROR("unable to allocate memory for video output frame!");
                                         }
                                     } else {
-                                        std::cerr << W_ERROR "unable to either open video codec or write AV format header!" << std::endl;
+                                        W_LOG_ERROR("unable to either open video codec or write AV format header!");
                                     }
                                 } else {
-                                    std::cerr << W_ERROR "unable to allocate memory for video output context!" << std::endl;
+                                    W_LOG_ERROR("unable to allocate memory for video output context!");
                                 }
                             } else {
-                                std::cerr << W_ERROR "unable to find H.264 codec in FFmpeg!" << std::endl;
+                                W_LOG_ERROR("unable to find H.264 codec in FFmpeg!");
                             }
                         } else {
-                            std::cerr << W_ERROR "unable to allocate memory for video output stream!" << std::endl;
+                            W_LOG_ERROR("unable to allocate memory for video output stream!");
                         }
                     } else {
-                        std::cerr << W_ERROR "unable to allocate memory for a dictionary entry!" << std::endl;
+                        W_LOG_ERROR("unable to allocate memory for a dictionary entry that configures HLS!");
                     }
                 } else {
-                    std::cerr << W_ERROR "unable to allocate memory for video output context!" << std::endl;
+                    W_LOG_ERROR("unable to allocate memory for video output context!");
                 }
                 if (errorCode == 0) {
                     // Now set up the OpenCV background subtractor object
                     gBackgroundSubtractor = createBackgroundSubtractorMOG2();
                     if (gBackgroundSubtractor) {
+                        // We have not yet set any of the controls for the camera;
+                        // the only one we care about here is the frame rate,
+                        // so that the settings above match.  There is a minimum
+                        // and a maximum, setting both the same fixes the rate.
+                        // We create a camera control list and pass it to
+                        // the start() method when we start the camera.
+                        ControlList cameraControls;
+                        unsigned int frameDurationLimit = W_FRAME_RATE_HERTZ * 1000;
+                        cameraControls.set(controls::FrameDurationLimits, libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
+                                                                                                                  frameDurationLimit}));
                         // Attach the bufferCompleted() and requestCompleted() handler
                         // functions to their events and start the camera,
                         // everything else happens in the callback functions
                         gCamera->bufferCompleted.connect(bufferCompleted);
                         gCamera->requestCompleted.connect(requestCompleted);
-                        std::cout << W_INFO "starting the camera and queueing requests for 11 seconds."
-                                  << std::endl;
-                        gCamera->start();
+                        W_LOG_INFO("starting the camera and queueing requests for 30 seconds.");
+                        gCamera->start(&cameraControls);
                         for (std::unique_ptr<Request> &request: requests) {
                             gCamera->queueRequest(request.get());
                         }
 
-                        std::this_thread::sleep_for(11000ms);
+                        std::this_thread::sleep_for(30000ms);
 
-                        std::cout << W_INFO "stopping the camera." << std::endl;
+                        W_LOG_INFO("stopping the camera.");
                         gCamera->stop();
                     } else {
                         errorCode = -ENOMEM;
-                        std::cerr << W_ERROR "unable to create background subtractor!" << std::endl;
+                        W_LOG_ERROR("unable to create background subtractor!");
                     }
                 }
             }
         }
 
         // Tidy up
-        std::cout << W_INFO "Tidying up." << std::endl;
+        W_LOG_DEBUG("Tidying up.");
+        videoOutputFlush();
         if (gVideoOutputContextFormat) {
             av_write_trailer(gVideoOutputContextFormat);
         }
-        if (gVideoOutputFrame) {
-            av_frame_free(&gVideoOutputFrame);
-        }
-        if (gVideoOutputContextCodec) {
-            avcodec_free_context(&gVideoOutputContextCodec);
-        }
+        av_frame_free(&gVideoOutputFrame);
+        avcodec_free_context(&gVideoOutputContextCodec);
         if (gVideoOutputContextFormat) {
             avio_closep(&gVideoOutputContextFormat->pb);
             avformat_free_context(gVideoOutputContextFormat);
@@ -703,7 +895,7 @@ int main()
         gCamera->release();
         gCamera.reset();
     } else {
-        std::cerr << W_ERROR "no cameras found!" << std::endl;
+        W_LOG_ERROR("no cameras found!");
     }
 
     // Tidy up
