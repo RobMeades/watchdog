@@ -67,9 +67,16 @@ using namespace cv;
 // Compute the number of elements in an array.
 #define W_ARRAY_COUNT(array) (sizeof(array) / sizeof(array[0]))
 
-#ifndef W_FRAME_DATA_QUEUE_MAX_ELEMENTS
-// The maximum number of elements in the video frame data queue.
-# define W_FRAME_DATA_QUEUE_MAX_ELEMENTS 100
+// Print the duration of an operation for debug purposes.
+#define W_PRINT_DURATION(x) auto _t1 = std::chrono::high_resolution_clock::now();  \
+                            x;                                                     \
+                            auto _t2 = std::chrono::high_resolution_clock::now();  \
+                            W_LOG_DEBUG("%d ms to do \"" #x "\".",                 \
+                                        std::chrono::duration_cast<std::chrono::milliseconds>(_t2 - _t1))
+
+#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
+// The maximum number of elements in the video frame queue.
+# define W_AVFRAME_LIST_MAX_ELEMENTS 100
 #endif
 
 /* ----------------------------------------------------------------
@@ -123,12 +130,12 @@ using namespace cv;
 
 #ifndef W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING
 // Horizontal size of video recording stream in pixels.
-# define W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING 1920
+# define W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING 854
 #endif
 
 #ifndef W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING
 // Vertical size of video recording stream in pixels.
-# define W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING 1080
+# define W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING 480
 #endif
 
 #ifndef W_STREAM_ROLE_MOTION_DETECTION
@@ -227,12 +234,6 @@ typedef enum {
     W_LOG_TYPE_DEBUG = 3
 } wLogType_t;
 
-// A buffer.
-typedef struct {
-    uint8_t *data;
-    unsigned int length;
-} wBuffer_t;
-
 /* ----------------------------------------------------------------
  * VARIABLES
  * -------------------------------------------------------------- */
@@ -240,27 +241,8 @@ typedef struct {
 // Pointer to camera: global as the requestCompleted() callback will use it.
 static std::shared_ptr<Camera> gCamera = nullptr;
 
-// The video output format context, global as the requestCompleted()
-// callback will use it.
-static  AVFormatContext *gVideoOutputContextFormat = nullptr;
-
-// The video output codec context, global as the requestCompleted()
-// callback will use it.
-static AVCodecContext *gVideoOutputContextCodec = nullptr;
-
-// The video output stream, global 'cos it is caught up the gubbins
-// of stuff that is referenced by stuff called by requestCompleted().
-static AVStream *gVideoOutputStream = nullptr;
-
-// An AV frame for the video output, global as the requestCompleted()
-// callback will use it.
-static AVFrame *gVideoOutputFrame = nullptr;
-
 // Count of video recording frames received.
 static unsigned int gVideoRecordingFrameCount = 0;
-
-// Count of video recording planes "held" by avcodec_send_frame().
-static unsigned int gVideoRecordingFrameHeldCount = 0;
 
 // Pointer to the OpenCV background subtractor: global as the
 // requestCompleted() callback will use it.
@@ -270,11 +252,17 @@ static std::shared_ptr<BackgroundSubtractor> gBackgroundSubtractor = nullptr;
 // globl as the requestCompleted() callback will populate it.
 static Mat gForegroundMask;
 
-// Linked list of frame data buffers.
-static std::list<wBuffer_t> gFrameDataList;
+// Linked list of video frames, FFmpeg-style.
+static std::list<AVFrame *> gAvFrameList;
 
-// Mutex to protect the linked list of frame data buffers.
-static std::mutex gFrameDataMutex;
+// Mutex to protect the linked list of FFmpeg-format video frames.
+static std::mutex gAvFrameListMutex;
+
+// Linked list of images, OpenCV-style.
+static std::list<Mat *> gMatList;
+
+// Mutex to protect the linked list of OpenCV-format images.
+static std::mutex gMatListMutex;
 
 // Flag to track that we're running (so that the video encode thread
 // knows when to exit).
@@ -360,56 +348,6 @@ static void log(wLogType_t type, unsigned int line, Args ... args)
 {
     logStart(type, line, args...);
     logEnd(type);
-}
-
-/* ----------------------------------------------------------------
- * STATIC FUNCTIONS: FRAME DATA QUEUE MANAGEMENT
- * -------------------------------------------------------------- */
-
-// Push a frame of data onto the queue.
-static int frameDataQueuePush(uint8_t *data, unsigned int length)
-{
-    int errorCode = -ENOMEM;
-    wBuffer_t buffer = {.data = data, .length = length};
-
-    gFrameDataMutex.lock();
-    if (gFrameDataList.size() < W_FRAME_DATA_QUEUE_MAX_ELEMENTS) {
-        errorCode = 0;
-        try {
-            gFrameDataList.push_back(buffer);
-        }
-        catch(int x) {
-            errorCode = -x;
-        }
-    }
-    gFrameDataMutex.unlock();
-
-    return errorCode;
-}
-
-// Try to pop a frame of data off the queue.
-static int frameDataQueueTryPop(wBuffer_t *buffer)
-{
-    int errorCode = -EAGAIN;
-
-    if (buffer && gFrameDataMutex.try_lock()) {
-        if (!gFrameDataList.empty()) {
-            *buffer = gFrameDataList.front();
-            gFrameDataList.pop_front();
-            errorCode = 0;
-        }
-        gFrameDataMutex.unlock();
-    }
-
-    return errorCode;
-}
-
-// Empty the data queue.
-static void frameDataQueueClear()
-{
-    gFrameDataMutex.lock();
-    gFrameDataList.clear();
-    gFrameDataMutex.unlock();
 }
 
 /* ----------------------------------------------------------------
@@ -541,111 +479,189 @@ static bool streamConfigure(wStreamType_t streamType,
  * -------------------------------------------------------------- */
 
 // Callback for FFmpeg to call when it has finished with a buffer;
-// the opaque pointer should be the value of gVideoRecordingFrameCount
-// when av_buffer_create() was called, for debug purposes.
-static void avFrameBufferFreeCallback(void *opaque, uint8_t *data)
+// the opaque pointer should be the sequence number of the frame,
+// for debug purposes.
+static void avFrameFreeCallback(void *opaque, uint8_t *data)
 {
     free(data);
-    gVideoRecordingFrameHeldCount--;
-    W_LOG_DEBUG("Video codec is done with frame %u, %u frame(s) still held.",
-                (unsigned int) opaque, gVideoRecordingFrameHeldCount);
+    W_LOG_DEBUG("video codec is done with frame %u.", (unsigned int) opaque);
 }
 
-// Flush the video output.
-static int videoOutputFlush()
+// Push a frame of video data onto the queue.
+static int avFrameQueuePush(uint8_t *data, unsigned int length,
+                            unsigned int sequenceNumber,
+                            unsigned int width, unsigned int height,
+                            unsigned int yStride)
 {
-    int errorCode = 0;
+    int errorCode = -ENOMEM;
 
-    W_LOG_DEBUG("flushing codec.");
-
-    if ((gVideoOutputContextCodec != nullptr) &&
-        (gVideoOutputContextFormat != nullptr)) {
-        errorCode = -ENOMEM;
-        AVPacket *packet = av_packet_alloc();
-        if (packet) {
-            // This puts the codec into flush mode
-            errorCode = avcodec_send_frame(gVideoOutputContextCodec, nullptr);
-            // Read out packets into we get back EOF
-            while ((errorCode == 0) &&
-                   (avcodec_receive_packet(gVideoOutputContextCodec, packet) != AVERROR_EOF)) {
-                errorCode = av_interleaved_write_frame(gVideoOutputContextFormat, packet);
-                av_packet_unref(packet);
+    AVFrame *avFrame = av_frame_alloc();
+    if (avFrame) {
+        avFrame->format = AV_PIX_FMT_YUV420P;
+        avFrame->width = width;
+        avFrame->height = height;
+        // Each line size is the width of a plane (Y, U or V) plus packing,
+        // though there is actually no packing in our case; the width of the
+        // plane is, for instance, 1920.  But in YUV420 only the Y plane is
+        // at full resolution, the U and V planes are at half resolution
+        // (e.g. 960), hence the divide by two for planes 1 and 2 below
+        avFrame->linesize[0] = yStride;
+        avFrame->linesize[1] = yStride >> 1;
+        avFrame->linesize[2] = yStride >> 1;
+        avFrame->pts = sequenceNumber;
+        uint8_t *copy = (uint8_t *) malloc(length);
+        if (copy) {
+            memcpy(copy, data, length);
+            avFrame->buf[0] = av_buffer_create(copy, length,
+                                               avFrameFreeCallback,
+                                               (void *) sequenceNumber,
+                                               0);
+            if (avFrame->buf[0]) {
+                errorCode = 0;
+            }
+            if (errorCode == 0) {
+                errorCode =  av_image_fill_pointers(avFrame->data,
+                                                    AV_PIX_FMT_YUV420P,
+                                                    avFrame->height,
+                                                    avFrame->buf[0]->data,
+                                                    avFrame->linesize);
+            }
+            if (errorCode >= 0) {
+                errorCode = av_frame_make_writable(avFrame);
             }
 
-            av_packet_free(&packet);
+            if (errorCode == 0) {
+                gAvFrameListMutex.lock();
+                errorCode = -ENOBUFS;
+                if (gAvFrameList.size() < W_AVFRAME_LIST_MAX_ELEMENTS) {
+                    errorCode = 0;
+                    try {
+                        gAvFrameList.push_back(avFrame);
+                    }
+                    catch(int x) {
+                        errorCode = -x;
+                    }
+                }
+                gAvFrameListMutex.unlock();
+            }
         }
 
-        // In case we want to use the codec again
-        avcodec_flush_buffers(gVideoOutputContextCodec);
+        if (errorCode != 0) {
+            if (!avFrame->buf[0]) {
+                // If we never employed the copy
+                // need to free it explicitly.
+                free(copy);
+            }
+            // This should cause avFrameFreeCallback() to be
+            // called and free the copy that way
+            av_frame_free(&avFrame);
+            W_LOG_ERROR("unable to push to video queue (%d)!", errorCode);
+        }
     }
 
     return errorCode;
 }
 
+// Try to pop a video frame off the queue.
+static int avFrameQueueTryPop(AVFrame **avFrame)
+{
+    int errorCode = -EAGAIN;
+
+    if (avFrame && gAvFrameListMutex.try_lock()) {
+        if (!gAvFrameList.empty()) {
+            *avFrame = gAvFrameList.front();
+            gAvFrameList.pop_front();
+            errorCode = 0;
+        }
+        gAvFrameListMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Empty the video frame queue.
+static void avFrameQueueClear()
+{
+    gAvFrameListMutex.lock();
+    gAvFrameList.clear();
+    gAvFrameListMutex.unlock();
+}
+
+// Get video from the codec and write it to the output.
+static int videoOutput(AVCodecContext *codecContext, AVFormatContext *formatContext)
+{
+    int errorCode = -ENOMEM;
+
+    AVPacket *packet = av_packet_alloc();
+    if (packet) {
+        errorCode = 0;
+        // Call avcodec_receive_packet until it returns AVERROR(EAGAIN),
+        // meaning it needs to be fed more input
+        W_LOG_DEBUG("### calling avcodec_receive_packet().");
+        do {
+            errorCode = avcodec_receive_packet(codecContext, packet);
+            if (errorCode == 0) {
+                W_LOG_DEBUG("### calling av_interleaved_write_frame() %d.", packet->pts);
+                errorCode = av_interleaved_write_frame(formatContext, packet);
+                W_LOG_DEBUG("### av_interleaved_write_frame() returned %d.", errorCode);
+                // Apparently av_interleave_write_frame() unreferences the packet
+            } else {
+                W_LOG_DEBUG("### avcodec_receive_packet() returned error %d.", errorCode);
+            }
+        } while (errorCode == 0);
+        av_packet_free(&packet);
+    } else {
+         W_LOG_ERROR("unable to allocate packet for FFmpeg encode!");
+    }
+
+    return errorCode;
+}
+
+// Flush the video output.
+static int videoOutputFlush(AVCodecContext *codecContext, AVFormatContext *formatContext)
+{
+    int errorCode = 0;
+
+    W_LOG_DEBUG("flushing video output.");
+
+    if ((codecContext != nullptr) &&
+        (formatContext != nullptr)) {
+        // This puts the codec into flush mode
+        errorCode = avcodec_send_frame(codecContext, nullptr);
+        if (errorCode == 0) {
+            errorCode = videoOutput(codecContext, formatContext);
+        }
+        // In case we want to use the codec again
+        avcodec_flush_buffers(codecContext);
+    }
+
+    return errorCode;
+}
 
 // Video encode task/thread/thing.
-static void videoEncode()
+static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *formatContext)
 {
-    wBuffer_t buffer;
-    int32_t errorCode;
+    int32_t errorCode = 0;
+    AVFrame *avFrame = nullptr;
 
     while (gRunning) {
-        if (frameDataQueueTryPop(&buffer) == 0) {
-            errorCode = -ENOMEM;
-            AVPacket *packet = av_packet_alloc();
-            if (packet) {
-                // The arrays here are quite confusing.  The entire
-                // YUV420 data, packed in its own sweet way, is in
-                // data[0].  buf[0] is a reference to data[0] that
-                // carries referencing data; there is one reference
-                // when av_buffer_create() returns, more may be added,
-                // later.  When there are no references left the buffer
-                // is free and avFrameBufferFreeCallback() should be
-                // called by FFmpeg.  The locations of the Y, U and V
-                // portions in the data are set by the linesize array,
-                // which was set up originally when we created the
-                // frame buffer.
-                gVideoOutputFrame->buf[0] = av_buffer_create(buffer.data, buffer.length,
-                                                             avFrameBufferFreeCallback,
-                                                             (void *) gVideoRecordingFrameCount,
-                                                             0);
-                if (gVideoOutputFrame->buf[0]) {
-                    errorCode = 0;
-                }
-                if (errorCode == 0) {
-                    errorCode =  av_image_fill_pointers(gVideoOutputFrame->data, AV_PIX_FMT_YUV420P,
-                                                        gVideoOutputFrame->height,
-                                                        gVideoOutputFrame->buf[0]->data,
-                                                        gVideoOutputFrame->linesize);
-                }
-                if (errorCode >= 0) {
-                    errorCode = av_frame_make_writable(gVideoOutputFrame);
-                }
-                // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
-                if (errorCode == 0) {
-                    gVideoOutputFrame->pts = gVideoRecordingFrameCount * (gVideoOutputContextFormat->streams[0]->time_base.den) / W_FRAME_RATE_HERTZ;
-                    W_LOG_DEBUG("### calling avcodec_send_frame() for video recording frame %d.", gVideoRecordingFrameCount);
-                    errorCode = avcodec_send_frame(gVideoOutputContextCodec, gVideoOutputFrame);
-                }
-                if (errorCode == 0) {
-                    gVideoRecordingFrameHeldCount++;
-                    // Call avcodec_receive_packet until it returns AVERROR(EAGAIN),
-                    // meaning it needs to be fed more input
-                    W_LOG_DEBUG("### calling avcodec_receive_packet().");
-                    while((errorCode == 0) && (errorCode = avcodec_receive_packet(gVideoOutputContextCodec, packet) == 0)) {
-                        W_LOG_DEBUG("### calling av_interleaed_write_frame().");
-                        errorCode = av_interleaved_write_frame(gVideoOutputContextFormat, packet);
-                        W_LOG_DEBUG("### write frame returned %d.", errorCode);
-                    }
-                }
-                if ((errorCode != 0) && (errorCode != AVERROR(EAGAIN))) {
-                    W_LOG_ERROR("error %d from FFmpeg!", errorCode);
-                }
-                av_packet_free(&packet);
+        if (avFrameQueueTryPop(&avFrame) == 0) {
+            // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
+            W_LOG_DEBUG("### calling avcodec_send_frame() %d.", avFrame->pts);
+            W_PRINT_DURATION(errorCode = avcodec_send_frame(codecContext, avFrame));
+            if (errorCode == 0) {
+                errorCode = videoOutput(codecContext, formatContext);
             } else {
-                 W_LOG_ERROR("unable to allocate packet for FFmpeg encode!");
+                W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
+            }
+            // Now we can free the frame
+            av_frame_free(&avFrame);
+            if ((errorCode != 0) && (errorCode != AVERROR(EAGAIN))) {
+                W_LOG_ERROR("error %d from FFmpeg!", errorCode);
             }
         }
+
+        // Let others in
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
@@ -663,11 +679,8 @@ static void requestCompleted(Request *request)
 
        for (auto bufferPair : buffers) {
             FrameBuffer *buffer = bufferPair.second;
-
             const FrameMetadata &metadata = buffer->metadata();
 
-            W_LOG_DEBUG("requestCompleted() sequence number %06d started.",
-                        metadata.sequence);
             // Grab the stream's width, height, stride and which stream
             // this is, all of which is encoded in the buffer's cookie
             // when we associated it with the stream
@@ -689,6 +702,11 @@ static void requestCompleted(Request *request)
             uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
+
+            // Print out some metadata just so that we can see what's going on
+            W_LOG_DEBUG("%s sequence number %06d, bytes used %d.",
+                       gStreamName[streamType], metadata.sequence, dmaBufferLength);
+
             // Now do the OpenCV or FFmpeg thing, depending on the stream type
             // the buffer came from
             switch (streamType) {
@@ -715,25 +733,10 @@ static void requestCompleted(Request *request)
                 break;
                 case W_STREAM_TYPE_VIDEO_RECORDING:
                 {
-                    // Must be a video recording frame: stream it!
-
-                    // It would be lovely not to copy here but the video codec
-                    // requires many (e.g. 50) frames of input before it starts
-                    // producing output so we have to take copies of the three
-                    // planes of data (Y, U and V), which are at their various
-                    // offsets in the DMA buffer.  These copies will be free'd
-                    // by avBufferFreePlaneCallback(), which FFmpeg should call
-                    // when it is done with the buffer.
-                    uint8_t *data = (uint8_t *) malloc(dmaBufferLength);
-                    if (data) {
-                        memcpy(data, dmaBuffer, dmaBufferLength);
-                        if (frameDataQueuePush(data, dmaBufferLength) != 0) {
-                            free(data);
-                            W_LOG_ERROR("unable to push to data queue!");
-                        }
-                    } else {
-                        W_LOG_ERROR("unable to allocate %u bytes for video frame!", dmaBufferLength);
-                    }
+                    // A video recording frame: stream it!
+                    avFrameQueuePush(dmaBuffer, dmaBufferLength,
+                                     gVideoRecordingFrameCount,
+                                     width, height, stride);
                     gVideoRecordingFrameCount++;
                 }
                 break;
@@ -741,20 +744,6 @@ static void requestCompleted(Request *request)
                     W_LOG_ERROR("unknown stream type %d!", streamType);
                     break;
             }
-
-            // Print out some metadata just so that we can see what's going on
-            W_LOG_DEBUG_START("%s sequence number %06d, bytes used: ",
-                              gStreamName[streamType], metadata.sequence);
-            unsigned int x = 0;
-            for (const FrameMetadata::Plane &plane: metadata.planes()) {
-                if (x > 0) {
-                    W_LOG_DEBUG_MORE("/");
-                }
-                W_LOG_DEBUG_MORE("%d", plane.bytesused);
-                x++;
-            }
-            W_LOG_DEBUG_MORE(".");
-            W_LOG_DEBUG_END;
 
             // Re-use the request
             request->reuse(Request::ReuseBuffers);
@@ -772,6 +761,9 @@ int main()
 {
     int errorCode = -ENXIO;
     std::thread videoEncodeThread;
+    AVFormatContext *avFormatContext = nullptr;
+    AVCodecContext *avCodecContext = nullptr;
+    AVStream *avStream = nullptr;
 
     // Create and start a camera manager instance
     std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
@@ -895,10 +887,10 @@ int main()
                 // That's got pretty much all of the libcamera stuff, the camera
                 // setup, done.  Now set up the output stream for video recording
                 // using FFmpeg, format being HLS containing H.264-encoded data.
-                const AVOutputFormat *videoOutputFormat = av_guess_format("hls", nullptr, nullptr);
-                avformat_alloc_output_context2(&gVideoOutputContextFormat, videoOutputFormat,
+                const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
+                avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
                                                nullptr, W_HLS_PLAYLIST_FILE_NAME);
-                if (gVideoOutputContextFormat) {
+                if (avFormatContext) {
                     // Configure the HLS options
                     AVDictionary *hlsOptions = nullptr;
                     if ((av_dict_set(&hlsOptions, "hls_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS), 0) == 0) &&
@@ -911,48 +903,28 @@ int main()
                         (av_dict_set(&hlsOptions, "segment_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS) ".0", 0) == 0) &&
                         (av_dict_set(&hlsOptions, "segment_list_flags", "cache+live", 0) == 0)) {
                         //  Set up the H264 video output stream over HLS
-                        gVideoOutputStream = avformat_new_stream(gVideoOutputContextFormat, nullptr);
-                        if (gVideoOutputStream) {
+                        avStream = avformat_new_stream(avFormatContext, nullptr);
+                        if (avStream) {
                             errorCode = -ENODEV;
                             const AVCodec *videoOutputCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
                             if (videoOutputCodec) {
                                 errorCode = -ENOMEM;
-                                gVideoOutputContextCodec = avcodec_alloc_context3(videoOutputCodec);
-                                if (gVideoOutputContextCodec) {
-                                    gVideoOutputContextCodec->width = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.width;
-                                    gVideoOutputContextCodec->height = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.height;
-                                    gVideoOutputContextCodec->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
-                                    gVideoOutputContextCodec->framerate = av_make_q(W_FRAME_RATE_HERTZ, 1);
+                                avCodecContext = avcodec_alloc_context3(videoOutputCodec);
+                                if (avCodecContext) {
+                                    W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
+                                    avCodecContext->width = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.width;
+                                    avCodecContext->height = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.height;
+                                    avCodecContext->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
+                                    avCodecContext->framerate = av_make_q(W_FRAME_RATE_HERTZ, 1);
                                     // TODO whether this is correct or not: ensure a key frame every HLS segment
-                                    gVideoOutputContextCodec->keyint_min = W_HLS_SEGMENT_DURATION_SECONDS * W_FRAME_RATE_HERTZ;
-                                    gVideoOutputContextCodec->pix_fmt = AV_PIX_FMT_YUV420P;
-                                    gVideoOutputContextCodec->codec_id = AV_CODEC_ID_H264;
-                                    gVideoOutputContextCodec->codec_type = AVMEDIA_TYPE_VIDEO;
-                                    if ((avcodec_open2(gVideoOutputContextCodec, videoOutputCodec, nullptr) == 0) &&
-                                        (avcodec_parameters_from_context(gVideoOutputStream->codecpar, gVideoOutputContextCodec) == 0) &&
-                                        (avformat_write_header(gVideoOutputContextFormat, &hlsOptions) >= 0)) {
-                                        // Set up an FFmpeg AV frame for the video output
-                                        gVideoOutputFrame = av_frame_alloc();
-                                        if (gVideoOutputFrame) {
-                                            gVideoOutputFrame->format = AV_PIX_FMT_YUV420P;
-                                            gVideoOutputFrame->width = gVideoOutputContextCodec->width;
-                                            gVideoOutputFrame->height = gVideoOutputContextCodec->height;
-                                            // Each line size is the width of a plane (Y, U or V) plus packing,
-                                            // though there is actually no packing in our case; the width of the
-                                            // plane is, for instance, 1920.  But in YUV420 only the Y plane is
-                                            // at full resolution, the U and V planes are at half resolution
-                                            // (e.g. 960), hence the divide by two for planes 1 and 2 below
-                                            gVideoOutputFrame->linesize[0] = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).stride;
-                                            gVideoOutputFrame->linesize[1] = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).stride >> 1;
-                                            gVideoOutputFrame->linesize[2] = gVideoOutputFrame->linesize[1];
-                                            // We now have all the FFmpeg bits sorted except any actual
-                                            // buffers within the frame: those will be added when the
-                                            // requestCompleted() callback is called with a frame from
-                                            // the camera
-                                            errorCode = 0;
-                                        } else {
-                                            W_LOG_ERROR("unable to allocate memory for video output frame!");
-                                        }
+                                    avCodecContext->keyint_min = W_HLS_SEGMENT_DURATION_SECONDS * W_FRAME_RATE_HERTZ;
+                                    avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+                                    avCodecContext->codec_id = AV_CODEC_ID_H264;
+                                    avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+                                    if ((avcodec_open2(avCodecContext, videoOutputCodec, nullptr) == 0) &&
+                                        (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
+                                        (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                        errorCode = 0;
                                     } else {
                                         W_LOG_ERROR("unable to either open video codec or write AV format header!");
                                     }
@@ -983,8 +955,8 @@ int main()
                         // the start() method when we start the camera.
                         ControlList cameraControls;
                         unsigned int frameDurationLimit = W_FRAME_RATE_HERTZ * 1000;
-                        cameraControls.set(controls::FrameDurationLimits, libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
-                                                                                                                  frameDurationLimit}));
+                        cameraControls.set(controls::FrameDurationLimits, Span<const std::int64_t, 2>({frameDurationLimit,
+                                                                                                       frameDurationLimit}));
                         // Attach the requestCompleted() handler
                         // function to its events and start the camera,
                         // everything else happens in the callback function
@@ -992,15 +964,17 @@ int main()
 
                         // Kick off a thread to encode video frames
                         gRunning = true;
-                        videoEncodeThread = std::thread{videoEncode}; 
+                        videoEncodeThread = std::thread{videoEncodeLoop,
+                                                        avCodecContext,
+                                                        avFormatContext}; 
 
-                        W_LOG_INFO("starting the camera and queueing requests for 3 seconds.");
+                        W_LOG_INFO("starting the camera and queueing requests for 30 seconds.");
                         gCamera->start(&cameraControls);
                         for (std::unique_ptr<Request> &request: requests) {
                             gCamera->queueRequest(request.get());
                         }
 
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        std::this_thread::sleep_for(std::chrono::seconds(30));
 
                         W_LOG_INFO("stopping the camera.");
                         gCamera->stop();
@@ -1014,20 +988,19 @@ int main()
 
         // Tidy up
         W_LOG_DEBUG("tidying up.");
-        videoOutputFlush();
         // Stop the video encode thread
         gRunning = false;
         if (videoEncodeThread.joinable()) {
            videoEncodeThread.join();
         }
-        if (gVideoOutputContextFormat) {
-            av_write_trailer(gVideoOutputContextFormat);
+        videoOutputFlush(avCodecContext, avFormatContext);
+        if (avFormatContext) {
+            av_write_trailer(avFormatContext);
         }
-        av_frame_free(&gVideoOutputFrame);
-        avcodec_free_context(&gVideoOutputContextCodec);
-        if (gVideoOutputContextFormat) {
-            avio_closep(&gVideoOutputContextFormat->pb);
-            avformat_free_context(gVideoOutputContextFormat);
+        avcodec_free_context(&avCodecContext);
+        if (avFormatContext) {
+            avio_closep(&avFormatContext->pb);
+            avformat_free_context(avFormatContext);
         }
         for (auto cfg: *cameraCfg) {
             allocator->free(cfg.stream());
@@ -1035,9 +1008,8 @@ int main()
         delete allocator;
         gCamera->release();
         gCamera.reset();
-        frameDataQueueClear();
-        W_LOG_DEBUG("at and, %u frames not released by avcodec_send_frame()",
-                    gVideoRecordingFrameHeldCount);
+        avFrameQueueClear();
+        W_LOG_INFO("%d video frame(s) captured.", gVideoRecordingFrameCount);
     } else {
         W_LOG_ERROR("no cameras found!");
     }
