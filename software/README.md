@@ -93,10 +93,30 @@ Then fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) (comp
 cd ~
 git clone git://source.ffmpeg.org/ffmpeg --depth=1
 cd ffmpeg
-./configure --extra-ldflags="-latomic" --extra-cflags="-Wno-format-truncation" --arch=armel --target-os=linux --enable-gpl --enable-libx264 --enable-nonfree --enable-v4l2-m2m
+./configure --extra-ldflags="-latomic" --extra-cflags="-Wno-format-truncation" --arch=armel --target-os=linux --enable-gpl --enable-libx264 --enable-v4l2-m2m
 make -j4
 sudo make install
 ```
+
+Finally, since speed is everything with video coding, edit the file `/etc/init.d/raspi-config` and change the line:
+
+```
+CPU_DEFAULT_GOVERNOR="${CPU_DEFAULT_GOVERNOR:-ondemand}"
+```
+
+...to:
+
+```
+CPU_DEFAULT_GOVERNOR="${CPU_DEFAULT_GOVERNOR:-performance}"
+```
+
+To check that this has worked, install `btop` also:
+
+```
+sudo apt install btop
+```
+
+Run `btop` and you'll see the clock speed in the top-rightish of the display, likely floating around the 600&nbsp;MHz mark.  Reboot with `sudo reboot` and hopefully the change to the configuration file will cause the CPU frequency to sit at 1&nbsp;GHz all of the time. There are, of course, over-clocking possibilities but you'll need a heatsink for that.
 
 # Build/Run
 Clone this repo to the PiZero2W, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:

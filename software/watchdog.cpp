@@ -76,7 +76,7 @@ using namespace cv;
 
 #ifndef W_AVFRAME_LIST_MAX_ELEMENTS
 // The maximum number of elements in the video frame queue.
-# define W_AVFRAME_LIST_MAX_ELEMENTS 100
+# define W_AVFRAME_LIST_MAX_ELEMENTS 300
 #endif
 
 /* ----------------------------------------------------------------
@@ -98,7 +98,7 @@ using namespace cv;
  * -------------------------------------------------------------- */
 
 #ifndef W_HLS_PLAYLIST_FILE_NAME
-// The playlist name to service HLS video output.
+// The playlist name to serve HLS video.
 # define W_HLS_PLAYLIST_FILE_NAME "watchdog.m3u8"
 #endif
 
@@ -508,7 +508,11 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         avFrame->linesize[0] = yStride;
         avFrame->linesize[1] = yStride >> 1;
         avFrame->linesize[2] = yStride >> 1;
+        avFrame->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
         avFrame->pts = sequenceNumber;
+        // Set this as it can do no harm (units are the frame rate,
+        // so this is one frame)
+        avFrame->duration = 1;
         uint8_t *copy = (uint8_t *) malloc(length);
         if (copy) {
             memcpy(copy, data, length);
@@ -591,24 +595,29 @@ static void avFrameQueueClear()
 static int videoOutput(AVCodecContext *codecContext, AVFormatContext *formatContext)
 {
     int errorCode = -ENOMEM;
+    unsigned int numReceivedPackets = 0;
 
     AVPacket *packet = av_packet_alloc();
     if (packet) {
         errorCode = 0;
         // Call avcodec_receive_packet until it returns AVERROR(EAGAIN),
         // meaning it needs to be fed more input
-        W_LOG_DEBUG("### calling avcodec_receive_packet().");
         do {
             errorCode = avcodec_receive_packet(codecContext, packet);
             if (errorCode == 0) {
-                W_LOG_DEBUG("### calling av_interleaved_write_frame() %d.", packet->pts);
+                numReceivedPackets++;
                 errorCode = av_interleaved_write_frame(formatContext, packet);
-                W_LOG_DEBUG("### av_interleaved_write_frame() returned %d.", errorCode);
-                // Apparently av_interleave_write_frame() unreferences the packet
-            } else {
-                W_LOG_DEBUG("### avcodec_receive_packet() returned error %d.", errorCode);
+                // Apparently av_interleave_write_frame() unreferences the
+                // packet so we don't need to worry about that
             }
         } while (errorCode == 0);
+        if ((numReceivedPackets > 0) &&
+            ((errorCode == AVERROR(EAGAIN)) || (errorCode == AVERROR_EOF))) {
+            // That'll do pig, that'll do
+            errorCode = 0;
+        } else {
+            W_LOG_DEBUG("FFmpeg returned error %d.", errorCode);
+        }
         av_packet_free(&packet);
     } else {
          W_LOG_ERROR("unable to allocate packet for FFmpeg encode!");
@@ -647,7 +656,6 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
     while (gRunning) {
         if (avFrameQueueTryPop(&avFrame) == 0) {
             // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
-            W_LOG_DEBUG("### calling avcodec_send_frame() %d.", avFrame->pts);
             W_PRINT_DURATION(errorCode = avcodec_send_frame(codecContext, avFrame));
             if (errorCode == 0) {
                 errorCode = videoOutput(codecContext, formatContext);
@@ -679,7 +687,7 @@ static void requestCompleted(Request *request)
 
        for (auto bufferPair : buffers) {
             FrameBuffer *buffer = bufferPair.second;
-            const FrameMetadata &metadata = buffer->metadata();
+            //const FrameMetadata &metadata = buffer->metadata();
 
             // Grab the stream's width, height, stride and which stream
             // this is, all of which is encoded in the buffer's cookie
@@ -702,10 +710,6 @@ static void requestCompleted(Request *request)
             uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
-
-            // Print out some metadata just so that we can see what's going on
-            W_LOG_DEBUG("%s sequence number %06d, bytes used %d.",
-                       gStreamName[streamType], metadata.sequence, dmaBufferLength);
 
             // Now do the OpenCV or FFmpeg thing, depending on the stream type
             // the buffer came from
@@ -906,7 +910,7 @@ int main()
                         avStream = avformat_new_stream(avFormatContext, nullptr);
                         if (avStream) {
                             errorCode = -ENODEV;
-                            const AVCodec *videoOutputCodec = avcodec_find_encoder(AV_CODEC_ID_H264);
+                            const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
                             if (videoOutputCodec) {
                                 errorCode = -ENOMEM;
                                 avCodecContext = avcodec_alloc_context3(videoOutputCodec);
@@ -921,9 +925,20 @@ int main()
                                     avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                                     avCodecContext->codec_id = AV_CODEC_ID_H264;
                                     avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+                                    // This is needed to include the frame duration in the encoded
+                                    // output, otherwise the HLS bit of av_interleaved_write_frame()
+                                    // will emit a warning that frames having zero duration will mean
+                                    // the HLS segment timing is orf
+                                    avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
                                     if ((avcodec_open2(avCodecContext, videoOutputCodec, nullptr) == 0) &&
                                         (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
                                         (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                        // Don't see why this should be necessary (everything in here
+                                        // seems to have its own copy of time_base: the AVCodecContext does,
+                                        // AVFrame does and apparently AVStream does), but the example:
+                                        // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
+                                        // does it and if you don't do it the output has no timing.
+                                        avStream->time_base = avCodecContext->time_base;
                                         errorCode = 0;
                                     } else {
                                         W_LOG_ERROR("unable to either open video codec or write AV format header!");
