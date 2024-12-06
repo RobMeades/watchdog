@@ -74,11 +74,6 @@ using namespace cv;
                             W_LOG_DEBUG("%d ms to do \"" #x "\".",                 \
                                         std::chrono::duration_cast<std::chrono::milliseconds>(_t2 - _t1))
 
-#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
-// The maximum number of elements in the video frame queue.
-# define W_AVFRAME_LIST_MAX_ELEMENTS 300
-#endif
-
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: STRINGIFY
  * -------------------------------------------------------------- */
@@ -113,70 +108,59 @@ using namespace cv;
 #endif
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: FORMATS
+ * COMPILE-TIME MACROS: CAMERA-RELATED
  * -------------------------------------------------------------- */
 
-#ifndef W_STREAM_ROLE_VIDEO_RECORDING
-// The libcamera StreamRole to use as a basis for the video
-// recording stream.
-# define W_STREAM_ROLE_VIDEO_RECORDING StreamRole::VideoRecording
+#ifndef W_CAMERA_STREAM_ROLE
+// The libcamera StreamRole to use as a basis for the video stream.
+# define W_CAMERA_STREAM_ROLE StreamRole::VideoRecording
 #endif
 
-#ifndef W_STREAM_FORMAT_VIDEO_RECORDING
-// The pixel format for the video recording stream: must be
-// YUV420 as that is what the video recoding code is expecting.
-# define W_STREAM_FORMAT_VIDEO_RECORDING "YUV420"
+#ifndef W_CAMERA_STREAM_FORMAT
+// The pixel format for the video stream: must be YUV420 as that is
+// what the code is expecting.
+# define W_CAMERA_STREAM_FORMAT "YUV420"
 #endif
 
-#ifndef W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING
-// Horizontal size of video recording stream in pixels.
-# define W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING 854
+#ifndef W_CAMERA_STREAM_WIDTH_PIXELS
+// Horizontal size of video stream in pixels.
+# define W_CAMERA_STREAM_WIDTH_PIXELS 1920
 #endif
 
-#ifndef W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING
-// Vertical size of video recording stream in pixels.
-# define W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING 480
+#ifndef W_CAMERA_STREAM_HEIGHT_PIXELS
+// Vertical size of the video stream in pixels.
+# define W_CAMERA_STREAM_HEIGHT_PIXELS 1080
 #endif
 
-#ifndef W_STREAM_ROLE_MOTION_DETECTION
-// The libcamera StreamRole to use as a basis for the motion
-// detection stream.
-# define W_STREAM_ROLE_MOTION_DETECTION StreamRole::Viewfinder
-#endif
-
-#ifndef W_STREAM_FORMAT_MOTION_DETECTION
-// The pixel format for the motion detection stream:
-// though RGB888 would be immediately importable by OpenCV,
-// only a Raspbarry Pi 5 is able to provide the secondary
-// stream as RGB, we have to use a Yxxx format but that is
-// OK: as sandyol pointed out when I asked here:
-//
-// https://forums.raspberrypi.com/viewtopic.php?p=2273212#p2273212
-//
-// ...the Y stream is the luma information and that can
-// be passed to OpenCV as a gray-scale image, which is
-// all we need for motion detection.
-# define W_STREAM_FORMAT_MOTION_DETECTION "YUV420"
-#endif
-
-#ifndef W_STREAM_FORMAT_HORIZONTAL_PIXELS_MOTION_DETECTION
-// Horizontal size of the stream for motion detection in pixels.
-# define W_STREAM_FORMAT_HORIZONTAL_PIXELS_MOTION_DETECTION 854
-#endif
-
-#ifndef W_STREAM_FORMAT_VERTICAL_PIXELS_MOTION_DETECTION
-// Vertical size of the stream for motion detection in pixels.
-# define W_STREAM_FORMAT_VERTICAL_PIXELS_MOTION_DETECTION 480
-#endif
-
-#ifndef W_FRAME_RATE_HERTZ
+#ifndef W_CAMERA_FRAME_RATE_HERTZ
 // Frames per second.
-# define W_FRAME_RATE_HERTZ 25
+# define W_CAMERA_FRAME_RATE_HERTZ 25
 #endif
+
+/* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: VIDEO-CODING RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
+// The maximum number of elements in the video frame queue.
+# define W_AVFRAME_LIST_MAX_ELEMENTS 1000
+#endif
+
+// The stream time-base as an AVRational (integer pair, numerator
+// then denominator) that FFmpeg understands.
+#define W_VIDEO_STREAM_TIME_BASE_AVRATIONAL {1, W_CAMERA_FRAME_RATE_HERTZ}
+
+// The video stream frame rate in units of the video stream time-base.
+#define W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL {W_CAMERA_FRAME_RATE_HERTZ, 1}
 
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LOGGING
  * -------------------------------------------------------------- */
+
+#ifndef W_MONITOR_TIMING_LENGTH
+// The number of frames to average timing over when monitoring.
+# define W_MONITOR_TIMING_LENGTH 1000
+#endif
 
 #define W_LOG_TAG "Watchdog"
 
@@ -218,13 +202,6 @@ using namespace cv;
  * TYPES
  * -------------------------------------------------------------- */
 
-// The type of video stream.  Values are important here since this
-// is used as an index.
-typedef enum {
-    W_STREAM_TYPE_VIDEO_RECORDING = 0,
-    W_STREAM_TYPE_MOTION_DETECTION = 1
-} wStreamType_t;
-
 // The types of log print.  Values are important as they are
 // used as indexes into arrays.
 typedef enum {
@@ -234,6 +211,18 @@ typedef enum {
     W_LOG_TYPE_DEBUG = 3
 } wLogType_t;
 
+// Structure to monitor timing.
+typedef struct {
+    std::chrono::time_point<std::chrono::high_resolution_clock> previousTimestamp;
+    std::chrono::duration<double> gap[W_MONITOR_TIMING_LENGTH];
+    unsigned int numGaps;
+    // This is  non-NULL only when duration = W_MONITOR_TIMING_LENGTH
+    std::chrono::duration<double> *oldestGap;
+    std::chrono::duration<double> total;
+    std::chrono::duration<double> largest;
+    std::chrono::duration<double> average;
+} wMonitorTiming_t;
+
 /* ----------------------------------------------------------------
  * VARIABLES
  * -------------------------------------------------------------- */
@@ -241,8 +230,17 @@ typedef enum {
 // Pointer to camera: global as the requestCompleted() callback will use it.
 static std::shared_ptr<Camera> gCamera = nullptr;
 
-// Count of video recording frames received.
-static unsigned int gVideoRecordingFrameCount = 0;
+// Count of frames received from the camera.
+static unsigned int gCameraStreamFrameCount = 0;
+
+// Count of frames passed into video codec.
+static unsigned int gVideoStreamFrameInputCount = 0;
+
+// Count of frames received from the video codec.
+static unsigned int gVideoStreamFrameOutputCount = 0;
+
+// Keep track of timing on the video stream.
+static wMonitorTiming_t gCameraStreamMonitorTiming;
 
 // Pointer to the OpenCV background subtractor: global as the
 // requestCompleted() callback will use it.
@@ -266,19 +264,16 @@ static std::mutex gMatListMutex;
 
 // Flag to track that we're running (so that the video encode thread
 // knows when to exit).
-static bool gRunning;
-
-// Names for the stream types, for debug purposes.
-static const char *gStreamName[] = {"video recording", "motion detection"};
+static bool gRunning = false;
 
 // Array of log prefixes for the different log types.
 static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
 
-// Arra of log destinations for the different log types.
+// Array of log destinations for the different log types.
 static FILE *gLogDestination[] = {stdout, stdout, stderr, stdout};
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: LOGGING
+ * STATIC FUNCTIONS: LOGGING/MONITORING
  * -------------------------------------------------------------- */
 
 // Return the right output stream for a log type.
@@ -350,6 +345,53 @@ static void log(wLogType_t type, unsigned int line, Args ... args)
     logEnd(type);
 }
 
+// Update a timing monitoring buffer.
+static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
+{
+    std::chrono::time_point<std::chrono::high_resolution_clock> timestamp;
+    std::chrono::duration<double> gap = std::chrono::high_resolution_clock::duration::zero();
+
+    // Get the current timestamp, if possible work out the gap
+    // from the last and update the largestGap based on that
+    timestamp = std::chrono::high_resolution_clock::now();
+    if (monitorTiming->numGaps > 0) {
+        gap = timestamp - monitorTiming->previousTimestamp;
+        if (gap > monitorTiming->largest) {
+            monitorTiming->largest = gap;
+        }
+    }
+
+    // Now deal with the total, and hence the average
+    if (monitorTiming->oldestGap == NULL) {
+        // Haven't yet filled the monitoring buffer up, just add the
+        // new gap and update the total
+        monitorTiming->gap[monitorTiming->numGaps] = gap;
+        monitorTiming->numGaps++;
+        monitorTiming->total += gap;
+        if (monitorTiming->numGaps >= W_ARRAY_COUNT(monitorTiming->gap)) {
+            monitorTiming->oldestGap = &(monitorTiming->gap[0]);
+        }
+    } else {
+        // The monitoring buffer is full, need to rotate it
+        monitorTiming->total -= *monitorTiming->oldestGap;
+        *monitorTiming->oldestGap = gap;
+        monitorTiming->total += gap;
+        monitorTiming->oldestGap++;
+        if (monitorTiming->oldestGap >= monitorTiming->gap + W_ARRAY_COUNT(monitorTiming->gap)) {
+            monitorTiming->oldestGap = &(monitorTiming->gap[0]);
+        }
+    }
+
+    if (monitorTiming->numGaps > 0) {
+        // Note: the average becomes an unsigned value unless the
+        // denominator is cast to an integer
+        monitorTiming->average = monitorTiming->total / (int) monitorTiming->numGaps;
+    }
+
+    // Store the timestamp for next time
+    monitorTiming->previousTimestamp = timestamp;
+}
+
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS: LIBCAMERA RELATED
  * -------------------------------------------------------------- */
@@ -359,22 +401,17 @@ static void log(wLogType_t type, unsigned int line, Args ... args)
 // to search for this, we encode it into the cookie that is associated
 // with a FrameBuffer when it is created, then the requestCompleted()
 // callback can grab it.  See cookieDecode() for the reverse.
-// We also encode which stream this is so that we can process
-// the motion detection stream in a different way to the video
-// recording  stream.
 static uint64_t cookieEncode(unsigned int width, unsigned int height,
-                             unsigned int stride,
-                             wStreamType_t streamType)
+                             unsigned int stride)
 {
     return ((uint64_t) width << 48) | ((uint64_t) (height & UINT16_MAX) << 32) |
-            ((stride & UINT16_MAX) << 16) | (streamType & UINT16_MAX);
+            (stride & UINT32_MAX);
 }
 
-// Decode width, height, stride and stream type from a cookie; any
-// pointer parameters may be NULL.
+// Decode width, height and stride from a cookie; any pointer parameters
+// may be NULL.
 static void cookieDecode(uint64_t cookie, unsigned int *width,
-                         unsigned int *height, unsigned int *stride,
-                         wStreamType_t *streamType)
+                         unsigned int *height, unsigned int *stride)
 {
     if (width != nullptr) {
         *width = (cookie >> 48) & UINT16_MAX;
@@ -383,30 +420,24 @@ static void cookieDecode(uint64_t cookie, unsigned int *width,
         *height = (cookie >> 32) & UINT16_MAX;
     }
     if (stride != nullptr) {
-        *stride = (cookie >> 16) & UINT16_MAX;
-    }
-    if (streamType != nullptr) {
-        *streamType = (wStreamType_t) (cookie & UINT16_MAX);
+        *stride = cookie & UINT32_MAX;
     }
 }
 
-// Configure a stream.
-static bool streamConfigure(wStreamType_t streamType,
-                            StreamConfiguration &streamCfg,
-                            std::string pixelFormatStr,
-                            unsigned int widthPixels,
-                            unsigned int heightPixels)
+// Configure a stream from the camear.
+static bool cameraStreamConfigure(StreamConfiguration &streamCfg,
+                                  std::string pixelFormatStr,
+                                  unsigned int widthPixels,
+                                  unsigned int heightPixels)
 {
     bool formatFound = false;
     bool sizeFound = false;
 
-    W_LOG_DEBUG("desired %s stream configuration %dx%d-%s.",
-                gStreamName[streamType], widthPixels,
-                heightPixels, pixelFormatStr.c_str());
+    W_LOG_DEBUG("desired stream configuration %dx%d-%s.",
+                widthPixels, heightPixels, pixelFormatStr.c_str());
 
     // Print out the current configuration
-    W_LOG_DEBUG("existing %s stream configuration %s.",
-                gStreamName[streamType],
+    W_LOG_DEBUG("existing stream configuration %s.",
                 streamCfg.toString().c_str());
 
     // Set it up as we'd like
@@ -466,8 +497,7 @@ static bool streamConfigure(wStreamType_t streamType,
 
     if (formatFound && sizeFound) {
         // Print where we ended up
-        W_LOG_DEBUG("nearest %s stream configuration %s.",
-                    gStreamName[streamType],
+        W_LOG_DEBUG("nearest %stream configuration %s.",
                     streamCfg.toString().c_str());
     }
 
@@ -484,7 +514,7 @@ static bool streamConfigure(wStreamType_t streamType,
 static void avFrameFreeCallback(void *opaque, uint8_t *data)
 {
     free(data);
-    W_LOG_DEBUG("video codec is done with frame %u.", (unsigned int) opaque);
+    W_LOG_DEBUG("video codec is done with frame %llu.", (uint64_t) opaque);
 }
 
 // Push a frame of video data onto the queue.
@@ -508,17 +538,15 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         avFrame->linesize[0] = yStride;
         avFrame->linesize[1] = yStride >> 1;
         avFrame->linesize[2] = yStride >> 1;
-        avFrame->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
+        avFrame->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
         avFrame->pts = sequenceNumber;
-        // Set this as it can do no harm (units are the frame rate,
-        // so this is one frame)
         avFrame->duration = 1;
         uint8_t *copy = (uint8_t *) malloc(length);
         if (copy) {
             memcpy(copy, data, length);
             avFrame->buf[0] = av_buffer_create(copy, length,
                                                avFrameFreeCallback,
-                                               (void *) sequenceNumber,
+                                               (void *) (uint64_t) sequenceNumber,
                                                0);
             if (avFrame->buf[0]) {
                 errorCode = 0;
@@ -541,6 +569,9 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
                     errorCode = 0;
                     try {
                         gAvFrameList.push_back(avFrame);
+                        // Keep track of timing for debug purposes
+                        monitorTimingUpdate(&gCameraStreamMonitorTiming);
+                        gVideoStreamFrameInputCount++;
                     }
                     catch(int x) {
                         errorCode = -x;
@@ -559,7 +590,8 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
             // This should cause avFrameFreeCallback() to be
             // called and free the copy that way
             av_frame_free(&avFrame);
-            W_LOG_ERROR("unable to push to video queue (%d)!", errorCode);
+            W_LOG_ERROR("unable to push frame %d to video queue (%d)!",
+                        sequenceNumber, errorCode);
         }
     }
 
@@ -606,9 +638,11 @@ static int videoOutput(AVCodecContext *codecContext, AVFormatContext *formatCont
             errorCode = avcodec_receive_packet(codecContext, packet);
             if (errorCode == 0) {
                 numReceivedPackets++;
+                packet->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
                 errorCode = av_interleaved_write_frame(formatContext, packet);
                 // Apparently av_interleave_write_frame() unreferences the
                 // packet so we don't need to worry about that
+                gVideoStreamFrameOutputCount++;
             }
         } while (errorCode == 0);
         if ((numReceivedPackets > 0) &&
@@ -687,16 +721,15 @@ static void requestCompleted(Request *request)
 
        for (auto bufferPair : buffers) {
             FrameBuffer *buffer = bufferPair.second;
-            //const FrameMetadata &metadata = buffer->metadata();
+            const FrameMetadata &metadata = buffer->metadata();
 
-            // Grab the stream's width, height, stride and which stream
-            // this is, all of which is encoded in the buffer's cookie
-            // when we associated it with the stream
+            // Grab the stream's width, height and stride, all of which
+            // is encoded in the buffer's cookie when we associated it
+            // with the stream
             unsigned int width;
             unsigned int height;
             unsigned int stride;
-            wStreamType_t streamType;
-            cookieDecode(buffer->cookie(), &width, &height, &stride, &streamType);
+            cookieDecode(buffer->cookie(), &width, &height, &stride);
 
             // From this post: https://forums.raspberrypi.com/viewtopic.php?t=347925,
             // need to create a memory map into the frame buffer for OpenCV or FFmpeg
@@ -710,44 +743,30 @@ static void requestCompleted(Request *request)
             uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
+#if 0
+            // From the comment on this post:
+            // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
+            // ...we can bring in just the Y portion of the frame as effectively
+            // a gray-scale image using CV_8UC1
+            Mat frameOpenCv(height, width, CV_8UC1, dmaBuffer, stride);
+            if (!frameOpenCv.empty()) {
+                // Set JPEG image quality for OpenCV file write
+                std::vector<int> imageCompression;
+                imageCompression.push_back(IMWRITE_JPEG_QUALITY);
+                imageCompression.push_back(40);
 
-            // Now do the OpenCV or FFmpeg thing, depending on the stream type
-            // the buffer came from
-            switch (streamType) {
-                case W_STREAM_TYPE_MOTION_DETECTION:
-                {
-                    // From the comment on this post:
-                    // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
-                    // ...we can bring in just the Y portion of the frame as effectively
-                    // a gray-scale image using CV_8UC1
-                    Mat frameOpenCv(height, width, CV_8UC1, dmaBuffer, stride);
-                    if (!frameOpenCv.empty()) {
-                        // Set JPEG image quality for OpenCV file write
-                        std::vector<int> imageCompression;
-                        imageCompression.push_back(IMWRITE_JPEG_QUALITY);
-                        imageCompression.push_back(40);
-
-                        // Update the background model of the motion detection stream
-                        //gBackgroundSubtractor->apply(frameOpenCv, gForegroundMask);
-                        //std::string sequenceStr = std::to_string(metadata.sequence);
-                        //std::string fileName = "lores" + sequenceStr + ".jpg";
-                        //imwrite(fileName, frameOpenCv, imageCompression);
-                    }
-                }
-                break;
-                case W_STREAM_TYPE_VIDEO_RECORDING:
-                {
-                    // A video recording frame: stream it!
-                    avFrameQueuePush(dmaBuffer, dmaBufferLength,
-                                     gVideoRecordingFrameCount,
-                                     width, height, stride);
-                    gVideoRecordingFrameCount++;
-                }
-                break;
-                default:
-                    W_LOG_ERROR("unknown stream type %d!", streamType);
-                    break;
+                // Update the background model of the motion detection stream
+                //gBackgroundSubtractor->apply(frameOpenCv, gForegroundMask);
+                //std::string sequenceStr = std::to_string(metadata.sequence);
+                //std::string fileName = "lores" + sequenceStr + ".jpg";
+                //imwrite(fileName, frameOpenCv, imageCompression);
             }
+#endif
+            // Stream the frame via FFmpeg
+            avFrameQueuePush(dmaBuffer, dmaBufferLength,
+                             metadata.sequence,
+                             width, height, stride);
+            gCameraStreamFrameCount++;
 
             // Re-use the request
             request->reuse(Request::ReuseBuffers);
@@ -802,23 +821,11 @@ int main()
         gCamera = cm->get(cameraId);
         gCamera->acquire();
 
-        // Configure the camera with two streams: order is
-        // important, so that we can pick up the given configuration
-        // with a known index (index 0 is the first in the list)
-        std::unique_ptr<CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_STREAM_ROLE_VIDEO_RECORDING,
-                                                                                         W_STREAM_ROLE_MOTION_DETECTION});
-        // First configure the video recording stream
-        streamConfigure(W_STREAM_TYPE_VIDEO_RECORDING,
-                        cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING),
-                        W_STREAM_FORMAT_VIDEO_RECORDING,
-                        W_STREAM_FORMAT_HORIZONTAL_PIXELS_VIDEO_RECORDING,
-                        W_STREAM_FORMAT_VERTICAL_PIXELS_VIDEO_RECORDING);
-        // Then configure the motion detection stream
-        streamConfigure(W_STREAM_TYPE_MOTION_DETECTION,
-                        cameraCfg->at(W_STREAM_TYPE_MOTION_DETECTION),
-                        W_STREAM_FORMAT_MOTION_DETECTION,
-                        W_STREAM_FORMAT_HORIZONTAL_PIXELS_MOTION_DETECTION,
-                        W_STREAM_FORMAT_VERTICAL_PIXELS_MOTION_DETECTION);
+        // Configure the camera with the stream
+        std::unique_ptr<CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
+        cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
+                              W_CAMERA_STREAM_WIDTH_PIXELS,
+                              W_CAMERA_STREAM_HEIGHT_PIXELS);
 
         // Validate and apply the configuration
         if (cameraCfg->validate() != CameraConfiguration::Valid) {
@@ -852,28 +859,25 @@ int main()
             }
         }
         if (errorCode == 0) {
-            W_LOG_DEBUG("creating requests to the camera for each stream using the allocated buffers.");
-            // Create a queue of requests on each stream using the allocated buffers
+            W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
+            // Create a queue of requests using the allocated buffers
             std::vector<std::unique_ptr<Request>> requests;
-            int streamIndex = 0;
             for (auto cfg: *cameraCfg) {
                 Stream *stream = cfg.stream();
                 const std::vector<std::unique_ptr<FrameBuffer>> &buffers = allocator->buffers(stream);
-
                 for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
                     std::unique_ptr<Request> request = gCamera->createRequest();
                     if (request) {
                         const std::unique_ptr<FrameBuffer> &buffer = buffers[x];
                         errorCode = request->addBuffer(stream, buffer.get());
                         if (errorCode == 0) {
-                            // Encode the width, height, stride and index of the
-                            // stream into the cookie of the FrameBuffer as we will
-                            // need that information later when converting the
-                            // FrameBuffer to a form that OpenCV or FFmpeg understands
+                            // Encode the width, height and stride into the cookie of
+                            // the FrameBuffer as we will need that information later
+                            // when converting the FrameBuffer to a form that OpenCV
+                            // and FFmpeg understand
                             buffer->setCookie(cookieEncode(stream->configuration().size.width,
                                                            stream->configuration().size.height,
-                                                           stream->configuration().stride,
-                                                           (wStreamType_t) streamIndex));
+                                                           stream->configuration().stride));
                             requests.push_back(std::move(request));
                         } else {
                             W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
@@ -884,7 +888,6 @@ int main()
                         W_LOG_ERROR("unable to create request to camera!");
                     }
                 }
-                streamIndex++;
             }
             if (errorCode == 0) {
                 errorCode = -ENOMEM;
@@ -897,15 +900,24 @@ int main()
                 if (avFormatContext) {
                     // Configure the HLS options
                     AVDictionary *hlsOptions = nullptr;
+                    // Note: the original example I was following:
+                    // https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124
+                    // set a load of "segment_*" (e.g. segment_time_delta='1.0', segment_list_flags='cache+live')
+                    // options, however, though these exist in a "stream segment muxer" (see libavformat\segment.c)
+                    // they don't seem to be at all associated with the HLS stream as configured here
+                    // and the original example was including them wrongly (it just added them with
+                    // an av_dict_set() individually, whereas in fact they have to be added as
+                    // sub-dictionary (a string of key-value pairs separated by a colon) with the
+                    // key "hls_segment_options") and so it wouldn't have known they had no effect
+                    // as avformat_write_header() ignores unused dictionary entries.  So I've
+                    // not included the "segment_*" options here.
+                    // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
+                    // options that _do_ apply.
+                    // TODO FFmpeg seems to ignore the segment duration and uses 10 seconds,
+                    // either it is ignoring this setting or there is a time scaling issue somewhere.
                     if ((av_dict_set(&hlsOptions, "hls_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS), 0) == 0) &&
                         (av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "segment_format", "mpegts", 0) == 0) && // MPEG-TS transport stream
-                        (av_dict_set(&hlsOptions, "segment_list_type", "m3u8", 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "segment_list", W_HLS_PLAYLIST_FILE_NAME, 0) == 0) &&
-                        (av_dict_set_int(&hlsOptions, "segment_list_size", 0, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "segment_time_delta", "1.0", 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "segment_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS) ".0", 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "segment_list_flags", "cache+live", 0) == 0)) {
+                        (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0)) {
                         //  Set up the H264 video output stream over HLS
                         avStream = avformat_new_stream(avFormatContext, nullptr);
                         if (avStream) {
@@ -916,12 +928,12 @@ int main()
                                 avCodecContext = avcodec_alloc_context3(videoOutputCodec);
                                 if (avCodecContext) {
                                     W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
-                                    avCodecContext->width = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.width;
-                                    avCodecContext->height = cameraCfg->at(W_STREAM_TYPE_VIDEO_RECORDING).size.height;
-                                    avCodecContext->time_base = av_make_q(1, W_FRAME_RATE_HERTZ);
-                                    avCodecContext->framerate = av_make_q(W_FRAME_RATE_HERTZ, 1);
+                                    avCodecContext->width = cameraCfg->at(0).size.width;
+                                    avCodecContext->height = cameraCfg->at(0).size.height;
+                                    avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
+                                    avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
                                     // TODO whether this is correct or not: ensure a key frame every HLS segment
-                                    avCodecContext->keyint_min = W_HLS_SEGMENT_DURATION_SECONDS * W_FRAME_RATE_HERTZ;
+                                    avCodecContext->keyint_min = (W_HLS_SEGMENT_DURATION_SECONDS >> 1) * W_CAMERA_FRAME_RATE_HERTZ;
                                     avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                                     avCodecContext->codec_id = AV_CODEC_ID_H264;
                                     avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
@@ -933,6 +945,13 @@ int main()
                                     if ((avcodec_open2(avCodecContext, videoOutputCodec, nullptr) == 0) &&
                                         (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
                                         (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                        // avformat_write_header() modifies hlsOptions to be
+                                        // any options that weren't found
+                                        const AVDictionaryEntry *entry = nullptr;
+                                        while ((entry = av_dict_iterate(hlsOptions, entry))) {
+                                            W_LOG_WARN("HLS key \"%s\" value \"%s\" not found.",
+                                                       entry->key, entry->value);
+                                        }
                                         // Don't see why this should be necessary (everything in here
                                         // seems to have its own copy of time_base: the AVCodecContext does,
                                         // AVFrame does and apparently AVStream does), but the example:
@@ -969,7 +988,8 @@ int main()
                         // We create a camera control list and pass it to
                         // the start() method when we start the camera.
                         ControlList cameraControls;
-                        unsigned int frameDurationLimit = W_FRAME_RATE_HERTZ * 1000;
+                        // Units are microseconds.
+                        int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
                         cameraControls.set(controls::FrameDurationLimits, Span<const std::int64_t, 2>({frameDurationLimit,
                                                                                                        frameDurationLimit}));
                         // Attach the requestCompleted() handler
@@ -983,13 +1003,13 @@ int main()
                                                         avCodecContext,
                                                         avFormatContext}; 
 
-                        W_LOG_INFO("starting the camera and queueing requests for 30 seconds.");
+                        W_LOG_INFO("starting the camera and queueing requests for 20 seconds.");
                         gCamera->start(&cameraControls);
                         for (std::unique_ptr<Request> &request: requests) {
                             gCamera->queueRequest(request.get());
                         }
 
-                        std::this_thread::sleep_for(std::chrono::seconds(30));
+                        std::this_thread::sleep_for(std::chrono::seconds(20));
 
                         W_LOG_INFO("stopping the camera.");
                         gCamera->stop();
@@ -1024,7 +1044,18 @@ int main()
         gCamera->release();
         gCamera.reset();
         avFrameQueueClear();
-        W_LOG_INFO("%d video frame(s) captured.", gVideoRecordingFrameCount);
+        W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
+                   " %d encoded video frame(s)).",
+                   gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
+                   gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
+                   gVideoStreamFrameOutputCount);
+        W_LOG_INFO("average video frame gap (at video encoder input) over last %d frames"
+                   " %lld ms (a rate of %lld frames/second), largest video"
+                   " frame gap %lld ms.",
+                   W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
+                   std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
+                   1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
+                   std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.largest).count());
     } else {
         W_LOG_ERROR("no cameras found!");
     }
