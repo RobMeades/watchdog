@@ -104,7 +104,7 @@ using namespace cv;
 
 #ifndef W_HLS_BASE_URL
 // The URL to serve from.
-# define W_HLS_BASE_URL "http://10.10.1.16:1234/"
+# define W_HLS_BASE_URL "http://10.10.1.16/"
 #endif
 
 /* ----------------------------------------------------------------
@@ -497,7 +497,7 @@ static bool cameraStreamConfigure(StreamConfiguration &streamCfg,
 
     if (formatFound && sizeFound) {
         // Print where we ended up
-        W_LOG_DEBUG("nearest %stream configuration %s.",
+        W_LOG_DEBUG("nearest stream configuration %s.",
                     streamCfg.toString().c_str());
     }
 
@@ -913,11 +913,11 @@ int main()
                     // not included the "segment_*" options here.
                     // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
                     // options that _do_ apply.
-                    // TODO FFmpeg seems to ignore the segment duration and uses 10 seconds,
-                    // either it is ignoring this setting or there is a time scaling issue somewhere.
                     if ((av_dict_set(&hlsOptions, "hls_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS), 0) == 0) &&
                         (av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0)) {
+                        (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
+                        (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
+                        (av_dict_set(&hlsOptions, "hls_flags", "split_by_time+delete_segments+discont_start+omit_endlist", 0) == 0)) {
                         //  Set up the H264 video output stream over HLS
                         avStream = avformat_new_stream(avFormatContext, nullptr);
                         if (avStream) {
@@ -933,7 +933,7 @@ int main()
                                     avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
                                     avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
                                     // TODO whether this is correct or not: ensure a key frame every HLS segment
-                                    avCodecContext->keyint_min = (W_HLS_SEGMENT_DURATION_SECONDS >> 1) * W_CAMERA_FRAME_RATE_HERTZ;
+                                    // avCodecContext->keyint_min = (W_HLS_SEGMENT_DURATION_SECONDS >> 1) * W_CAMERA_FRAME_RATE_HERTZ;
                                     avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                                     avCodecContext->codec_id = AV_CODEC_ID_H264;
                                     avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
@@ -1003,13 +1003,13 @@ int main()
                                                         avCodecContext,
                                                         avFormatContext}; 
 
-                        W_LOG_INFO("starting the camera and queueing requests for 20 seconds.");
+                        W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
                         gCamera->start(&cameraControls);
                         for (std::unique_ptr<Request> &request: requests) {
                             gCamera->queueRequest(request.get());
                         }
 
-                        std::this_thread::sleep_for(std::chrono::seconds(20));
+                        std::cin.get();
 
                         W_LOG_INFO("stopping the camera.");
                         gCamera->stop();

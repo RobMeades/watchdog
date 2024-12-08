@@ -104,6 +104,46 @@ sudo make install
 
 Note: for the PiZero2W replace `--arch=arm64` with `--arch=armel`.
 
+As a browser interface, being a traditionalist, I would suggest installing Apache with:
+
+```
+sudo apt install apache2
+```
+
+Enable Apache to run at boot with:
+
+```
+sudo systemctl enable apache2
+```
+
+...and edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.  You probably also need to add in the same Apache configuration file:
+
+```
+        <Directory your_document_root>
+            AllowOverride none
+            Require all granted
+        </Directory>
+```
+
+Whatever directory you choose, to make it accessible to the default Apache user, `www-data`:
+
+```
+sudo usermod -a -G www-data <your_user>
+```
+
+Log out and back in again, then:
+
+```
+sudo chown -R <your_user>:www-data <your_folder>
+sudo chmod 2750 <your_folder>
+```
+
+Restart Apache for the changes to take effect:
+
+```
+sudo systemctl restart apache2
+```
+
 # Build/Run
 Clone this repo to the Pi, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:
 
@@ -122,5 +162,8 @@ LIBCAMERA_LOG_LEVELS=0 ./watchdog
 
 Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
+# Serve
+To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `./watchdog` from there.
+
 # A Note On Developing
-Since this is a simple application, a single source file, I just used `nano` as an editor on the Pi itself and had an `sftp` session running from a PC so that I could `get` the single source file I was working on from there and do all of the archive pushing stuff on the PC.  The only thing to remember was to open the source file on the PC in something like [Notepad++](https://notepad-plus-plus.org/) and do an `Edit`->`EOL Conversion` to switch the file to Windows line-endings on the PC before doing any pushing.  For larger edits I did it the other way around: edit the `.cpp` file on the PC and `sftp`->`put` the file to the Pi before compiling.  You can open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings but the `meson` build system and GCC worked fine with Windows line endings on Linux.
+Since this is a simple application, a single source file, I just used `nano` as an editor on the Pi itself and had an `sftp` session running from a PC so that I could `get` the single source file I was working on from there and do all of the archive pushing stuff on the PC.  The only thing to remember was to open the source file on the PC in something like [Notepad++](https://notepad-plus-plus.org/) and do an `Edit`->`EOL Conversion` to switch the file to Windows line-endings on the PC before doing any pushing.  For larger edits I did it the other way around: edit the `.cpp` file on the PC and `sftp`->`put` the file to the Pi before compiling.  You can open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
