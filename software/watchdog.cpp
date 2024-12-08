@@ -92,9 +92,14 @@ using namespace cv;
  * COMPILE-TIME MACROS: HLS VIDEO OUTPUT SETTINGS
  * -------------------------------------------------------------- */
 
+#ifndef W_HLS_FILE_NAME_ROOT
+// The root name for our HLS video files (.m3u8 and .ts).
+# define W_HLS_FILE_NAME_ROOT "watchdog"
+#endif
+
 #ifndef W_HLS_PLAYLIST_FILE_NAME
 // The playlist name to serve HLS video.
-# define W_HLS_PLAYLIST_FILE_NAME "watchdog.m3u8"
+# define W_HLS_PLAYLIST_FILE_NAME W_HLS_FILE_NAME_ROOT ".m3u8"
 #endif
 
 #ifndef W_HLS_SEGMENT_DURATION_SECONDS
@@ -124,12 +129,12 @@ using namespace cv;
 
 #ifndef W_CAMERA_STREAM_WIDTH_PIXELS
 // Horizontal size of video stream in pixels.
-# define W_CAMERA_STREAM_WIDTH_PIXELS 1920
+# define W_CAMERA_STREAM_WIDTH_PIXELS 950
 #endif
 
 #ifndef W_CAMERA_STREAM_HEIGHT_PIXELS
 // Vertical size of the video stream in pixels.
-# define W_CAMERA_STREAM_HEIGHT_PIXELS 1080
+# define W_CAMERA_STREAM_HEIGHT_PIXELS 540
 #endif
 
 #ifndef W_CAMERA_FRAME_RATE_HERTZ
@@ -238,6 +243,10 @@ static unsigned int gVideoStreamFrameInputCount = 0;
 
 // Count of frames received from the video codec.
 static unsigned int gVideoStreamFrameOutputCount = 0;
+
+// Remember the size of the frame list going to video, purely for
+// debug purposes.
+static unsigned int gVideoStreamFrameListSize = 0;
 
 // Keep track of timing on the video stream.
 static wMonitorTiming_t gCameraStreamMonitorTiming;
@@ -514,7 +523,8 @@ static bool cameraStreamConfigure(StreamConfiguration &streamCfg,
 static void avFrameFreeCallback(void *opaque, uint8_t *data)
 {
     free(data);
-    W_LOG_DEBUG("video codec is done with frame %llu.", (uint64_t) opaque);
+    (void) opaque;
+    // W_LOG_DEBUG("video codec is done with frame %llu.", (uint64_t) opaque);
 }
 
 // Push a frame of video data onto the queue.
@@ -565,8 +575,9 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
             if (errorCode == 0) {
                 gAvFrameListMutex.lock();
                 errorCode = -ENOBUFS;
-                if (gAvFrameList.size() < W_AVFRAME_LIST_MAX_ELEMENTS) {
-                    errorCode = 0;
+                unsigned int listSize = gAvFrameList.size();
+                if (listSize < W_AVFRAME_LIST_MAX_ELEMENTS) {
+                    errorCode = listSize + 1;
                     try {
                         gAvFrameList.push_back(avFrame);
                         // Keep track of timing for debug purposes
@@ -581,7 +592,7 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
             }
         }
 
-        if (errorCode != 0) {
+        if (errorCode < 0) {
             if (!avFrame->buf[0]) {
                 // If we never employed the copy
                 // need to free it explicitly.
@@ -690,7 +701,7 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
     while (gRunning) {
         if (avFrameQueueTryPop(&avFrame) == 0) {
             // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
-            W_PRINT_DURATION(errorCode = avcodec_send_frame(codecContext, avFrame));
+           errorCode = avcodec_send_frame(codecContext, avFrame);
             if (errorCode == 0) {
                 errorCode = videoOutput(codecContext, formatContext);
             } else {
@@ -763,9 +774,15 @@ static void requestCompleted(Request *request)
             }
 #endif
             // Stream the frame via FFmpeg
-            avFrameQueuePush(dmaBuffer, dmaBufferLength,
-                             metadata.sequence,
-                             width, height, stride);
+            unsigned int listSize = avFrameQueuePush(dmaBuffer, dmaBufferLength,
+                                                     metadata.sequence,
+                                                     width, height, stride);
+            if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
+                (listSize != gVideoStreamFrameListSize)) {
+                // Print the size of the backlog once a second
+                W_LOG_DEBUG("backlog %d frame(s)", listSize);
+            }
+            gVideoStreamFrameListSize = listSize;
             gCameraStreamFrameCount++;
 
             // Re-use the request
@@ -1002,6 +1019,10 @@ int main()
                         videoEncodeThread = std::thread{videoEncodeLoop,
                                                         avCodecContext,
                                                         avFormatContext}; 
+
+                        // Remove any old files for a clean start
+                        remove(W_HLS_PLAYLIST_FILE_NAME);
+                        system("rm " W_HLS_FILE_NAME_ROOT "*.ts"); 
 
                         W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
                         gCamera->start(&cameraControls);
