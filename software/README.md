@@ -116,12 +116,23 @@ Enable Apache to run at boot with:
 sudo systemctl enable apache2
 ```
 
-...and edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.  You probably also need to add in the same Apache configuration file:
+`hls.js` says that CORS headers have to be added for it to work correctly; I'm not _sure_ this matters in such a local set up but, in case it does, run:
+
+```
+sudo a2enmod headers
+```
+
+...to enable the headers module of Apache and see the additional `Header set` lines in the Apache configuration file below.
+
+Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.  You probably also need to add in the same Apache configuration file:
 
 ```
         <Directory your_document_root>
             AllowOverride none
             Require all granted
+            Header set Access-Control-Allow-Origin "*"
+            Header set Access-Control-Allow-Headers "*"
+            Header set Access-Control-Allow-Methods "PUT, GET, POST, DELETE, OPTIONS"
         </Directory>
 ```
 

@@ -55,6 +55,7 @@ extern "C" {
 # include <libavcodec/avcodec.h>
 # include <libavdevice/avdevice.h>
 # include <libavutil/imgutils.h>
+# include <libswscale/swscale.h>
 }
 
 using namespace libcamera;
@@ -103,8 +104,13 @@ using namespace cv;
 #endif
 
 #ifndef W_HLS_SEGMENT_DURATION_SECONDS
-// The length of a segment in seconds.
-# define W_HLS_SEGMENT_DURATION_SECONDS 5
+// The duration of a segment in seconds.
+# define W_HLS_SEGMENT_DURATION_SECONDS 2
+#endif
+
+#ifndef W_HLS_LIST_SIZE
+// The number of segments in the list.
+# define W_HLS_LIST_SIZE 15
 #endif
 
 #ifndef W_HLS_BASE_URL
@@ -257,7 +263,7 @@ static std::shared_ptr<BackgroundSubtractor> gBackgroundSubtractor = nullptr;
 
 // A place to store the foreground mask for the OpenCV stream,
 // globl as the requestCompleted() callback will populate it.
-static Mat gForegroundMask;
+static Mat gMaskForeground;
 
 // Linked list of video frames, FFmpeg-style.
 static std::list<AVFrame *> gAvFrameList;
@@ -541,10 +547,10 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         avFrame->width = width;
         avFrame->height = height;
         // Each line size is the width of a plane (Y, U or V) plus packing,
-        // though there is actually no packing in our case; the width of the
-        // plane is, for instance, 1920.  But in YUV420 only the Y plane is
-        // at full resolution, the U and V planes are at half resolution
-        // (e.g. 960), hence the divide by two for planes 1 and 2 below
+        // e.g. in the case of a 960 pixel wide frame the stride is 1024.
+        // But in YUV420 only the Y plane is at full resolution, the U and
+        // V planes are at half resolution (e.g. 512), hence the divide by
+        // two for planes 1 and 2 below
         avFrame->linesize[0] = yStride;
         avFrame->linesize[1] = yStride >> 1;
         avFrame->linesize[2] = yStride >> 1;
@@ -575,9 +581,9 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
             if (errorCode == 0) {
                 gAvFrameListMutex.lock();
                 errorCode = -ENOBUFS;
-                unsigned int listSize = gAvFrameList.size();
-                if (listSize < W_AVFRAME_LIST_MAX_ELEMENTS) {
-                    errorCode = listSize + 1;
+                unsigned int queueLength = gAvFrameList.size();
+                if (queueLength < W_AVFRAME_LIST_MAX_ELEMENTS) {
+                    errorCode = queueLength + 1;
                     try {
                         gAvFrameList.push_back(avFrame);
                         // Keep track of timing for debug purposes
@@ -661,7 +667,8 @@ static int videoOutput(AVCodecContext *codecContext, AVFormatContext *formatCont
             // That'll do pig, that'll do
             errorCode = 0;
         } else {
-            W_LOG_DEBUG("FFmpeg returned error %d.", errorCode);
+            W_LOG_DEBUG("FFmpeg returned error %d (might be because it needs"
+                        " more frames to form an output).", errorCode);
         }
         av_packet_free(&packet);
     } else {
@@ -754,35 +761,87 @@ static void requestCompleted(Request *request)
             uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
-#if 0
-            // From the comment on this post:
-            // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
-            // ...we can bring in just the Y portion of the frame as effectively
-            // a gray-scale image using CV_8UC1
-            Mat frameOpenCv(height, width, CV_8UC1, dmaBuffer, stride);
-            if (!frameOpenCv.empty()) {
-                // Set JPEG image quality for OpenCV file write
-                std::vector<int> imageCompression;
-                imageCompression.push_back(IMWRITE_JPEG_QUALITY);
-                imageCompression.push_back(40);
+            // We need these further down in order to convert the frame to
+            // other formats using sws_scale()
+            uint8_t *dmaBufferPlane[] = {dmaBuffer + buffer->planes()[0].offset,
+                                         dmaBuffer + buffer->planes()[1].offset,
+                                         dmaBuffer + buffer->planes()[2].offset};
+            // See avFrameQueuePush() for an explanation of this
+            int dmaBufferLineSize[] = {(int) stride, (int) (stride >> 1), (int) (stride >> 1)};
 
-                // Update the background model of the motion detection stream
-                //gBackgroundSubtractor->apply(frameOpenCv, gForegroundMask);
-                //std::string sequenceStr = std::to_string(metadata.sequence);
-                //std::string fileName = "lores" + sequenceStr + ".jpg";
-                //imwrite(fileName, frameOpenCv, imageCompression);
+            // Do the OpenCV things.  From the comment on this post:
+            // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
+            // ...we can bring in just the Y portion of the frame as, effectively,
+            // a gray-scale image using CV_8UC1
+            Mat frameOpenCvGray(height, width, CV_8UC1, dmaBuffer, stride);
+
+            // Update the background model: this will cause moving areas to
+            // appear as pixels with value 255, stationary areas to appear
+            // as pixels with value 0
+            gBackgroundSubtractor->apply(frameOpenCvGray, gMaskForeground);
+
+            // Apply thresholding to the foreground mask to remove shadows:
+            // anything below the first number becomes zero, anything above
+            // the first number becomes the second number
+            Mat maskThreshold(height, width, CV_8UC1);
+            threshold(gMaskForeground, maskThreshold, 25, 255, THRESH_BINARY);
+            // Perform erosions and dilations on the mask that will remove
+            // any small blobs
+            Mat element = getStructuringElement(MORPH_ELLIPSE, cv::Size(3, 3));
+            Mat maskDeblobbed(height, width, CV_8UC1);
+            morphologyEx(maskThreshold, maskDeblobbed, MORPH_OPEN, element);
+
+            // Find the edges of the moving areas, the ones with pixel value 255
+            // in the thresholded/deblobbed mask
+            std::vector<std::vector<cv::Point>> contours;
+            std::vector<Vec4i> hierarchy;
+            findContours(maskDeblobbed, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+            // Filter the edges to keep just the major ones
+            std::vector<std::vector<cv::Point>> largeContours;
+            for (auto contour: contours) {
+                if (contourArea(contour) > 500) {
+                    largeContours.push_back(contour);
+                }
             }
+
+            // Finally, draw what we have detected back onto the gray OpenCV frame
+            const Scalar white = Scalar(255, 255, 255);
+            int lineThickness = 5;
+#if 1
+            // Draw bounding boxes
+            for (auto contour: largeContours) {
+                Rect rect = boundingRect(contour);
+                rectangle(frameOpenCvGray, rect, white, lineThickness);
+            }
+#else
+            // Draw the wiggly edges
+            drawContours(frameOpenCvGray, largeContours, 0, white, lineThickness, LINE_8, hierarchy, 0);
 #endif
-            // Stream the frame via FFmpeg
-            unsigned int listSize = avFrameQueuePush(dmaBuffer, dmaBufferLength,
-                                                     metadata.sequence,
-                                                     width, height, stride);
+
+            // Convert the OpenCV frame back to YUV in the DMA buffer so
+            // that we can display it
+            SwsContext *swsContext = sws_getContext(width, height,
+                                                    AV_PIX_FMT_GRAY8,  // FFmpeg equivalent of CV_8UC1
+                                                    width, height,
+                                                    AV_PIX_FMT_YUV420P,
+                                                    0, nullptr, nullptr, nullptr);
+            sws_scale(swsContext,
+                      (uint8_t **) &frameOpenCvGray.data, (int *) &stride, 0, height,
+                      dmaBufferPlane, dmaBufferLineSize);
+            sws_freeContext(swsContext);
+
+           // Stream the camera frame via FFmpeg
+            unsigned int queueLength = avFrameQueuePush(dmaBuffer, dmaBufferLength,
+                                                        metadata.sequence,
+                                                        width, height, stride);
             if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
-                (listSize != gVideoStreamFrameListSize)) {
-                // Print the size of the backlog once a second
-                W_LOG_DEBUG("backlog %d frame(s)", listSize);
+                (queueLength != gVideoStreamFrameListSize)) {
+                // Print the size of the backlog once a second if it has changed
+                W_LOG_DEBUG("backlog %d frame(s)", queueLength);
+                gVideoStreamFrameListSize = queueLength;
             }
-            gVideoStreamFrameListSize = listSize;
+
             gCameraStreamFrameCount++;
 
             // Re-use the request
@@ -929,12 +988,17 @@ int main()
                     // as avformat_write_header() ignores unused dictionary entries.  So I've
                     // not included the "segment_*" options here.
                     // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
-                    // options that _do_ apply.
-                    if ((av_dict_set(&hlsOptions, "hls_time", W_STRINGIFY_QUOTED(W_HLS_SEGMENT_DURATION_SECONDS), 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
+                    // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
+                    // in the output.
+                    if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
                         (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
+                        (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
                         (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_flags", "split_by_time+delete_segments+discont_start+omit_endlist", 0) == 0)) {
+                        (av_dict_set_int(&hlsOptions, "hls_time", W_HLS_SEGMENT_DURATION_SECONDS, 0) == 0) &&
+                        (av_dict_set(&hlsOptions, "hls_flags", "split_by_time+" // hls_time won't be applied without this flag
+                                                               "delete_segments+" // Delete segments no longer in .m3u8 file
+                                                               "program_date_time+" // Not required but nice to have
+                                                               "round_durations", 0) == 0)) { // hls.js can lose sync without this
                         //  Set up the H264 video output stream over HLS
                         avStream = avformat_new_stream(avFormatContext, nullptr);
                         if (avStream) {
@@ -949,8 +1013,10 @@ int main()
                                     avCodecContext->height = cameraCfg->at(0).size.height;
                                     avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
                                     avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
-                                    // TODO whether this is correct or not: ensure a key frame every HLS segment
-                                    // avCodecContext->keyint_min = (W_HLS_SEGMENT_DURATION_SECONDS >> 1) * W_CAMERA_FRAME_RATE_HERTZ;
+                                    // Make sure we get a key frame every segment, otherwise if the
+                                    // HLS client has to seek backwards from the front and can't find
+                                    // a key frame it will fail to play the stream
+                                    avCodecContext->gop_size = W_CAMERA_FRAME_RATE_HERTZ;
                                     avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                                     avCodecContext->codec_id = AV_CODEC_ID_H264;
                                     avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
