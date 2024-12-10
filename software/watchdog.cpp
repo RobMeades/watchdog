@@ -55,7 +55,6 @@ extern "C" {
 # include <libavcodec/avcodec.h>
 # include <libavdevice/avdevice.h>
 # include <libavutil/imgutils.h>
-# include <libswscale/swscale.h>
 }
 
 using namespace libcamera;
@@ -761,18 +760,12 @@ static void requestCompleted(Request *request)
             uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
-            // We need these further down in order to convert the frame to
-            // other formats using sws_scale()
-            uint8_t *dmaBufferPlane[] = {dmaBuffer + buffer->planes()[0].offset,
-                                         dmaBuffer + buffer->planes()[1].offset,
-                                         dmaBuffer + buffer->planes()[2].offset};
-            // See avFrameQueuePush() for an explanation of this
-            int dmaBufferLineSize[] = {(int) stride, (int) (stride >> 1), (int) (stride >> 1)};
 
             // Do the OpenCV things.  From the comment on this post:
             // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
             // ...we can bring in just the Y portion of the frame as, effectively,
-            // a gray-scale image using CV_8UC1
+            // a gray-scale image using CV_8UC1, which can be processed
+            // quickly
             Mat frameOpenCvGray(height, width, CV_8UC1, dmaBuffer, stride);
 
             // Update the background model: this will cause moving areas to
@@ -805,9 +798,10 @@ static void requestCompleted(Request *request)
                 }
             }
 
-            // Finally, draw what we have detected back onto the gray OpenCV frame
+            // Draw what we have detected onto the gray OpenCV frame
             const Scalar white = Scalar(255, 255, 255);
             int lineThickness = 5;
+
 #if 1
             // Draw bounding boxes
             for (auto contour: largeContours) {
@@ -819,17 +813,10 @@ static void requestCompleted(Request *request)
             drawContours(frameOpenCvGray, largeContours, 0, white, lineThickness, LINE_8, hierarchy, 0);
 #endif
 
-            // Convert the OpenCV frame back to YUV in the DMA buffer so
-            // that we can display it
-            SwsContext *swsContext = sws_getContext(width, height,
-                                                    AV_PIX_FMT_GRAY8,  // FFmpeg equivalent of CV_8UC1
-                                                    width, height,
-                                                    AV_PIX_FMT_YUV420P,
-                                                    0, nullptr, nullptr, nullptr);
-            sws_scale(swsContext,
-                      (uint8_t **) &frameOpenCvGray.data, (int *) &stride, 0, height,
-                      dmaBufferPlane, dmaBufferLineSize);
-            sws_freeContext(swsContext);
+            // Now copy this gray OpenCV frame back over the top of the
+            // Y plane of the frame in the DMA buffer so that we can see
+            // it on the colour image.
+            memcpy(dmaBuffer, frameOpenCvGray.data, buffer->planes()[0].length);
 
            // Stream the camera frame via FFmpeg
             unsigned int queueLength = avFrameQueuePush(dmaBuffer, dmaBufferLength,
