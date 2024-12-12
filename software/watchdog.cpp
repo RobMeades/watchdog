@@ -1261,7 +1261,8 @@ static void requestCompleted(Request *request)
             // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
             // ...we can bring in just the Y portion of the frame as, effectively,
             // a gray-scale image using CV_8UC1, which can be processed
-            // quickly
+            // quickly. Note that OpenCV is operating in-place on the
+            // data in the buffer, it does not perform a copy
             Mat frameOpenCvGray(height, width, CV_8UC1, dmaBuffer, stride);
 
             // Update the background model: this will cause moving areas to
@@ -1328,11 +1329,6 @@ static void requestCompleted(Request *request)
                        W_DRAWING_SHADE_FOCUS_CIRCLE,
                        W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
             }
-
-            // Now copy this gray OpenCV frame back over the top of the
-            // Y plane of the frame in the DMA buffer so that we can see
-            // it on the colour image.
-            memcpy(dmaBuffer, frameOpenCvGray.data, buffer->planes()[0].length);
 
            // Stream the camera frame via FFmpeg
             unsigned int queueLength = avFrameQueuePush(dmaBuffer, dmaBufferLength,
