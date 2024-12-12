@@ -23,7 +23,7 @@
 <button class="btnDefault" id="play" hidden />
 </center>
 <center>
-<p>Video should load below: when it does, press above to play (5 seconds latency).</p>
+<p>Video should load below: when it does, press above to play (5 second latency).</p>
 </center>
 <center>
 <video width="950" height="540" id="video"></video>
@@ -50,8 +50,9 @@ function startPlaying() {
 if (Hls.isSupported()) {
     var config = {
       debug: true,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 3
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 5,
+      maxLiveSyncPlaybackRate: 2
     };
 
     var hls = new Hls(config);

@@ -4,6 +4,8 @@ project(
   version: '0.0.1'
 )
 
+add_global_arguments('-Wno-unused-function', language : 'cpp')
+
 watchdog = executable('watchdog',
                       'watchdog.cpp',
                       dependencies: [dependency('libcamera', required: true),

@@ -89,6 +89,138 @@ using namespace cv;
 #define W_STRINGIFY_QUOTED(x) W_STRINGIFY_LITERAL(x)
 
 /* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: CAMERA-RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_CAMERA_STREAM_ROLE
+// The libcamera StreamRole to use as a basis for the video stream.
+# define W_CAMERA_STREAM_ROLE StreamRole::VideoRecording
+#endif
+
+#ifndef W_CAMERA_STREAM_FORMAT
+// The pixel format for the video stream: must be YUV420 as that is
+// what the code is expecting.
+# define W_CAMERA_STREAM_FORMAT "YUV420"
+#endif
+
+#ifndef W_CAMERA_STREAM_WIDTH_PIXELS
+// Horizontal size of video stream in pixels.
+# define W_CAMERA_STREAM_WIDTH_PIXELS 950
+#endif
+
+#ifndef W_CAMERA_STREAM_HEIGHT_PIXELS
+// Vertical size of the video stream in pixels.
+# define W_CAMERA_STREAM_HEIGHT_PIXELS 540
+#endif
+
+// The area of the video stream.
+#define W_CAMERA_STREAM_AREA_PIXELS (W_CAMERA_STREAM_WIDTH_PIXELS * \
+                                     W_CAMERA_STREAM_HEIGHT_PIXELS)
+
+#ifndef W_CAMERA_FRAME_RATE_HERTZ
+// Frames per second.
+# define W_CAMERA_FRAME_RATE_HERTZ 25
+#endif
+
+/* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: VIEW/POINT RELATED
+ * -------------------------------------------------------------- */
+
+// View coordinates have their origin at the centre of the screen,
+// as opposed to OpenCV which has its origin top left.
+
+// Where the top of the screen lies.
+#define W_VIEW_TOP ((W_CAMERA_STREAM_HEIGHT_PIXELS - 1) / 2)
+
+// Where the bottom of the screen lies.
+#define W_VIEW_BOTTOM -W_VIEW_TOP
+
+// Where the right of the screen lies.
+#define W_VIEW_RIGHT ((W_CAMERA_STREAM_WIDTH_PIXELS - 1) / 2)
+
+// Where the left of the screen lies.
+#define W_VIEW_LEFT -W_VIEW_RIGHT
+
+// The view point origin in terms of an OpenCV frame.
+#define W_VIEW_ORIGIN_AS_FRAME cv::Point{(W_CAMERA_STREAM_WIDTH_PIXELS - 1) / 2, \
+                                         (W_CAMERA_STREAM_HEIGHT_PIXELS - 1) / 2}
+
+// The OpenCV frame point origin in terms of our view coordinates.
+#define W_FRAME_ORIGIN_AS_VIEW cv::Point{W_VIEW_LEFT, W_VIEW_TOP}
+
+// The x or y-coordinate of an invalid point.
+#define W_POINT_COORDINATE_INVALID -INT_MAX
+
+// An invalid view point.
+#define W_POINT_INVALID cv::Point{W_POINT_COORDINATE_INVALID, \
+                                  W_POINT_COORDINATE_INVALID}
+
+/* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: DRAWING RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_DRAWING_SHADE_WHITE
+// White, to be included in an OpenCV Scalar for an 8-bit gray-scale
+// image.
+# define W_DRAWING_SHADE_WHITE 255
+#endif
+
+#ifndef W_DRAWING_SHADE_LIGHT_GRAY
+// Light gray, to be included in an OpenCV Scalar for an 8-bit
+// gray-scale image.
+# define W_DRAWING_SHADE_LIGHT_GRAY 200
+#endif
+
+#ifndef W_DRAWING_SHADE_MID_GRAY
+// Mid gray, to be included in an OpenCV Scalar for an 8-bit
+// gray-scale image.
+# define W_DRAWING_SHADE_MID_GRAY 128
+#endif
+
+// The colour we draw around moving objects as an OpenCV Scalar.
+#define W_DRAWING_SHADE_MOVING_OBJECTS Scalar(W_DRAWING_SHADE_MID_GRAY, \
+                                              W_DRAWING_SHADE_MID_GRAY, \
+                                              W_DRAWING_SHADE_MID_GRAY)
+
+// The colour we draw the focus circle in as an OpenCV Scalar.
+#define W_DRAWING_SHADE_FOCUS_CIRCLE Scalar(W_DRAWING_SHADE_LIGHT_GRAY, \
+                                            W_DRAWING_SHADE_LIGHT_GRAY, \
+                                            W_DRAWING_SHADE_LIGHT_GRAY)
+
+#ifndef W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS
+// The line thickness we use when drawing rectangles around moving
+// objects: 5 is nice and chunky.
+# define W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS 5
+#endif
+
+#ifndef W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE
+// The line thickness for the focus circle; should be less chunky than
+// the moving objects so as not to obscure anything.
+# define W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE 1
+#endif
+
+#ifndef W_DRAWING_RADIUS_FOCUS_CIRCLE
+// The radius of the focus circle when we draw it on the screen.
+# define W_DRAWING_RADIUS_FOCUS_CIRCLE  150
+#endif
+
+/* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: VIDEO-CODING RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
+// The maximum number of elements in the video frame queue.
+# define W_AVFRAME_LIST_MAX_ELEMENTS 1000
+#endif
+
+// The stream time-base as an AVRational (integer pair, numerator
+// then denominator) that FFmpeg understands.
+#define W_VIDEO_STREAM_TIME_BASE_AVRATIONAL {1, W_CAMERA_FRAME_RATE_HERTZ}
+
+// The video stream frame rate in units of the video stream time-base.
+#define W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL {W_CAMERA_FRAME_RATE_HERTZ, 1}
+
+/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: HLS VIDEO OUTPUT SETTINGS
  * -------------------------------------------------------------- */
 
@@ -118,50 +250,13 @@ using namespace cv;
 #endif
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: CAMERA-RELATED
+ * COMPILE-TIME MACROS: CONTROL RELATED
  * -------------------------------------------------------------- */
 
-#ifndef W_CAMERA_STREAM_ROLE
-// The libcamera StreamRole to use as a basis for the video stream.
-# define W_CAMERA_STREAM_ROLE StreamRole::VideoRecording
+#ifndef W_CONTROL_MSG_LIST_MAX_ELEMENTS
+// The maximum number of elements in the control message queue.
+# define W_CONTROL_MSG_LIST_MAX_ELEMENTS 1000
 #endif
-
-#ifndef W_CAMERA_STREAM_FORMAT
-// The pixel format for the video stream: must be YUV420 as that is
-// what the code is expecting.
-# define W_CAMERA_STREAM_FORMAT "YUV420"
-#endif
-
-#ifndef W_CAMERA_STREAM_WIDTH_PIXELS
-// Horizontal size of video stream in pixels.
-# define W_CAMERA_STREAM_WIDTH_PIXELS 950
-#endif
-
-#ifndef W_CAMERA_STREAM_HEIGHT_PIXELS
-// Vertical size of the video stream in pixels.
-# define W_CAMERA_STREAM_HEIGHT_PIXELS 540
-#endif
-
-#ifndef W_CAMERA_FRAME_RATE_HERTZ
-// Frames per second.
-# define W_CAMERA_FRAME_RATE_HERTZ 25
-#endif
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: VIDEO-CODING RELATED
- * -------------------------------------------------------------- */
-
-#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
-// The maximum number of elements in the video frame queue.
-# define W_AVFRAME_LIST_MAX_ELEMENTS 1000
-#endif
-
-// The stream time-base as an AVRational (integer pair, numerator
-// then denominator) that FFmpeg understands.
-#define W_VIDEO_STREAM_TIME_BASE_AVRATIONAL {1, W_CAMERA_FRAME_RATE_HERTZ}
-
-// The video stream frame rate in units of the video stream time-base.
-#define W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL {W_CAMERA_FRAME_RATE_HERTZ, 1}
 
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LOGGING
@@ -209,7 +304,7 @@ using namespace cv;
 #define W_LOG_DEBUG_END logEnd(W_LOG_TYPE_DEBUG)
 
 /* ----------------------------------------------------------------
- * TYPES
+ * TYPES: LOGGING RELATED
  * -------------------------------------------------------------- */
 
 // The types of log print.  Values are important as they are
@@ -232,6 +327,61 @@ typedef struct {
     std::chrono::duration<double> largest;
     std::chrono::duration<double> average;
 } wMonitorTiming_t;
+
+/* ----------------------------------------------------------------
+ * TYPES: IMAGE RELATED
+ * -------------------------------------------------------------- */
+
+// A point with mutex protection, used for the focus point which
+// we need to write from the control thread and read from the
+// requestCompleted() callback. Have to prefix Point with the
+// namespace of cv as there is also a Point in libcamera.
+// Aside from static initialisation, pointProtectedSet() and
+// pointProtectedGet() should always be used to access a
+// variable of this type.
+typedef struct {
+    std::mutex mutex;
+    cv::Point point;
+} wPointProtected_t;
+
+// Hold information on a rectangle, likely one bounding an
+// object we think is moving.
+typedef struct {
+    int areaPixels;
+    cv::Point centreFrame; // The centre in frame coordinates
+} wRectInfo_t;
+
+/* ----------------------------------------------------------------
+ * TYPES: MESSAGING RELATED
+ * -------------------------------------------------------------- */
+
+// Message types that can be passed to the control thread, must
+// match the entries in the union of message bodies and the
+// mapping to message body sizes in gMsgBodySize[].
+typedef enum {
+    W_MSG_TYPE_NONE,
+    W_MSG_TYPE_FOCUS_CHANGE               // wMsgBodyFocusChange_t
+} wMsgType_t;
+
+// The message body structure corresponding to W_MSG_TYPE_FOCUS_CHANGE.
+typedef struct {
+    cv::Point pointView;
+    int areaPixels;
+} wMsgBodyFocusChange_t;
+
+// Union of message bodies, used in wMsgContainer_t. If you add
+// a member here you must add a type for it in wMsgType_t and an
+// entry for it in gMsgBodySize[].
+typedef union {
+    int unused;                           // W_MSG_TYPE_NONE
+    wMsgBodyFocusChange_t focusChange;    // W_MSG_TYPE_FOCUS_CHANGE
+} wMsgBody_t;
+
+// Structure to pass information to the control thread.
+typedef struct {
+    wMsgType_t type;
+    wMsgBody_t *body;
+} wMsgContainer_t;
 
 /* ----------------------------------------------------------------
  * VARIABLES
@@ -264,20 +414,31 @@ static std::shared_ptr<BackgroundSubtractor> gBackgroundSubtractor = nullptr;
 // globl as the requestCompleted() callback will populate it.
 static Mat gMaskForeground;
 
+// The place that we should be looking, in view coordinates;
+// have to prefix Point with the namespace of cv as there is
+// also a Point in libcamera.
+// Note: use pointProtectedSet() to set this variable and
+// pointProtectedGet() to read it.
+static wPointProtected_t gFocusPointView = {.point = {0, 0}};
+
 // Linked list of video frames, FFmpeg-style.
 static std::list<AVFrame *> gAvFrameList;
 
 // Mutex to protect the linked list of FFmpeg-format video frames.
 static std::mutex gAvFrameListMutex;
 
-// Linked list of images, OpenCV-style.
-static std::list<Mat *> gMatList;
+// Linked list of messages for the control thread.
+static std::list<wMsgContainer_t> gMsgContainerList;
 
-// Mutex to protect the linked list of OpenCV-format images.
-static std::mutex gMatListMutex;
+// Mutex to protect the linked list of messages.
+static std::mutex gMsgContainerListMutex;
 
-// Flag to track that we're running (so that the video encode thread
-// knows when to exit).
+// Array of message body sizes versus message body.
+static unsigned int gMsgBodySize[] = {0,  // Not used
+                                      sizeof(wMsgBodyFocusChange_t)};
+
+// Flag to track that we're running (so that the threads know when
+// to exit).
 static bool gRunning = false;
 
 // Array of log prefixes for the different log types.
@@ -726,12 +887,347 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: VIEW RELATED
+ * -------------------------------------------------------------- */
+
+// Determine whether a point is valid or not
+static bool pointIsValid(const cv::Point *point)
+{
+    return point && (*point != W_POINT_INVALID);
+}
+
+// Convert a point from our view coordinates to those of an OpenCV
+// frame, limiting at the known edges of the frame.
+static int viewToFrameAndLimit(const cv::Point *pointView, cv::Point *pointFrame)
+{
+    int errorCode = -EINVAL;
+
+    if (pointFrame && pointIsValid(pointView)) {
+        errorCode = 0;
+        // OpenCV has it is origin top-left, x increases in the same
+        // direction as us, y the opposite (OpenCV increases going
+        // down, we decrease going down)
+        pointFrame->x = W_VIEW_ORIGIN_AS_FRAME.x + pointView->x;
+        pointFrame->y = -(pointView->y - W_VIEW_ORIGIN_AS_FRAME.y);
+
+        if (pointFrame->x < 0) {
+            W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
+                       " negative (%d), limiting to zero.",
+                       pointFrame->x);
+            pointFrame->x = 0;
+        } else if (pointFrame->x >= W_CAMERA_STREAM_WIDTH_PIXELS) {
+            W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
+                       " too large (%d), limiting to %d.",
+                       pointFrame->x, W_CAMERA_STREAM_WIDTH_PIXELS - 1);
+            pointFrame->x = W_CAMERA_STREAM_WIDTH_PIXELS - 1;
+        }
+        if (pointFrame->y < 0) {
+            W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
+                       " negative (%d), limiting to zero.",
+                       pointFrame->y);
+            pointFrame->y = 0;
+        } else if (pointFrame->y >= W_CAMERA_STREAM_HEIGHT_PIXELS) {
+            W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
+                       " too large (%d), limiting to %d.",
+                       pointFrame->y, W_CAMERA_STREAM_HEIGHT_PIXELS - 1);
+            pointFrame->y = W_CAMERA_STREAM_HEIGHT_PIXELS - 1;
+        }
+    }
+
+    return errorCode;
+}
+
+// Convert a point from those of an OpenCV frame to our view
+// coordinates, limiting at the edges of the view.
+static int frameToViewAndLimit(const cv::Point *pointFrame, cv::Point *pointView)
+{
+    int errorCode = -EINVAL;
+
+    if (pointView && pointIsValid(pointFrame)) {
+        errorCode = 0;
+       // Our origin is in the centre
+        pointView->x = W_FRAME_ORIGIN_AS_VIEW.x + pointFrame->x;
+        pointView->y = W_FRAME_ORIGIN_AS_VIEW.y - pointFrame->y;
+
+        if (pointView->x < W_VIEW_LEFT) {
+            W_LOG_WARN("frameToViewAndLimit() x value of view is"
+                       " too small (%d), limiting to %d.",
+                       pointView->x, W_VIEW_LEFT);
+            pointView->x = W_VIEW_LEFT;
+        } else if (pointView->x > W_VIEW_RIGHT) {
+            W_LOG_WARN("frameToViewAndLimit() x value of view is"
+                       " too large (%d), limiting to %d.",
+                       pointView->x, W_VIEW_RIGHT);
+            pointView->x = W_VIEW_RIGHT;
+        }
+        if (pointView->y < W_VIEW_BOTTOM) {
+            W_LOG_WARN("frameToViewAndLimit() y value of view is"
+                       " too small (%d), limiting to %d.",
+                       pointView->y, W_VIEW_BOTTOM);
+            pointView->y = W_VIEW_BOTTOM;
+        } else if (pointView->y > W_VIEW_TOP) {
+            W_LOG_WARN("frameToViewAndLimit() y value of view is"
+                       " too large (%d), limiting to %d.",
+                       pointView->y, W_VIEW_TOP);
+            pointView->y = W_VIEW_TOP;
+        }
+    }
+
+    return errorCode;
+}
+
+// Get the centre and area of a rectangle, limiting sensibly.
+static bool rectGetInfoAndLimit(const Rect *rect, wRectInfo_t *rectInfo)
+{
+    bool isLimited = false;
+
+    if (rect && rectInfo) {
+        rectInfo->areaPixels = rect->width * rect->height;
+        rectInfo->centreFrame = {rect->x + (rect->width >> 1),
+                                 rect->y + (rect->height >> 1)};
+        if (rectInfo->areaPixels > W_CAMERA_STREAM_AREA_PIXELS) {
+            W_LOG_WARN("rectGetInfoAndLimit() area is"
+                       " too large (%d), limiting to %d.",
+                       rectInfo->areaPixels, W_CAMERA_STREAM_AREA_PIXELS);
+            rectInfo->areaPixels = W_CAMERA_STREAM_AREA_PIXELS;
+            isLimited = true;
+        }
+        if (rectInfo->centreFrame.x >= W_CAMERA_STREAM_WIDTH_PIXELS) {
+            W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
+                       " centre is too large (%d), limiting to %d.",
+                       rectInfo->centreFrame.x, W_CAMERA_STREAM_WIDTH_PIXELS - 1);
+            rectInfo->centreFrame.x = W_CAMERA_STREAM_WIDTH_PIXELS - 1;
+            isLimited = true;
+        } else if (rectInfo->centreFrame.x < 0) {
+            W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
+                       " is negative (%d), limiting to zero.",
+                       rectInfo->centreFrame.x);
+            rectInfo->centreFrame.x = 0;
+            isLimited = true;
+        }
+        if (rectInfo->centreFrame.y >= W_CAMERA_STREAM_HEIGHT_PIXELS) {
+            W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
+                       " centre is too large (%d), limiting to %d.",
+                       rectInfo->centreFrame.y, W_CAMERA_STREAM_HEIGHT_PIXELS - 1);
+            rectInfo->centreFrame.y = W_CAMERA_STREAM_HEIGHT_PIXELS - 1;
+            isLimited = true;
+        } else if (rectInfo->centreFrame.y < 0) {
+            W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
+                       " is negative (%d), limiting to zero.",
+                       rectInfo->centreFrame.y);
+            rectInfo->centreFrame.y = 0;
+            isLimited = true;
+        }
+    }
+
+    return !isLimited;
+}
+
+// Sorting function for findFocusFrame().
+static bool compareRectInfo(wRectInfo_t rectInfoA,
+                            wRectInfo_t rectInfoB) {
+    return rectInfoA.areaPixels >= rectInfoB.areaPixels;
+}
+
+// Find where the focus should be, in frame coordinates,
+// given a set of contours in frame coordinates.  The return
+// value is the total area of all rectangles in pixels and,
+// since rectangles can overlap, it may be large than the
+// area of the frame; think of it as a kind of "magnitude
+// of activity" measurement, rather than a literal area.
+static int findFocusFrame(const std::vector<std::vector<cv::Point>> contours,
+                          cv::Point *pointFrame)
+{
+    int areaPixels = 0;
+    std::vector<wRectInfo_t> rectInfos;
+
+    if (pointFrame) {
+        *pointFrame = W_POINT_INVALID;
+        if (!contours.empty()) {
+            // Create a vector of the size and centre of the rectangles that
+            // bound each contour and sort them in descending order of size
+            for (auto contour: contours) {
+                Rect rect = boundingRect(contour);
+                wRectInfo_t rectInfo;
+                rectGetInfoAndLimit(&rect, &rectInfo);
+                rectInfos.push_back(rectInfo);
+            }
+            sort(rectInfos.begin(), rectInfos.end(), compareRectInfo);
+
+            // Go through the list; the centre of the first (therefore largest)
+            // rectangle is assumed to be the centre of our focus, then each
+            // rectangle after that is allowed to influence the centre in
+            // proportion to its size (relative to the first one)
+            cv::Point pointReferenceFrame = rectInfos.front().centreFrame;
+            int areaPixelsReference = rectInfos.front().areaPixels;
+            areaPixels = areaPixelsReference;
+            *pointFrame = pointReferenceFrame;
+            for (auto rectInfo = rectInfos.begin() + 1; rectInfo != rectInfos.end(); rectInfo++) {
+                *pointFrame += ((rectInfo->centreFrame - pointReferenceFrame) * rectInfo->areaPixels) / areaPixelsReference;
+                areaPixels += rectInfo->areaPixels;
+            }
+        }
+    }
+
+    return areaPixels;
+}
+
+// Set a variable of type wPointProtected_t.
+static int pointProtectedSet(wPointProtected_t *pointProtected,
+                             cv::Point *point)
+{
+    int errorCode = -EINVAL;
+    
+    if (pointProtected && point) {
+        pointProtected->mutex.lock();
+        pointProtected->point = *point;
+        errorCode = 0;
+        pointProtected->mutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Get a variable of type wPointProtected_t.
+static cv::Point pointProtectedGet(wPointProtected_t *pointProtected)
+{
+    cv::Point point = W_POINT_INVALID;
+
+    if (pointProtected) {
+        pointProtected->mutex.lock();
+        point = pointProtected->point;
+        pointProtected->mutex.unlock();
+    }
+
+    return point;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: CONTROL THREAD RELATED
+ * -------------------------------------------------------------- */
+
+// Push a message onto the control queue.  body is copied so
+// it can be passed in any which way (and it is up to the
+// called of controlQueueTryPop() to free any message body).
+// The addresses of any members of wMsgBody_t can be passed
+// in, cast to wMsgBody_t *.
+static int controlQueuePush(wMsgType_t type, wMsgBody_t *body)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_ARRAY_COUNT(gMsgBodySize)) {
+        errorCode = 0;
+        wMsgBody_t *bodyCopy = nullptr;
+        if (gMsgBodySize[type] > 0) {
+            errorCode = -ENOMEM;
+            bodyCopy = (wMsgBody_t *) malloc(gMsgBodySize[type]);
+            if (bodyCopy) {
+                errorCode = 0;
+                memcpy(bodyCopy, body, gMsgBodySize[type]);
+            }
+        }
+        if (errorCode == 0) {
+            wMsgContainer_t container = {.type = type,
+                                         .body = bodyCopy};
+            gMsgContainerListMutex.lock();
+            errorCode = -ENOBUFS;
+            unsigned int queueLength = gMsgContainerList.size();
+            if (queueLength < W_CONTROL_MSG_LIST_MAX_ELEMENTS) {
+                errorCode = queueLength + 1;
+                try {
+                    gMsgContainerList.push_back(container);
+                }
+                catch(int x) {
+                    errorCode = -x;
+                }
+            }
+            gMsgContainerListMutex.unlock();
+        }
+
+        if (errorCode < 0) {
+            if (bodyCopy) {
+                free(bodyCopy);
+            }
+            W_LOG_ERROR("unable to push message type %d, body length %d,"
+                        " to control queue (%d)!",
+                        type, gMsgBodySize[type], errorCode);
+        }
+    }
+
+    return errorCode;
+}
+
+// Try to pop a message off the control queue.  If a message
+// is returned the caller must call free() on the message body.
+static int controlQueueTryPop(wMsgContainer_t *msg)
+{
+    int errorCode = -EAGAIN;
+
+    if (msg && gMsgContainerListMutex.try_lock()) {
+        if (!gMsgContainerList.empty()) {
+            *msg = gMsgContainerList.front();
+            gMsgContainerList.pop_front();
+            errorCode = 0;
+        }
+        gMsgContainerListMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Empty the control queue.
+static void controlQueueClear()
+{
+    gMsgContainerListMutex.lock();
+    gMsgContainerList.clear();
+    gMsgContainerListMutex.unlock();
+}
+
+// Message handler for wMsgBodyFocusChange_t.
+static void controlMsgHandlerFocusChange(wMsgBodyFocusChange_t *focusChange)
+{
+    W_LOG_DEBUG("MSG_FOCUS_CHANGE: x %d, y %d, area %d.",
+                focusChange->pointView.x, focusChange->pointView.y,
+                focusChange->areaPixels);
+    pointProtectedSet(&gFocusPointView, &(focusChange->pointView));
+}
+
+// Control task/thread/thing.
+static void controlLoop()
+{
+    wMsgContainer_t msg;
+
+    while (gRunning) {
+        if (controlQueueTryPop(&msg) == 0) {
+            switch (msg.type) {
+                case W_MSG_TYPE_NONE:
+                    break;
+                case W_MSG_TYPE_FOCUS_CHANGE:
+                    controlMsgHandlerFocusChange(&(msg.body->focusChange));
+                    break;
+                default:
+                    W_LOG_WARN("controlLoop() received unknown"
+                               " message type (%d)", msg.type);
+                    break;
+            }
+            // Free the message body now that we're done
+            free(msg.body);
+        }
+
+        // Let others in
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+/* ----------------------------------------------------------------
  * STATIC FUNCTIONS: CALLBACKS
  * -------------------------------------------------------------- */
 
 // Handle a requestCompleted event from a camera.
 static void requestCompleted(Request *request)
 {
+    cv::Point point;
+
     if (request->status() != Request::RequestCancelled) {
 
        const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
@@ -788,7 +1284,8 @@ static void requestCompleted(Request *request)
             // in the thresholded/deblobbed mask
             std::vector<std::vector<cv::Point>> contours;
             std::vector<Vec4i> hierarchy;
-            findContours(maskDeblobbed, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+            findContours(maskDeblobbed, contours, hierarchy,
+                         RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
             // Filter the edges to keep just the major ones
             std::vector<std::vector<cv::Point>> largeContours;
@@ -798,20 +1295,39 @@ static void requestCompleted(Request *request)
                 }
             }
 
-            // Draw what we have detected onto the gray OpenCV frame
-            const Scalar white = Scalar(255, 255, 255);
-            int lineThickness = 5;
-
+            // Find the place we should focus on the frame,
+            // if there is one
+            int areaPixels = findFocusFrame(largeContours, &point);
+            if ((areaPixels > 0) && (frameToViewAndLimit(&point, &point) == 0)) {
+                // Push the new focus to the control loop
+                wMsgBodyFocusChange_t focusChange = {.pointView = point,
+                                                     .areaPixels = areaPixels};
+                controlQueuePush(W_MSG_TYPE_FOCUS_CHANGE, (wMsgBody_t *) &focusChange);
+            }
 #if 1
             // Draw bounding boxes
             for (auto contour: largeContours) {
                 Rect rect = boundingRect(contour);
-                rectangle(frameOpenCvGray, rect, white, lineThickness);
+                rectangle(frameOpenCvGray, rect,
+                          W_DRAWING_SHADE_MOVING_OBJECTS,
+                          W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS);
             }
 #else
             // Draw the wiggly edges
-            drawContours(frameOpenCvGray, largeContours, 0, white, lineThickness, LINE_8, hierarchy, 0);
+            drawContours(frameOpenCvGray, largeContours, 0,
+                         W_DRAWING_SHADE_MOVING_OBJECTS,
+                         W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS,
+                         LINE_8, hierarchy, 0);
 #endif
+
+            // Draw the current focus onto the gray OpenCV frame
+            point = pointProtectedGet(&gFocusPointView);
+            if (viewToFrameAndLimit(&point, &point) == 0) {
+                circle(frameOpenCvGray, point,
+                       W_DRAWING_RADIUS_FOCUS_CIRCLE,
+                       W_DRAWING_SHADE_FOCUS_CIRCLE,
+                       W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
+            }
 
             // Now copy this gray OpenCV frame back over the top of the
             // Y plane of the frame in the DMA buffer so that we can see
@@ -846,6 +1362,7 @@ static void requestCompleted(Request *request)
 int main()
 {
     int errorCode = -ENXIO;
+    std::thread controlThread;
     std::thread videoEncodeThread;
     AVFormatContext *avFormatContext = nullptr;
     AVCodecContext *avCodecContext = nullptr;
@@ -977,15 +1494,16 @@ int main()
                     // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
                     // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
                     // in the output.
+                    // Note: we don't apply hls_time, to set the segment size, here; instead we use
+                    // that to set the "gop_size" of the codec, which is the distance between key-frames,
+                    // and then the HLS muxer picks that up and uses it as the segment size, which is much
+                    // better, since it ensures a key-frame at the start of every segment.
                     if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
                         (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
                         (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
                         (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
-                        (av_dict_set_int(&hlsOptions, "hls_time", W_HLS_SEGMENT_DURATION_SECONDS, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_flags", "split_by_time+" // hls_time won't be applied without this flag
-                                                               "delete_segments+" // Delete segments no longer in .m3u8 file
-                                                               "program_date_time+" // Not required but nice to have
-                                                               "round_durations", 0) == 0)) { // hls.js can lose sync without this
+                        (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
+                                                               "program_date_time", 0) == 0)) { // Not required but nice to have
                         //  Set up the H264 video output stream over HLS
                         avStream = avformat_new_stream(avFormatContext, nullptr);
                         if (avStream) {
@@ -1002,8 +1520,16 @@ int main()
                                     avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
                                     // Make sure we get a key frame every segment, otherwise if the
                                     // HLS client has to seek backwards from the front and can't find
-                                    // a key frame it will fail to play the stream
-                                    avCodecContext->gop_size = W_CAMERA_FRAME_RATE_HERTZ;
+                                    // a key frame it may fail to play the stream
+                                    avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
+                                    // From the discussion here:
+                                    // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
+                                    // ... the intended effect of setting keyint_min to twice
+                                    // the GOP size is that key-frames can still be inserted
+                                    // at a scene-cut but they don't become the kind of key-frame
+                                    // that would cause a segment to end early; this keeps the rate
+                                    // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
+                                    avCodecContext->keyint_min = avCodecContext->gop_size * 2;
                                     avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                                     avCodecContext->codec_id = AV_CODEC_ID_H264;
                                     avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
@@ -1012,14 +1538,20 @@ int main()
                                     // will emit a warning that frames having zero duration will mean
                                     // the HLS segment timing is orf
                                     avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
-                                    if ((avcodec_open2(avCodecContext, videoOutputCodec, nullptr) == 0) &&
+                                    AVDictionary *codecOptions = nullptr; // Not currently used
+                                    if ((avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
                                         (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
                                         (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
-                                        // avformat_write_header() modifies hlsOptions to be
-                                        // any options that weren't found
+                                        // avformat_write_header() and avcodec_open2() modify
+                                        // the options passed to them to be any options that weren't
+                                        // found
                                         const AVDictionaryEntry *entry = nullptr;
                                         while ((entry = av_dict_iterate(hlsOptions, entry))) {
-                                            W_LOG_WARN("HLS key \"%s\" value \"%s\" not found.",
+                                            W_LOG_WARN("HLS option \"%s\" value \"%s\" not found.",
+                                                       entry->key, entry->value);
+                                        }
+                                        while ((entry = av_dict_iterate(codecOptions, entry))) {
+                                            W_LOG_WARN("Codec option \"%s\" value \"%s\" not found.",
                                                        entry->key, entry->value);
                                         }
                                         // Don't see why this should be necessary (everything in here
@@ -1067,14 +1599,18 @@ int main()
                         // everything else happens in the callback function
                         gCamera->requestCompleted.connect(requestCompleted);
 
-                        // Kick off a thread to encode video frames
                         gRunning = true;
+
+                        // Kick off a control thread
+                        controlThread = std::thread(controlLoop);
+
+                        // Kick off a thread to encode video frames
                         videoEncodeThread = std::thread{videoEncodeLoop,
                                                         avCodecContext,
                                                         avFormatContext}; 
 
                         // Remove any old files for a clean start
-                        remove(W_HLS_PLAYLIST_FILE_NAME);
+                        system("rm " W_HLS_PLAYLIST_FILE_NAME);
                         system("rm " W_HLS_FILE_NAME_ROOT "*.ts"); 
 
                         W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
@@ -1118,6 +1654,11 @@ int main()
         gCamera->release();
         gCamera.reset();
         avFrameQueueClear();
+        // Stop the control thread
+        if (controlThread.joinable()) {
+           controlThread.join();
+        }
+        controlQueueClear();
         W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                    " %d encoded video frame(s)).",
                    gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
