@@ -205,6 +205,17 @@ using namespace cv;
 #endif
 
 /* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: IMAGE PROCESSING RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS
+// The number of elements in the video processing queue: not so
+// many of these as the buffers are usually quite large, we just
+// need to keep up.
+# define W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS 10
+#endif
+
+/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: VIDEO-CODING RELATED
  * -------------------------------------------------------------- */
 
@@ -332,6 +343,16 @@ typedef struct {
  * TYPES: IMAGE RELATED
  * -------------------------------------------------------------- */
 
+// A buffer of data from the camera.
+typedef struct {
+    unsigned int width;
+    unsigned int height;
+    unsigned int stride;
+    unsigned int sequence;
+    uint8_t *data;
+    unsigned int length;
+} wBuffer_t;
+
 // A point with mutex protection, used for the focus point which
 // we need to write from the control thread and read from the
 // requestCompleted() callback. Have to prefix Point with the
@@ -383,6 +404,7 @@ typedef struct {
     wMsgBody_t *body;
 } wMsgContainer_t;
 
+
 /* ----------------------------------------------------------------
  * VARIABLES
  * -------------------------------------------------------------- */
@@ -403,7 +425,11 @@ static unsigned int gVideoStreamFrameOutputCount = 0;
 // debug purposes.
 static unsigned int gVideoStreamFrameListSize = 0;
 
-// Keep track of timing on the video stream.
+// Remember the size of the image processing list, purely for
+// debug purposes.
+static unsigned int gImageProcessingListSize = 0;
+
+// Keep track of timing on the camera stream.
 static wMonitorTiming_t gCameraStreamMonitorTiming;
 
 // Pointer to the OpenCV background subtractor: global as the
@@ -420,6 +446,12 @@ static Mat gMaskForeground;
 // Note: use pointProtectedSet() to set this variable and
 // pointProtectedGet() to read it.
 static wPointProtected_t gFocusPointView = {.point = {0, 0}};
+
+// Linked list of image buffers.
+static std::list<wBuffer_t> gImageProcessingList;
+
+// Mutex to protect the linked list of image buffers.
+static std::mutex gImageProcessingListMutex;
 
 // Linked list of video frames, FFmpeg-style.
 static std::list<AVFrame *> gAvFrameList;
@@ -599,7 +631,7 @@ static void cookieDecode(uint64_t cookie, unsigned int *width,
     }
 }
 
-// Configure a stream from the camear.
+// Configure a stream from the camera.
 static bool cameraStreamConfigure(StreamConfiguration &streamCfg,
                                   std::string pixelFormatStr,
                                   unsigned int widthPixels,
@@ -693,7 +725,9 @@ static void avFrameFreeCallback(void *opaque, uint8_t *data)
     // W_LOG_DEBUG("video codec is done with frame %llu.", (uint64_t) opaque);
 }
 
-// Push a frame of video data onto the queue.
+// Push a frame of video data onto the queue; data _must_ be a
+// malloc()ed buffer and this function _will_ free that malloc()ed
+// data, even in a fail case.
 static int avFrameQueuePush(uint8_t *data, unsigned int length,
                             unsigned int sequenceNumber,
                             unsigned int width, unsigned int height,
@@ -717,55 +751,44 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         avFrame->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
         avFrame->pts = sequenceNumber;
         avFrame->duration = 1;
-        uint8_t *copy = (uint8_t *) malloc(length);
-        if (copy) {
-            memcpy(copy, data, length);
-            avFrame->buf[0] = av_buffer_create(copy, length,
-                                               avFrameFreeCallback,
-                                               (void *) (uint64_t) sequenceNumber,
-                                               0);
-            if (avFrame->buf[0]) {
-                errorCode = 0;
-            }
-            if (errorCode == 0) {
-                errorCode =  av_image_fill_pointers(avFrame->data,
-                                                    AV_PIX_FMT_YUV420P,
-                                                    avFrame->height,
-                                                    avFrame->buf[0]->data,
-                                                    avFrame->linesize);
-            }
-            if (errorCode >= 0) {
-                errorCode = av_frame_make_writable(avFrame);
-            }
+        avFrame->buf[0] = av_buffer_create(data, length,
+                                           avFrameFreeCallback,
+                                           (void *) (uint64_t) sequenceNumber,
+                                           0);
+        if (avFrame->buf[0]) {
+            errorCode = 0;
+        }
+        if (errorCode == 0) {
+            errorCode =  av_image_fill_pointers(avFrame->data,
+                                                AV_PIX_FMT_YUV420P,
+                                                avFrame->height,
+                                                avFrame->buf[0]->data,
+                                                avFrame->linesize);
+        }
+        if (errorCode >= 0) {
+            errorCode = av_frame_make_writable(avFrame);
+        }
 
-            if (errorCode == 0) {
-                gAvFrameListMutex.lock();
-                errorCode = -ENOBUFS;
-                unsigned int queueLength = gAvFrameList.size();
-                if (queueLength < W_AVFRAME_LIST_MAX_ELEMENTS) {
-                    errorCode = queueLength + 1;
-                    try {
-                        gAvFrameList.push_back(avFrame);
-                        // Keep track of timing for debug purposes
-                        monitorTimingUpdate(&gCameraStreamMonitorTiming);
-                        gVideoStreamFrameInputCount++;
-                    }
-                    catch(int x) {
-                        errorCode = -x;
-                    }
+        if (errorCode == 0) {
+            gAvFrameListMutex.lock();
+            errorCode = -ENOBUFS;
+            unsigned int queueLength = gAvFrameList.size();
+            if (queueLength < W_AVFRAME_LIST_MAX_ELEMENTS) {
+                errorCode = queueLength + 1;
+                try {
+                    gAvFrameList.push_back(avFrame);
+                    gVideoStreamFrameInputCount++;
                 }
-                gAvFrameListMutex.unlock();
+                catch(int x) {
+                    errorCode = -x;
+                }
             }
+            gAvFrameListMutex.unlock();
         }
 
         if (errorCode < 0) {
-            if (!avFrame->buf[0]) {
-                // If we never employed the copy
-                // need to free it explicitly.
-                free(copy);
-            }
-            // This should cause avFrameFreeCallback() to be
-            // called and free the copy that way
+            // This will cause avFrameFreeCallback() to be
+            // called and free the data
             av_frame_free(&avFrame);
             W_LOG_ERROR("unable to push frame %d to video queue (%d)!",
                         sequenceNumber, errorCode);
@@ -795,8 +818,12 @@ static int avFrameQueueTryPop(AVFrame **avFrame)
 // Empty the video frame queue.
 static void avFrameQueueClear()
 {
+    AVFrame *avFrame = nullptr;
+
     gAvFrameListMutex.lock();
-    gAvFrameList.clear();
+    while (avFrameQueueTryPop(&avFrame) == 0) {
+        av_frame_free(&avFrame);
+    }
     gAvFrameListMutex.unlock();
 }
 
@@ -887,7 +914,7 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: VIEW RELATED
+ * STATIC FUNCTIONS: VIEW (I.E. THE WATCHDOG'S VIEW) RELATED
  * -------------------------------------------------------------- */
 
 // Determine whether a point is valid or not
@@ -1108,7 +1135,7 @@ static cv::Point pointProtectedGet(wPointProtected_t *pointProtected)
 
 // Push a message onto the control queue.  body is copied so
 // it can be passed in any which way (and it is up to the
-// called of controlQueueTryPop() to free any message body).
+// caller of controlQueueTryPop() to free any message body).
 // The addresses of any members of wMsgBody_t can be passed
 // in, cast to wMsgBody_t *.
 static int controlQueuePush(wMsgType_t type, wMsgBody_t *body)
@@ -1158,7 +1185,7 @@ static int controlQueuePush(wMsgType_t type, wMsgBody_t *body)
 }
 
 // Try to pop a message off the control queue.  If a message
-// is returned the caller must call free() on the message body.
+// is returned the caller must call free() on msg->body.
 static int controlQueueTryPop(wMsgContainer_t *msg)
 {
     int errorCode = -EAGAIN;
@@ -1220,50 +1247,83 @@ static void controlLoop()
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: CALLBACKS
+ * STATIC FUNCTIONS: IMAGE PROCESSING (MOSTLY OPENCV) RELATED
  * -------------------------------------------------------------- */
 
-// Handle a requestCompleted event from a camera.
-static void requestCompleted(Request *request)
+// Push a data buffer onto the image processing queue.
+static int imageProcessingQueuePush(wBuffer_t *buffer)
 {
+    int errorCode = -EINVAL;
+
+    if (buffer) {
+        gImageProcessingListMutex.lock();
+        errorCode = -ENOBUFS;
+        unsigned int queueLength = gImageProcessingList.size();
+        if (queueLength < W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS) {
+            errorCode = queueLength + 1;
+            try {
+                gImageProcessingList.push_back(*buffer);
+            }
+            catch(int x) {
+                errorCode = -x;
+            }
+        }
+        gImageProcessingListMutex.unlock();
+    }
+
+    if (errorCode < 0) {
+        W_LOG_ERROR("unable to push image to processing queue (%d)!",
+                    errorCode);
+    }
+
+    return errorCode;
+}
+
+// Try to pop a message off the image processing queue.
+static int imageProcessingQueueTryPop(wBuffer_t *buffer)
+{
+    int errorCode = -EAGAIN;
+
+    if (buffer && gImageProcessingListMutex.try_lock()) {
+        if (!gImageProcessingList.empty()) {
+            *buffer = gImageProcessingList.front();
+            gImageProcessingList.pop_front();
+            errorCode = 0;
+        }
+        gImageProcessingListMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Empty the image processing queue.
+static void imageProcessingQueueClear()
+{
+    wBuffer_t buffer;
+
+    gImageProcessingListMutex.lock();
+    while (imageProcessingQueueTryPop(&buffer) == 0) {
+        free(buffer.data);
+    }
+    gImageProcessingListMutex.unlock();
+}
+
+// Image processing task/thread/thing.
+static void imageProcessingLoop()
+{
+    wBuffer_t buffer;
     cv::Point point;
 
-    if (request->status() != Request::RequestCancelled) {
-
-       const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
-
-       for (auto bufferPair : buffers) {
-            FrameBuffer *buffer = bufferPair.second;
-            const FrameMetadata &metadata = buffer->metadata();
-
-            // Grab the stream's width, height and stride, all of which
-            // is encoded in the buffer's cookie when we associated it
-            // with the stream
-            unsigned int width;
-            unsigned int height;
-            unsigned int stride;
-            cookieDecode(buffer->cookie(), &width, &height, &stride);
-
-            // From this post: https://forums.raspberrypi.com/viewtopic.php?t=347925,
-            // need to create a memory map into the frame buffer for OpenCV or FFmpeg
-            // to be able to access it.  Each plane (Y, U and V in our case) has a
-            // file descriptor, but in fact they are all the same; the file
-            // descriptor is for the *entire* DMA buffer, which includes all of the
-            // planes at different offsets; there are three planes: Y, U and V.
-            unsigned int dmaBufferLength = buffer->planes()[0].length +
-                                           buffer->planes()[1].length +
-                                           buffer->planes()[2].length;
-            uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
-                                                              PROT_READ | PROT_WRITE, MAP_SHARED,
-                                                              buffer->planes()[0].fd.get(), 0));
-
+    while (gRunning) {
+        if (imageProcessingQueueTryPop(&buffer) == 0) {
             // Do the OpenCV things.  From the comment on this post:
             // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
             // ...we can bring in just the Y portion of the frame as, effectively,
             // a gray-scale image using CV_8UC1, which can be processed
             // quickly. Note that OpenCV is operating in-place on the
-            // data in the buffer, it does not perform a copy
-            Mat frameOpenCvGray(height, width, CV_8UC1, dmaBuffer, stride);
+            // data, it does not perform a copy
+            Mat frameOpenCvGray(buffer.height, buffer.width, CV_8UC1,
+                                buffer.data, buffer.stride);
 
             // Update the background model: this will cause moving areas to
             // appear as pixels with value 255, stationary areas to appear
@@ -1273,12 +1333,12 @@ static void requestCompleted(Request *request)
             // Apply thresholding to the foreground mask to remove shadows:
             // anything below the first number becomes zero, anything above
             // the first number becomes the second number
-            Mat maskThreshold(height, width, CV_8UC1);
+            Mat maskThreshold(buffer.height, buffer.width, CV_8UC1);
             threshold(gMaskForeground, maskThreshold, 25, 255, THRESH_BINARY);
             // Perform erosions and dilations on the mask that will remove
             // any small blobs
             Mat element = getStructuringElement(MORPH_ELLIPSE, cv::Size(3, 3));
-            Mat maskDeblobbed(height, width, CV_8UC1);
+            Mat maskDeblobbed(buffer.height, buffer.width, CV_8UC1);
             morphologyEx(maskThreshold, maskDeblobbed, MORPH_OPEN, element);
 
             // Find the edges of the moving areas, the ones with pixel value 255
@@ -1330,22 +1390,96 @@ static void requestCompleted(Request *request)
                        W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
             }
 
-           // Stream the camera frame via FFmpeg
-            unsigned int queueLength = avFrameQueuePush(dmaBuffer, dmaBufferLength,
-                                                        metadata.sequence,
-                                                        width, height, stride);
+           // Stream the camera frame via FFmpeg: avFrameQueuePush()
+           // will free the image data buffer we were passed
+            unsigned int queueLength = avFrameQueuePush(buffer.data, buffer.length,
+                                                        buffer.sequence,
+                                                        buffer.width,
+                                                        buffer.height,
+                                                        buffer.stride);
             if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
                 (queueLength != gVideoStreamFrameListSize)) {
                 // Print the size of the backlog once a second if it has changed
-                W_LOG_DEBUG("backlog %d frame(s)", queueLength);
+                W_LOG_DEBUG("backlog %d frame(s) on video streaming queue",
+                            queueLength);
                 gVideoStreamFrameListSize = queueLength;
             }
+        }
 
-            gCameraStreamFrameCount++;
+        // Let others in
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: CALLBACKS
+ * -------------------------------------------------------------- */
+
+// Handle a requestCompleted event from a camera.
+static void requestCompleted(Request *request)
+{
+    cv::Point point;
+
+    if (request->status() != Request::RequestCancelled) {
+
+       const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
+
+       for (auto bufferPair : buffers) {
+            FrameBuffer *buffer = bufferPair.second;
+            const FrameMetadata &metadata = buffer->metadata();
+
+            // Grab the stream's width, height and stride, all of which
+            // is encoded in the buffer's cookie when we associated it
+            // with the stream
+            unsigned int width;
+            unsigned int height;
+            unsigned int stride;
+            cookieDecode(buffer->cookie(), &width, &height, &stride);
+
+            // From this post: https://forums.raspberrypi.com/viewtopic.php?t=347925,
+            // need to create a memory map into the frame buffer for OpenCV or FFmpeg
+            // to be able to access it.  Each plane (Y, U and V in our case) has a
+            // file descriptor, but in fact they are all the same; the file
+            // descriptor is for the *entire* DMA buffer, which includes all of the
+            // planes at different offsets; there are three planes: Y, U and V.
+            unsigned int dmaBufferLength = buffer->planes()[0].length +
+                                           buffer->planes()[1].length +
+                                           buffer->planes()[2].length;
+            uint8_t *dmaBuffer = static_cast<uint8_t *> (mmap(nullptr, dmaBufferLength,
+                                                              PROT_READ | PROT_WRITE, MAP_SHARED,
+                                                              buffer->planes()[0].fd.get(), 0));
+
+            // Pass a copy of the camera frame to the image processing queue
+            uint8_t *data = (uint8_t *) malloc(dmaBufferLength);
+            if (data) {
+                memcpy(data, dmaBuffer, dmaBufferLength);
+                wBuffer_t buffer = {.width = width,
+                                    .height = height,
+                                    .stride = stride,
+                                    .sequence = metadata.sequence,
+                                    .data = data,
+                                    .length = dmaBufferLength};
+                unsigned int queueLength = imageProcessingQueuePush(&buffer);
+                if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
+                    (queueLength != gImageProcessingListSize)) {
+                    // Print the size of the backlog once a second if it has changed
+                    W_LOG_DEBUG("backlog %d frame in image processing queue(s)",
+                                queueLength);
+                    gImageProcessingListSize = queueLength;
+                }
+                gCameraStreamFrameCount++;
+            } else {
+                W_LOG_ERROR("unable to allocate %d byte(s) for image buffer,"
+                            " a frame has been lost.",
+                            dmaBufferLength);
+            }
 
             // Re-use the request
             request->reuse(Request::ReuseBuffers);
             gCamera->queueRequest(request);
+
+            // Keep track of timing for debug purposes
+            monitorTimingUpdate(&gCameraStreamMonitorTiming);
         }
     }
 }
@@ -1359,6 +1493,7 @@ int main()
 {
     int errorCode = -ENXIO;
     std::thread controlThread;
+    std::thread imageProcessingThread;
     std::thread videoEncodeThread;
     AVFormatContext *avFormatContext = nullptr;
     AVCodecContext *avCodecContext = nullptr;
@@ -1605,6 +1740,9 @@ int main()
                                                         avCodecContext,
                                                         avFormatContext}; 
 
+                        // Kick off our image processing thread
+                        imageProcessingThread = std::thread(imageProcessingLoop);
+
                         // Remove any old files for a clean start
                         system("rm " W_HLS_PLAYLIST_FILE_NAME);
                         system("rm " W_HLS_FILE_NAME_ROOT "*.ts"); 
@@ -1629,8 +1767,12 @@ int main()
 
         // Tidy up
         W_LOG_DEBUG("tidying up.");
-        // Stop the video encode thread
         gRunning = false;
+        // Stop the image processing thread
+        if (imageProcessingThread.joinable()) {
+           imageProcessingThread.join();
+        }
+        // Stop the video encode thread
         if (videoEncodeThread.joinable()) {
            videoEncodeThread.join();
         }
@@ -1649,6 +1791,9 @@ int main()
         delete allocator;
         gCamera->release();
         gCamera.reset();
+        // These are done last for safety as everything
+        // should have been flushed through above
+        imageProcessingQueueClear();
         avFrameQueueClear();
         // Stop the control thread
         if (controlThread.joinable()) {
@@ -1660,9 +1805,9 @@ int main()
                    gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
                    gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
                    gVideoStreamFrameOutputCount);
-        W_LOG_INFO("average video frame gap (at video encoder input) over last %d frames"
-                   " %lld ms (a rate of %lld frames/second), largest video"
-                   " frame gap %lld ms.",
+        W_LOG_INFO("average frame gap (at end of camera processing) over"
+                   " last %d frames %lld ms (a rate of %lld frames/second),"
+                   " largest gap %lld ms.",
                    W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
                    std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
                    1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
