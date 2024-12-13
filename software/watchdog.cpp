@@ -58,9 +58,10 @@
 #include <mutex>
 #include <list>
 
-// The Linux stuff.
+// The Linux/Posix stuff.
 #include <sys/mman.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 // The libcamera stuff.
 #include <libcamera/libcamera.h>
@@ -93,6 +94,16 @@ extern "C" {
                             auto _t2 = std::chrono::high_resolution_clock::now();  \
                             W_LOG_DEBUG("%d ms to do \"" #x "\".",                 \
                                         std::chrono::duration_cast<std::chrono::milliseconds>(_t2 - _t1))
+
+// The directory separator (we only run this on Linux).
+#define W_DIR_SEPARATOR "/"
+
+// The character that means "this directory".
+#define W_DIR_THIS "."
+
+// The required appendage to a system command to make it silent
+// (on Linux, obviously).
+#define W_SYSTEM_SILENT " >>/dev/null 2>>/dev/null"
 
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: STRINGIFY
@@ -255,14 +266,24 @@ extern "C" {
  * COMPILE-TIME MACROS: HLS VIDEO OUTPUT SETTINGS
  * -------------------------------------------------------------- */
 
-#ifndef W_HLS_FILE_NAME_ROOT
-// The root name for our HLS video files (.m3u8 and .ts).
-# define W_HLS_FILE_NAME_ROOT "watchdog"
+#ifndef W_HLS_FILE_NAME_ROOT_DEFAULT
+// The default root name for our HLS video files (.m3u8 and .ts).
+# define W_HLS_FILE_NAME_ROOT_DEFAULT "watchdog"
 #endif
 
-#ifndef W_HLS_PLAYLIST_FILE_NAME
-// The playlist name to serve HLS video.
-# define W_HLS_PLAYLIST_FILE_NAME W_HLS_FILE_NAME_ROOT ".m3u8"
+#ifndef W_HLS_PLAYLIST_FILE_EXTENSION
+// Playlist file extension.
+# define W_HLS_PLAYLIST_FILE_EXTENSION ".m3u8"
+#endif
+
+#ifndef W_HLS_SEGMENT_FILE_EXTENSION
+// Segment file extension.
+# define W_HLS_SEGMENT_FILE_EXTENSION ".ts"
+#endif
+
+#ifndef W_HLS_OUTPUT_DIRECTORY_DEFAULT
+// The default output directory; should not end in a "/".
+# define W_HLS_OUTPUT_DIRECTORY_DEFAULT W_DIR_THIS
 #endif
 
 #ifndef W_HLS_SEGMENT_DURATION_SECONDS
@@ -422,6 +443,16 @@ typedef struct {
     wMsgBody_t *body;
 } wMsgContainer_t;
 
+/* ----------------------------------------------------------------
+ * TYPES: MISC
+ * -------------------------------------------------------------- */
+
+// Parameters passed to this program.
+typedef struct {
+    std::string programName;
+    std::string outputDirectory;
+    std::string outputFileName;
+} wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------
  * VARIABLES
@@ -1510,11 +1541,170 @@ static void requestCompleted(libcamera::Request *request)
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: COMMAND LINE STUFF
+ * -------------------------------------------------------------- */
+
+// Given a C string that is assumed to be a path, return the directory
+// portion of that as a C++ string.
+static std::string getDirectoryPath(const char *path, bool absolute)
+{
+    std::string directoryPath;
+
+    if (path) {
+        directoryPath = std::string(path);
+        if (absolute && !(directoryPath.find_first_of(W_DIR_SEPARATOR) == 0)) {
+            // If we haven't already got an absolute path, make it absolute
+            char *currentDirName = get_current_dir_name();
+            if (currentDirName) {
+                directoryPath = std::string(currentDirName) + W_DIR_SEPARATOR + directoryPath;
+                free(currentDirName);
+            } else {
+                W_LOG_ERROR("unable to get the current directory name");
+            }
+        }
+        // Remove any slash off the end to avoid double-slashing when
+        // we concatenate this with something else
+        unsigned int length = directoryPath.length();
+        if ((length > 0) && (directoryPath.find_last_of(W_DIR_SEPARATOR) == length)) {
+            directoryPath = directoryPath.substr(0, length - 1);
+        }
+    }
+
+    return directoryPath;
+}
+
+// Given a C string that is assumed to be a path, return the file name
+// portion of that string.
+static std::string getFileName(const char *path)
+{
+    std::string fileName;
+
+    if (path) {
+        fileName = std::string(path);
+        // Skip past any directory separators
+        unsigned int pos = fileName.find_last_of(W_DIR_SEPARATOR);
+        unsigned int length = fileName.length();
+        if (pos != std::string::npos) {
+            if (pos < length) {
+                fileName = fileName.substr(pos + 1, length);
+            } else {
+                // Directory separator at the end, therefore no file name
+                fileName.clear();
+            }
+        }
+    }
+
+    return fileName;
+}
+
+// Process the command-line parameters.  If this function
+// returns an error and parameters is not nullptr, it will populate
+// parameters with the defaults.
+static int processCommandLine(int argc, char *argv[],
+                              wCommandLineParameters_t *parameters)
+{
+    int errorCode = -EINVAL;
+    int x = 0;
+
+    if (parameters) {
+        parameters->programName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
+        parameters->outputDirectory = std::string(W_HLS_OUTPUT_DIRECTORY_DEFAULT);
+        parameters->outputFileName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
+        if ((argc > 0) && (argv)) {
+            // Find the exe name in the first argument
+            parameters->programName = getFileName(argv[x]);
+            x++;
+            // Look for all the command line parameters
+            errorCode = 0;
+            while (x < argc) {
+                errorCode = -EINVAL;
+                // Test for output directory option
+                if (std::string(argv[x]) == "-d") {
+                    x++;
+                    if (x < argc) {
+                        errorCode = 0;
+                        std::string str = getDirectoryPath(argv[x], true);
+                        if (!str.empty()) {
+                            parameters->outputDirectory = str;
+                        }
+                    }
+                // Test for output file name option
+                } else if (std::string(argv[x]) == "-f") {
+                    x++;
+                    if (x < argc) {
+                        errorCode = 0;
+                        std::string str = std::string(argv[x]);
+                        if (!str.empty()) {
+                            parameters->outputFileName = str;
+                        }
+                    }
+                }
+                x++;
+            }
+        }
+    }
+
+    return errorCode;
+}
+
+// Print command-line choices.
+static void commandLinePrintChoices(wCommandLineParameters_t *parameters)
+{
+    std::string programName = W_HLS_FILE_NAME_ROOT_DEFAULT;
+
+    if (parameters && !parameters->programName.empty()) {
+        programName = parameters->programName;
+    }
+    std::cout << programName;
+    if (parameters) {
+        std::cout << ", putting output files ("
+                  << W_HLS_PLAYLIST_FILE_EXTENSION << " and "
+                  << W_HLS_SEGMENT_FILE_EXTENSION << ") in ";
+        if (parameters->outputDirectory != std::string(W_DIR_THIS)) {
+            std::cout << parameters->outputDirectory;
+        } else {
+            std::cout << "this directory";
+        }
+        std::cout << ", output files will be named "
+                  << parameters->outputFileName;
+    }
+    std::cout << "." << std::endl;
+}
+
+// Print command-line help.
+static void commandLinePrintHelp(wCommandLineParameters_t *defaults)
+{
+    std::string programName = W_HLS_FILE_NAME_ROOT_DEFAULT;
+
+    if (defaults && !defaults->programName.empty()) {
+        programName = defaults->programName;
+    }
+    std::cout << programName << ", options are:" << std::endl;
+
+    std::cout << "  -d <directory path> set directory for streaming output"
+              << " (default ";
+    if (defaults && (defaults->outputDirectory != std::string(W_DIR_THIS))) {
+        std::cout << defaults->outputDirectory;
+    } else {
+        std::cout << "this directory";
+    }
+    std::cout << ")." << std::endl;
+
+    std::cout << "  -f <file name> set file name for streaming output ("
+              <<  W_HLS_PLAYLIST_FILE_EXTENSION << " and "
+              <<  W_HLS_SEGMENT_FILE_EXTENSION << " files)";
+    if (defaults && !defaults->outputFileName.empty()) {
+        std::cout << " (default " << defaults->outputFileName << ")";
+    }
+    std::cout << "." << std::endl;
+}
+
+/* ----------------------------------------------------------------
  * PUBLIC FUNCTIONS
  * -------------------------------------------------------------- */
 
 // The entry point.
-int main()
+int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
     std::thread controlThread;
@@ -1523,330 +1713,357 @@ int main()
     AVFormatContext *avFormatContext = nullptr;
     AVCodecContext *avCodecContext = nullptr;
     AVStream *avStream = nullptr;
+    wCommandLineParameters_t commandLineParameters;
 
-    // Create and start a camera manager instance
-    std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
-    cm->start();
+   // Process the command-line parameters
+   if (processCommandLine(argc, argv, &commandLineParameters) == 0) {
+       commandLinePrintChoices(&commandLineParameters);
+        // Create and start a camera manager instance
+        std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
+        cm->start();
 
-    // List the available cameras
-    for (auto const &camera: cm->cameras()) {
-        W_LOG_INFO("found camera ID %s.", camera->id().c_str());
-        W_LOG_DEBUG_START("camera properties:\n");
-        auto cameraProperties =  camera->properties();
-        auto idMap = cameraProperties.idMap();
-        unsigned int x = 0;
-        for(auto &controlValue: cameraProperties) {
-            auto controlId = idMap->at(controlValue.first);
-            if (x > 0) {
-                W_LOG_DEBUG_MORE("\n");
+        // List the available cameras
+        for (auto const &camera: cm->cameras()) {
+            W_LOG_INFO("found camera ID %s.", camera->id().c_str());
+            W_LOG_DEBUG_START("camera properties:\n");
+            auto cameraProperties =  camera->properties();
+            auto idMap = cameraProperties.idMap();
+            unsigned int x = 0;
+            for(auto &controlValue: cameraProperties) {
+                auto controlId = idMap->at(controlValue.first);
+                if (x > 0) {
+                    W_LOG_DEBUG_MORE("\n");
+                }
+                W_LOG_DEBUG_MORE("  %06d [%s]: %s",
+                                 controlValue.first,
+                                 controlId->name().c_str(),
+                                 controlValue.second.toString().c_str());
+                x++;
             }
-            W_LOG_DEBUG_MORE("  %06d [%s]: %s",
-                             controlValue.first,
-                             controlId->name().c_str(),
-                             controlValue.second.toString().c_str());
-            x++;
+            W_LOG_DEBUG_END;
         }
-        W_LOG_DEBUG_END;
-    }
 
-    // Acquire the first (and probably only) camera
-    auto cameras = cm->cameras();
-    if (!cameras.empty()) {
-        std::string cameraId = cameras[0]->id();
-        W_LOG_INFO("acquiring camera %s.", cameraId.c_str());
-        gCamera = cm->get(cameraId);
-        gCamera->acquire();
+        // Acquire the first (and probably only) camera
+        auto cameras = cm->cameras();
+        if (!cameras.empty()) {
+            std::string cameraId = cameras[0]->id();
+            W_LOG_INFO("acquiring camera %s.", cameraId.c_str());
+            gCamera = cm->get(cameraId);
+            gCamera->acquire();
 
-        // Configure the camera with the stream
-        std::unique_ptr<libcamera::CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
-        cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
-                              W_CAMERA_STREAM_WIDTH_PIXELS,
-                              W_CAMERA_STREAM_HEIGHT_PIXELS);
+            // Configure the camera with the stream
+            std::unique_ptr<libcamera::CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
+            cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
+                                  W_CAMERA_STREAM_WIDTH_PIXELS,
+                                  W_CAMERA_STREAM_HEIGHT_PIXELS);
 
-        // Validate and apply the configuration
-        if (cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
-            W_LOG_DEBUG("libcamera will adjust those values.");
-        }
-        gCamera->configure(cameraCfg.get());
-
-        W_LOG_INFO_START("validated/applied camera configuration: ");
-        for (std::size_t x = 0; x < cameraCfg->size(); x++) {
-            if (x > 0) {
-                W_LOG_INFO_MORE(", ");
+            // Validate and apply the configuration
+            if (cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
+                W_LOG_DEBUG("libcamera will adjust those values.");
             }
-            W_LOG_INFO_MORE("%s", cameraCfg->at(x).toString().c_str());
-            x++;
-        }
-        W_LOG_INFO_MORE(".");
-        W_LOG_INFO_END;
+            gCamera->configure(cameraCfg.get());
 
-        // Allocate frame buffers
-        libcamera::FrameBufferAllocator *allocator = new libcamera::FrameBufferAllocator(gCamera);
-        errorCode = 0;
-        for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
-            errorCode = allocator->allocate(cfg->stream());
-            if (errorCode >= 0) {
-                W_LOG_DEBUG("allocated %d buffer(s) for stream %s.", errorCode,
-                            cfg->toString().c_str());
-                errorCode = 0;
-            } else {
-                W_LOG_ERROR("unable to allocate frame buffers (error code %d)!.",
-                            errorCode);
+            W_LOG_INFO_START("validated/applied camera configuration: ");
+            for (std::size_t x = 0; x < cameraCfg->size(); x++) {
+                if (x > 0) {
+                    W_LOG_INFO_MORE(", ");
+                }
+                W_LOG_INFO_MORE("%s", cameraCfg->at(x).toString().c_str());
+                x++;
             }
-        }
-        if (errorCode == 0) {
-            W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
-            // Create a queue of requests using the allocated buffers
-            std::vector<std::unique_ptr<libcamera::Request>> requests;
-            for (auto cfg: *cameraCfg) {
-                libcamera::Stream *stream = cfg.stream();
-                const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = allocator->buffers(stream);
-                for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
-                    std::unique_ptr<libcamera::Request> request = gCamera->createRequest();
-                    if (request) {
-                        const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[x];
-                        errorCode = request->addBuffer(stream, buffer.get());
-                        if (errorCode == 0) {
-                            // Encode the width, height and stride into the cookie of
-                            // the FrameBuffer as we will need that information later
-                            // when converting the FrameBuffer to a form that OpenCV
-                            // and FFmpeg understand
-                            buffer->setCookie(cookieEncode(stream->configuration().size.width,
-                                                           stream->configuration().size.height,
-                                                           stream->configuration().stride));
-                            requests.push_back(std::move(request));
-                        } else {
-                            W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
-                                         errorCode);
-                        }
-                    } else {
-                        errorCode = -ENOMEM;
-                        W_LOG_ERROR("unable to create request to camera!");
-                    }
+            W_LOG_INFO_MORE(".");
+            W_LOG_INFO_END;
+
+            // Allocate frame buffers
+            libcamera::FrameBufferAllocator *allocator = new libcamera::FrameBufferAllocator(gCamera);
+            errorCode = 0;
+            for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
+                errorCode = allocator->allocate(cfg->stream());
+                if (errorCode >= 0) {
+                    W_LOG_DEBUG("allocated %d buffer(s) for stream %s.", errorCode,
+                                cfg->toString().c_str());
+                    errorCode = 0;
+                } else {
+                    W_LOG_ERROR("unable to allocate frame buffers (error code %d)!.",
+                                errorCode);
                 }
             }
             if (errorCode == 0) {
-                errorCode = -ENOMEM;
-                // That's got pretty much all of the libcamera stuff, the camera
-                // setup, done.  Now set up the output stream for video recording
-                // using FFmpeg, format being HLS containing H.264-encoded data.
-                const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
-                avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
-                                               nullptr, W_HLS_PLAYLIST_FILE_NAME);
-                if (avFormatContext) {
-                    // Configure the HLS options
-                    AVDictionary *hlsOptions = nullptr;
-                    // Note: the original example I was following:
-                    // https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124
-                    // set a load of "segment_*" (e.g. segment_time_delta='1.0', segment_list_flags='cache+live')
-                    // options, however, though these exist in a "stream segment muxer" (see libavformat\segment.c)
-                    // they don't seem to be at all associated with the HLS stream as configured here
-                    // and the original example was including them wrongly (it just added them with
-                    // an av_dict_set() individually, whereas in fact they have to be added as
-                    // sub-dictionary (a string of key-value pairs separated by a colon) with the
-                    // key "hls_segment_options") and so it wouldn't have known they had no effect
-                    // as avformat_write_header() ignores unused dictionary entries.  So I've
-                    // not included the "segment_*" options here.
-                    // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
-                    // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
-                    // in the output.
-                    // Note: we don't apply hls_time, to set the segment size, here; instead we set
-                    // the "gop_size" of the codec, which is the distance between key-frames, to
-                    // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
-                    // as the segment size, which is much better, since it ensures a key-frame at the
-                    // start of every segment.
-                    if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
-                        (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
-                        (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
-                        (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
-                                                               "program_date_time", 0) == 0)) { // Not required but nice to have
-                        //  Set up the H264 video output stream over HLS
-                        avStream = avformat_new_stream(avFormatContext, nullptr);
-                        if (avStream) {
-                            errorCode = -ENODEV;
-                            const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
-                            if (videoOutputCodec) {
-                                errorCode = -ENOMEM;
-                                avCodecContext = avcodec_alloc_context3(videoOutputCodec);
-                                if (avCodecContext) {
-                                    W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
-                                    avCodecContext->width = cameraCfg->at(0).size.width;
-                                    avCodecContext->height = cameraCfg->at(0).size.height;
-                                    avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
-                                    avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
-                                    // Make sure we get a key frame every segment, otherwise if the
-                                    // HLS client has to seek backwards from the front and can't find
-                                    // a key frame it may fail to play the stream
-                                    avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
-                                    // From the discussion here:
-                                    // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
-                                    // ... the intended effect of setting keyint_min to twice
-                                    // the GOP size is that key-frames can still be inserted
-                                    // at a scene-cut but they don't become the kind of key-frame
-                                    // that would cause a segment to end early; this keeps the rate
-                                    // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
-                                    avCodecContext->keyint_min = avCodecContext->gop_size * 2;
-                                    avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
-                                    avCodecContext->codec_id = AV_CODEC_ID_H264;
-                                    avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
-                                    // This is needed to include the frame duration in the encoded
-                                    // output, otherwise the HLS bit of av_interleaved_write_frame()
-                                    // will emit a warning that frames having zero duration will mean
-                                    // the HLS segment timing is orf
-                                    avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
-                                    AVDictionary *codecOptions = nullptr; // Not currently used
-                                    if ((avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
-                                        (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
-                                        (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
-                                        // avformat_write_header() and avcodec_open2() modify
-                                        // the options passed to them to be any options that weren't
-                                        // found
-                                        const AVDictionaryEntry *entry = nullptr;
-                                        while ((entry = av_dict_iterate(hlsOptions, entry))) {
-                                            W_LOG_WARN("HLS option \"%s\" value \"%s\" not found.",
-                                                       entry->key, entry->value);
-                                        }
-                                        while ((entry = av_dict_iterate(codecOptions, entry))) {
-                                            W_LOG_WARN("Codec option \"%s\" value \"%s\" not found.",
-                                                       entry->key, entry->value);
-                                        }
-                                        // Don't see why this should be necessary (everything in here
-                                        // seems to have its own copy of time_base: the AVCodecContext does,
-                                        // AVFrame does and apparently AVStream does), but the example:
-                                        // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
-                                        // does it and if you don't do it the output has no timing.
-                                        avStream->time_base = avCodecContext->time_base;
-                                        errorCode = 0;
-                                    } else {
-                                        W_LOG_ERROR("unable to either open video codec or write AV format header!");
-                                    }
-                                } else {
-                                    W_LOG_ERROR("unable to allocate memory for video output context!");
-                                }
+                W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
+                // Create a queue of requests using the allocated buffers
+                std::vector<std::unique_ptr<libcamera::Request>> requests;
+                for (auto cfg: *cameraCfg) {
+                    libcamera::Stream *stream = cfg.stream();
+                    const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = allocator->buffers(stream);
+                    for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
+                        std::unique_ptr<libcamera::Request> request = gCamera->createRequest();
+                        if (request) {
+                            const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[x];
+                            errorCode = request->addBuffer(stream, buffer.get());
+                            if (errorCode == 0) {
+                                // Encode the width, height and stride into the cookie of
+                                // the FrameBuffer as we will need that information later
+                                // when converting the FrameBuffer to a form that OpenCV
+                                // and FFmpeg understand
+                                buffer->setCookie(cookieEncode(stream->configuration().size.width,
+                                                               stream->configuration().size.height,
+                                                               stream->configuration().stride));
+                                requests.push_back(std::move(request));
                             } else {
-                                W_LOG_ERROR("unable to find H.264 codec in FFmpeg!");
+                                W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
+                                             errorCode);
                             }
                         } else {
-                            W_LOG_ERROR("unable to allocate memory for video output stream!");
+                            errorCode = -ENOMEM;
+                            W_LOG_ERROR("unable to create request to camera!");
                         }
-                    } else {
-                        W_LOG_ERROR("unable to allocate memory for a dictionary entry that configures HLS!");
                     }
-                } else {
-                    W_LOG_ERROR("unable to allocate memory for video output context!");
                 }
                 if (errorCode == 0) {
-                    // Now set up the OpenCV background subtractor object
-                    gBackgroundSubtractor = cv::createBackgroundSubtractorMOG2();
-                    if (gBackgroundSubtractor) {
-                        // We have not yet set any of the controls for the camera;
-                        // the only one we care about here is the frame rate,
-                        // so that the settings above match.  There is a minimum
-                        // and a maximum, setting both the same fixes the rate.
-                        // We create a camera control list and pass it to
-                        // the start() method when we start the camera.
-                        libcamera::ControlList cameraControls;
-                        // Units are microseconds.
-                        int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
-                        cameraControls.set(libcamera::controls::FrameDurationLimits,
-                                           libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
-                                                                                   frameDurationLimit}));
-                        // Attach the requestCompleted() handler
-                        // function to its events and start the camera,
-                        // everything else happens in the callback function
-                        gCamera->requestCompleted.connect(requestCompleted);
-
-                        gRunning = true;
-
-                        // Kick off a control thread
-                        controlThread = std::thread(controlLoop);
-
-                        // Kick off a thread to encode video frames
-                        videoEncodeThread = std::thread{videoEncodeLoop,
-                                                        avCodecContext,
-                                                        avFormatContext}; 
-
-                        // Kick off our image processing thread
-                        imageProcessingThread = std::thread(imageProcessingLoop);
-
-                        // Remove any old files for a clean start
-                        system("rm " W_HLS_PLAYLIST_FILE_NAME);
-                        system("rm " W_HLS_FILE_NAME_ROOT "*.ts"); 
-
-                        // Pedal to da metal
-                        W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
-                        gCamera->start(&cameraControls);
-                        for (std::unique_ptr<libcamera::Request> &request: requests) {
-                            gCamera->queueRequest(request.get());
+                    errorCode = -ENOMEM;
+                    // That's got pretty much all of the libcamera stuff, the camera
+                    // setup, done.  Now set up the output stream for video recording
+                    // using FFmpeg, format being HLS containing H.264-encoded data.
+                    const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
+                    avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
+                                                   nullptr,
+                                                   (commandLineParameters.outputDirectory + 
+                                                    std::string(W_DIR_SEPARATOR) +
+                                                    commandLineParameters.outputFileName +
+                                                    std::string(W_HLS_PLAYLIST_FILE_EXTENSION)).c_str());
+                    if (avFormatContext) {
+                        // Configure the HLS options
+                        AVDictionary *hlsOptions = nullptr;
+                        // Note: the original example I was following:
+                        // https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124
+                        // set a load of "segment_*" (e.g. segment_time_delta='1.0', segment_list_flags='cache+live')
+                        // options, however, though these exist in a "stream segment muxer" (see libavformat\segment.c)
+                        // they don't seem to be at all associated with the HLS stream as configured here
+                        // and the original example was including them wrongly (it just added them with
+                        // an av_dict_set() individually, whereas in fact they have to be added as
+                        // sub-dictionary (a string of key-value pairs separated by a colon) with the
+                        // key "hls_segment_options") and so it wouldn't have known they had no effect
+                        // as avformat_write_header() ignores unused dictionary entries.  So I've
+                        // not included the "segment_*" options here.
+                        // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
+                        // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
+                        // in the output.
+                        // Note: we don't apply hls_time, to set the segment size, here; instead we set
+                        // the "gop_size" of the codec, which is the distance between key-frames, to
+                        // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
+                        // as the segment size, which is much better, since it ensures a key-frame at the
+                        // start of every segment.
+                        if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
+                            (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
+                            (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
+                            (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
+                            (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
+                                                                   "program_date_time", 0) == 0)) { // Not required but nice to have
+                            //  Set up the H264 video output stream over HLS
+                            avStream = avformat_new_stream(avFormatContext, nullptr);
+                            if (avStream) {
+                                errorCode = -ENODEV;
+                                const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
+                                if (videoOutputCodec) {
+                                    errorCode = -ENOMEM;
+                                    avCodecContext = avcodec_alloc_context3(videoOutputCodec);
+                                    if (avCodecContext) {
+                                        W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
+                                        avCodecContext->width = cameraCfg->at(0).size.width;
+                                        avCodecContext->height = cameraCfg->at(0).size.height;
+                                        avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
+                                        avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
+                                        // Make sure we get a key frame every segment, otherwise if the
+                                        // HLS client has to seek backwards from the front and can't find
+                                        // a key frame it may fail to play the stream
+                                        avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
+                                        // From the discussion here:
+                                        // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
+                                        // ... the intended effect of setting keyint_min to twice
+                                        // the GOP size is that key-frames can still be inserted
+                                        // at a scene-cut but they don't become the kind of key-frame
+                                        // that would cause a segment to end early; this keeps the rate
+                                        // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
+                                        avCodecContext->keyint_min = avCodecContext->gop_size * 2;
+                                        avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+                                        avCodecContext->codec_id = AV_CODEC_ID_H264;
+                                        avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+                                        // This is needed to include the frame duration in the encoded
+                                        // output, otherwise the HLS bit of av_interleaved_write_frame()
+                                        // will emit a warning that frames having zero duration will mean
+                                        // the HLS segment timing is orf
+                                        avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
+                                        AVDictionary *codecOptions = nullptr; // Not currently used
+                                        if ((avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
+                                            (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
+                                            (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                            // avformat_write_header() and avcodec_open2() modify
+                                            // the options passed to them to be any options that weren't
+                                            // found
+                                            const AVDictionaryEntry *entry = nullptr;
+                                            while ((entry = av_dict_iterate(hlsOptions, entry))) {
+                                                W_LOG_WARN("HLS option \"%s\" value \"%s\" not found.",
+                                                           entry->key, entry->value);
+                                            }
+                                            while ((entry = av_dict_iterate(codecOptions, entry))) {
+                                                W_LOG_WARN("Codec option \"%s\" value \"%s\" not found.",
+                                                           entry->key, entry->value);
+                                            }
+                                            // Don't see why this should be necessary (everything in here
+                                            // seems to have its own copy of time_base: the AVCodecContext does,
+                                            // AVFrame does and apparently AVStream does), but the example:
+                                            // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
+                                            // does it and if you don't do it the output has no timing.
+                                            avStream->time_base = avCodecContext->time_base;
+                                            errorCode = 0;
+                                        } else {
+                                            W_LOG_ERROR("unable to either open video codec or write AV format header!");
+                                        }
+                                    } else {
+                                        W_LOG_ERROR("unable to allocate memory for video output context!");
+                                    }
+                                } else {
+                                    W_LOG_ERROR("unable to find H.264 codec in FFmpeg!");
+                                }
+                            } else {
+                                W_LOG_ERROR("unable to allocate memory for video output stream!");
+                            }
+                        } else {
+                            W_LOG_ERROR("unable to allocate memory for a dictionary entry that configures HLS!");
                         }
-
-                        std::cin.get();
-
-                        W_LOG_INFO("stopping the camera.");
-                        gCamera->stop();
                     } else {
-                        errorCode = -ENOMEM;
-                        W_LOG_ERROR("unable to create background subtractor!");
+                        W_LOG_ERROR("unable to allocate memory for video output context!");
+                    }
+                    if (errorCode == 0) {
+                        // Now set up the OpenCV background subtractor object
+                        gBackgroundSubtractor = cv::createBackgroundSubtractorMOG2();
+                        if (gBackgroundSubtractor) {
+                            // We have not yet set any of the controls for the camera;
+                            // the only one we care about here is the frame rate,
+                            // so that the settings above match.  There is a minimum
+                            // and a maximum, setting both the same fixes the rate.
+                            // We create a camera control list and pass it to
+                            // the start() method when we start the camera.
+                            libcamera::ControlList cameraControls;
+                            // Units are microseconds.
+                            int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
+                            cameraControls.set(libcamera::controls::FrameDurationLimits,
+                                               libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
+                                                                                       frameDurationLimit}));
+                            // Attach the requestCompleted() handler
+                            // function to its events and start the camera,
+                            // everything else happens in the callback function
+                            gCamera->requestCompleted.connect(requestCompleted);
+
+                            gRunning = true;
+
+                            // Kick off a control thread
+                            controlThread = std::thread(controlLoop);
+
+                            // Kick off a thread to encode video frames
+                            videoEncodeThread = std::thread{videoEncodeLoop,
+                                                            avCodecContext,
+                                                            avFormatContext}; 
+
+                            // Kick off our image processing thread
+                            imageProcessingThread = std::thread(imageProcessingLoop);
+
+                            // Remove any old files for a clean start
+                            system(std::string("rm " +
+                                               commandLineParameters.outputDirectory +
+                                               W_DIR_SEPARATOR +
+                                               commandLineParameters.outputFileName +
+                                               W_HLS_PLAYLIST_FILE_EXTENSION +
+                                               W_SYSTEM_SILENT).c_str() );
+                            system(std::string("rm " +
+                                               commandLineParameters.outputDirectory +
+                                               W_DIR_SEPARATOR +
+                                               commandLineParameters.outputFileName +
+                                               W_HLS_SEGMENT_FILE_EXTENSION +
+                                               W_SYSTEM_SILENT).c_str());
+
+                            // Make sure the output directory exists
+                            system(std::string("mkdir -p " +
+                                               commandLineParameters.outputDirectory).c_str());
+
+                            // Pedal to da metal
+                            W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
+                            gCamera->start(&cameraControls);
+                            for (std::unique_ptr<libcamera::Request> &request: requests) {
+                                gCamera->queueRequest(request.get());
+                            }
+
+                            std::cin.get();
+
+                            W_LOG_INFO("stopping the camera.");
+                            gCamera->stop();
+                        } else {
+                            errorCode = -ENOMEM;
+                            W_LOG_ERROR("unable to create background subtractor!");
+                        }
                     }
                 }
             }
+
+            // Tidy up
+            W_LOG_DEBUG("tidying up.");
+            gRunning = false;
+            // Stop the image processing thread
+            if (imageProcessingThread.joinable()) {
+               imageProcessingThread.join();
+            }
+            // Stop the video encode thread
+            if (videoEncodeThread.joinable()) {
+               videoEncodeThread.join();
+            }
+            videoOutputFlush(avCodecContext, avFormatContext);
+            if (avFormatContext) {
+                av_write_trailer(avFormatContext);
+            }
+            avcodec_free_context(&avCodecContext);
+            if (avFormatContext) {
+                avio_closep(&avFormatContext->pb);
+                avformat_free_context(avFormatContext);
+            }
+            for (auto cfg: *cameraCfg) {
+                allocator->free(cfg.stream());
+            }
+            delete allocator;
+            gCamera->release();
+            gCamera.reset();
+            // These are done last for safety as everything
+            // should already have been flushed through
+            // anyway above
+            imageProcessingQueueClear();
+            avFrameQueueClear();
+            // Stop the control thread
+            if (controlThread.joinable()) {
+               controlThread.join();
+            }
+            controlQueueClear();
+            W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
+                       " %d encoded video frame(s)).",
+                       gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
+                       gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
+                       gVideoStreamFrameOutputCount);
+            W_LOG_INFO("average frame gap (at end of video output) over the last"
+                       " %d frames %lld ms (a rate of %lld frames/second), largest"
+                       " gap %lld ms.",
+                       W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
+                       1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.largest).count());
+        } else {
+            W_LOG_ERROR("no cameras found!");
         }
 
         // Tidy up
-        W_LOG_DEBUG("tidying up.");
-        gRunning = false;
-        // Stop the image processing thread
-        if (imageProcessingThread.joinable()) {
-           imageProcessingThread.join();
-        }
-        // Stop the video encode thread
-        if (videoEncodeThread.joinable()) {
-           videoEncodeThread.join();
-        }
-        videoOutputFlush(avCodecContext, avFormatContext);
-        if (avFormatContext) {
-            av_write_trailer(avFormatContext);
-        }
-        avcodec_free_context(&avCodecContext);
-        if (avFormatContext) {
-            avio_closep(&avFormatContext->pb);
-            avformat_free_context(avFormatContext);
-        }
-        for (auto cfg: *cameraCfg) {
-            allocator->free(cfg.stream());
-        }
-        delete allocator;
-        gCamera->release();
-        gCamera.reset();
-        // These are done last for safety as everything
-        // should already have been flushed through
-        // anyway above
-        imageProcessingQueueClear();
-        avFrameQueueClear();
-        // Stop the control thread
-        if (controlThread.joinable()) {
-           controlThread.join();
-        }
-        controlQueueClear();
-        W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
-                   " %d encoded video frame(s)).",
-                   gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
-                   gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
-                   gVideoStreamFrameOutputCount);
-        W_LOG_INFO("average frame gap (at end of video output) over the last"
-                   " %d frames %lld ms (a rate of %lld frames/second), largest"
-                   " gap %lld ms.",
-                   W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
-                   std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
-                   1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
-                   std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.largest).count());
+        cm->stop();
     } else {
-        W_LOG_ERROR("no cameras found!");
+        // Print help about the commad line, including the defaults
+        commandLinePrintHelp(&commandLineParameters);
     }
 
-    // Tidy up
-    cm->stop();
     return (int) errorCode;
 }
 
