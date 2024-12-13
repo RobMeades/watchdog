@@ -15,7 +15,26 @@
  */
 
 /** @file
- * @brief The watchdog application, main().
+ * @brief The watchdog application, main().  This should be split into
+ * multiple files with proper APIs between the image processing,
+ * image streaming and control parts (there are queues between them for
+ * this purpose) but since I'm editing on a PC and running on a
+ * headless Raspbarry Pi, having a single .cpp file that I can sftp
+ * between the two makes life a lot simpler  Sorry software gods.
+ *
+ * This code makes use of:
+ *
+ * - libcamera: shiny new CPP stuff that is the only way to access
+ *   Pi Camera 3, with fair API documentation but zero "how to"
+ *   documentation,
+ * - OpenCV: older CPP stuff, used here to process still images, find
+ *   things that have moved between two still images, write to images,
+ *   with good tutorial-style documentation but close to zero API
+ *   documentation,
+ * - FFmpeg: traditional C code, been around forever, used here only to
+ *   encode a HLS-format video output stream; appalling documentation
+ *   (99% of people seem to use it via the command-line) and support
+ *   only via IRC.
  *
  * Note: to run with maximum debug from libcamera, execute this program
  * as:
@@ -30,6 +49,7 @@
  * information, warning and errors from libcamera, but not pure debug.
  */
 
+// The CPP stuff.
 #include <string>
 #include <iomanip>
 #include <iostream>
@@ -38,11 +58,14 @@
 #include <mutex>
 #include <list>
 
+// The Linux stuff.
 #include <sys/mman.h>
 #include <sys/time.h>
 
+// The libcamera stuff.
 #include <libcamera/libcamera.h>
 
+// The OpenCV stuff.
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
@@ -56,9 +79,6 @@ extern "C" {
 # include <libavdevice/avdevice.h>
 # include <libavutil/imgutils.h>
 }
-
-using namespace libcamera;
-using namespace cv;
 
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: MISC
@@ -94,7 +114,7 @@ using namespace cv;
 
 #ifndef W_CAMERA_STREAM_ROLE
 // The libcamera StreamRole to use as a basis for the video stream.
-# define W_CAMERA_STREAM_ROLE StreamRole::VideoRecording
+# define W_CAMERA_STREAM_ROLE libcamera::StreamRole::VideoRecording
 #endif
 
 #ifndef W_CAMERA_STREAM_FORMAT
@@ -178,14 +198,14 @@ using namespace cv;
 #endif
 
 // The colour we draw around moving objects as an OpenCV Scalar.
-#define W_DRAWING_SHADE_MOVING_OBJECTS Scalar(W_DRAWING_SHADE_MID_GRAY, \
-                                              W_DRAWING_SHADE_MID_GRAY, \
-                                              W_DRAWING_SHADE_MID_GRAY)
+#define W_DRAWING_SHADE_MOVING_OBJECTS cv::Scalar(W_DRAWING_SHADE_MID_GRAY, \
+                                                  W_DRAWING_SHADE_MID_GRAY, \
+                                                  W_DRAWING_SHADE_MID_GRAY)
 
 // The colour we draw the focus circle in as an OpenCV Scalar.
-#define W_DRAWING_SHADE_FOCUS_CIRCLE Scalar(W_DRAWING_SHADE_LIGHT_GRAY, \
-                                            W_DRAWING_SHADE_LIGHT_GRAY, \
-                                            W_DRAWING_SHADE_LIGHT_GRAY)
+#define W_DRAWING_SHADE_FOCUS_CIRCLE cv::Scalar(W_DRAWING_SHADE_LIGHT_GRAY, \
+                                                W_DRAWING_SHADE_LIGHT_GRAY, \
+                                                W_DRAWING_SHADE_LIGHT_GRAY)
 
 #ifndef W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS
 // The line thickness we use when drawing rectangles around moving
@@ -355,11 +375,9 @@ typedef struct {
 
 // A point with mutex protection, used for the focus point which
 // we need to write from the control thread and read from the
-// requestCompleted() callback. Have to prefix Point with the
-// namespace of cv as there is also a Point in libcamera.
-// Aside from static initialisation, pointProtectedSet() and
-// pointProtectedGet() should always be used to access a
-// variable of this type.
+// requestCompleted() callback. Aside from static initialisation,
+// pointProtectedSet() and pointProtectedGet() should always be
+// used to access a variable of this type.
 typedef struct {
     std::mutex mutex;
     cv::Point point;
@@ -373,7 +391,7 @@ typedef struct {
 } wRectInfo_t;
 
 /* ----------------------------------------------------------------
- * TYPES: MESSAGING RELATED
+ * TYPES: CONTROL MESSAGING RELATED
  * -------------------------------------------------------------- */
 
 // Message types that can be passed to the control thread, must
@@ -410,7 +428,7 @@ typedef struct {
  * -------------------------------------------------------------- */
 
 // Pointer to camera: global as the requestCompleted() callback will use it.
-static std::shared_ptr<Camera> gCamera = nullptr;
+static std::shared_ptr<libcamera::Camera> gCamera = nullptr;
 
 // Count of frames received from the camera.
 static unsigned int gCameraStreamFrameCount = 0;
@@ -434,11 +452,11 @@ static wMonitorTiming_t gCameraStreamMonitorTiming;
 
 // Pointer to the OpenCV background subtractor: global as the
 // requestCompleted() callback will use it.
-static std::shared_ptr<BackgroundSubtractor> gBackgroundSubtractor = nullptr;
+static std::shared_ptr<cv::BackgroundSubtractor> gBackgroundSubtractor = nullptr;
 
 // A place to store the foreground mask for the OpenCV stream,
 // globl as the requestCompleted() callback will populate it.
-static Mat gMaskForeground;
+static cv::Mat gMaskForeground;
 
 // The place that we should be looking, in view coordinates;
 // have to prefix Point with the namespace of cv as there is
@@ -632,7 +650,7 @@ static void cookieDecode(uint64_t cookie, unsigned int *width,
 }
 
 // Configure a stream from the camera.
-static bool cameraStreamConfigure(StreamConfiguration &streamCfg,
+static bool cameraStreamConfigure(libcamera::StreamConfiguration &streamCfg,
                                   std::string pixelFormatStr,
                                   unsigned int widthPixels,
                                   unsigned int heightPixels)
@@ -898,6 +916,9 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
            errorCode = avcodec_send_frame(codecContext, avFrame);
             if (errorCode == 0) {
                 errorCode = videoOutput(codecContext, formatContext);
+                // Keep track of timing here, at the arse end,
+                // for debug purposes
+                monitorTimingUpdate(&gCameraStreamMonitorTiming);
             } else {
                 W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
             }
@@ -1004,7 +1025,7 @@ static int frameToViewAndLimit(const cv::Point *pointFrame, cv::Point *pointView
 }
 
 // Get the centre and area of a rectangle, limiting sensibly.
-static bool rectGetInfoAndLimit(const Rect *rect, wRectInfo_t *rectInfo)
+static bool rectGetInfoAndLimit(const cv::Rect *rect, wRectInfo_t *rectInfo)
 {
     bool isLimited = false;
 
@@ -1074,7 +1095,7 @@ static int findFocusFrame(const std::vector<std::vector<cv::Point>> contours,
             // Create a vector of the size and centre of the rectangles that
             // bound each contour and sort them in descending order of size
             for (auto contour: contours) {
-                Rect rect = boundingRect(contour);
+                cv::Rect rect = boundingRect(contour);
                 wRectInfo_t rectInfo;
                 rectGetInfoAndLimit(&rect, &rectInfo);
                 rectInfos.push_back(rectInfo);
@@ -1322,8 +1343,8 @@ static void imageProcessingLoop()
             // a gray-scale image using CV_8UC1, which can be processed
             // quickly. Note that OpenCV is operating in-place on the
             // data, it does not perform a copy
-            Mat frameOpenCvGray(buffer.height, buffer.width, CV_8UC1,
-                                buffer.data, buffer.stride);
+            cv::Mat frameOpenCvGray(buffer.height, buffer.width, CV_8UC1,
+                                    buffer.data, buffer.stride);
 
             // Update the background model: this will cause moving areas to
             // appear as pixels with value 255, stationary areas to appear
@@ -1333,20 +1354,20 @@ static void imageProcessingLoop()
             // Apply thresholding to the foreground mask to remove shadows:
             // anything below the first number becomes zero, anything above
             // the first number becomes the second number
-            Mat maskThreshold(buffer.height, buffer.width, CV_8UC1);
-            threshold(gMaskForeground, maskThreshold, 25, 255, THRESH_BINARY);
+            cv::Mat maskThreshold(buffer.height, buffer.width, CV_8UC1);
+            cv::threshold(gMaskForeground, maskThreshold, 25, 255, cv::THRESH_BINARY);
             // Perform erosions and dilations on the mask that will remove
             // any small blobs
-            Mat element = getStructuringElement(MORPH_ELLIPSE, cv::Size(3, 3));
-            Mat maskDeblobbed(buffer.height, buffer.width, CV_8UC1);
-            morphologyEx(maskThreshold, maskDeblobbed, MORPH_OPEN, element);
+            cv::Mat element = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+            cv::Mat maskDeblobbed(buffer.height, buffer.width, CV_8UC1);
+            cv::morphologyEx(maskThreshold, maskDeblobbed, cv::MORPH_OPEN, element);
 
             // Find the edges of the moving areas, the ones with pixel value 255
             // in the thresholded/deblobbed mask
             std::vector<std::vector<cv::Point>> contours;
-            std::vector<Vec4i> hierarchy;
-            findContours(maskDeblobbed, contours, hierarchy,
-                         RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+            std::vector<cv::Vec4i> hierarchy;
+            cv::findContours(maskDeblobbed, contours, hierarchy,
+                             cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
             // Filter the edges to keep just the major ones
             std::vector<std::vector<cv::Point>> largeContours;
@@ -1368,26 +1389,26 @@ static void imageProcessingLoop()
 #if 1
             // Draw bounding boxes
             for (auto contour: largeContours) {
-                Rect rect = boundingRect(contour);
+                cv::Rect rect = boundingRect(contour);
                 rectangle(frameOpenCvGray, rect,
                           W_DRAWING_SHADE_MOVING_OBJECTS,
                           W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS);
             }
 #else
             // Draw the wiggly edges
-            drawContours(frameOpenCvGray, largeContours, 0,
-                         W_DRAWING_SHADE_MOVING_OBJECTS,
-                         W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS,
-                         LINE_8, hierarchy, 0);
+            cv::drawContours(frameOpenCvGray, largeContours, 0,
+                             W_DRAWING_SHADE_MOVING_OBJECTS,
+                             W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS,
+                             LINE_8, hierarchy, 0);
 #endif
 
             // Draw the current focus onto the gray OpenCV frame
             point = pointProtectedGet(&gFocusPointView);
             if (viewToFrameAndLimit(&point, &point) == 0) {
-                circle(frameOpenCvGray, point,
-                       W_DRAWING_RADIUS_FOCUS_CIRCLE,
-                       W_DRAWING_SHADE_FOCUS_CIRCLE,
-                       W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
+                cv::circle(frameOpenCvGray, point,
+                           W_DRAWING_RADIUS_FOCUS_CIRCLE,
+                           W_DRAWING_SHADE_FOCUS_CIRCLE,
+                           W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
             }
 
            // Stream the camera frame via FFmpeg: avFrameQueuePush()
@@ -1412,21 +1433,21 @@ static void imageProcessingLoop()
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: CALLBACKS
+ * STATIC FUNCTIONS: LIBCAMERA CALLBACK
  * -------------------------------------------------------------- */
 
 // Handle a requestCompleted event from a camera.
-static void requestCompleted(Request *request)
+static void requestCompleted(libcamera::Request *request)
 {
     cv::Point point;
 
-    if (request->status() != Request::RequestCancelled) {
+    if (request->status() != libcamera::Request::RequestCancelled) {
 
-       const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
+       const std::map<const libcamera::Stream *, libcamera::FrameBuffer *> &buffers = request->buffers();
 
        for (auto bufferPair : buffers) {
-            FrameBuffer *buffer = bufferPair.second;
-            const FrameMetadata &metadata = buffer->metadata();
+            libcamera::FrameBuffer *buffer = bufferPair.second;
+            const libcamera::FrameMetadata &metadata = buffer->metadata();
 
             // Grab the stream's width, height and stride, all of which
             // is encoded in the buffer's cookie when we associated it
@@ -1449,37 +1470,41 @@ static void requestCompleted(Request *request)
                                                               PROT_READ | PROT_WRITE, MAP_SHARED,
                                                               buffer->planes()[0].fd.get(), 0));
 
-            // Pass a copy of the camera frame to the image processing queue
-            uint8_t *data = (uint8_t *) malloc(dmaBufferLength);
-            if (data) {
-                memcpy(data, dmaBuffer, dmaBufferLength);
-                wBuffer_t buffer = {.width = width,
-                                    .height = height,
-                                    .stride = stride,
-                                    .sequence = metadata.sequence,
-                                    .data = data,
-                                    .length = dmaBufferLength};
-                unsigned int queueLength = imageProcessingQueuePush(&buffer);
-                if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
-                    (queueLength != gImageProcessingListSize)) {
-                    // Print the size of the backlog once a second if it has changed
-                    W_LOG_DEBUG("backlog %d frame in image processing queue(s)",
-                                queueLength);
-                    gImageProcessingListSize = queueLength;
+            if (dmaBuffer != MAP_FAILED) {
+                // Pass a copy of the camera frame to the image processing queue
+                uint8_t *data = (uint8_t *) malloc(dmaBufferLength);
+                if (data) {
+                    memcpy(data, dmaBuffer, dmaBufferLength);
+                    wBuffer_t buffer = {.width = width,
+                                        .height = height,
+                                        .stride = stride,
+                                        .sequence = metadata.sequence,
+                                        .data = data,
+                                        .length = dmaBufferLength};
+                    unsigned int queueLength = imageProcessingQueuePush(&buffer);
+                    if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
+                        (queueLength != gImageProcessingListSize)) {
+                        // Print the size of the backlog once a second if it has changed
+                        W_LOG_DEBUG("backlog %d frame in image processing queue(s)",
+                                    queueLength);
+                        gImageProcessingListSize = queueLength;
+                    }
+                    gCameraStreamFrameCount++;
+                } else {
+                    W_LOG_ERROR("unable to allocate %d byte(s) for image buffer,"
+                                " a frame has been lost.",
+                                dmaBufferLength);
                 }
-                gCameraStreamFrameCount++;
+                // Done with the mapping now
+                munmap(dmaBuffer, dmaBufferLength);
             } else {
-                W_LOG_ERROR("unable to allocate %d byte(s) for image buffer,"
-                            " a frame has been lost.",
-                            dmaBufferLength);
+                W_LOG_ERROR("mmap() returned error %d, a frame has been lost.",
+                            errno);
             }
 
             // Re-use the request
-            request->reuse(Request::ReuseBuffers);
+            request->reuse(libcamera::Request::ReuseBuffers);
             gCamera->queueRequest(request);
-
-            // Keep track of timing for debug purposes
-            monitorTimingUpdate(&gCameraStreamMonitorTiming);
         }
     }
 }
@@ -1500,7 +1525,7 @@ int main()
     AVStream *avStream = nullptr;
 
     // Create and start a camera manager instance
-    std::unique_ptr<CameraManager> cm = std::make_unique<CameraManager>();
+    std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
     cm->start();
 
     // List the available cameras
@@ -1533,13 +1558,13 @@ int main()
         gCamera->acquire();
 
         // Configure the camera with the stream
-        std::unique_ptr<CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
+        std::unique_ptr<libcamera::CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
         cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
                               W_CAMERA_STREAM_WIDTH_PIXELS,
                               W_CAMERA_STREAM_HEIGHT_PIXELS);
 
         // Validate and apply the configuration
-        if (cameraCfg->validate() != CameraConfiguration::Valid) {
+        if (cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
             W_LOG_DEBUG("libcamera will adjust those values.");
         }
         gCamera->configure(cameraCfg.get());
@@ -1556,7 +1581,7 @@ int main()
         W_LOG_INFO_END;
 
         // Allocate frame buffers
-        FrameBufferAllocator *allocator = new FrameBufferAllocator(gCamera);
+        libcamera::FrameBufferAllocator *allocator = new libcamera::FrameBufferAllocator(gCamera);
         errorCode = 0;
         for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
             errorCode = allocator->allocate(cfg->stream());
@@ -1572,14 +1597,14 @@ int main()
         if (errorCode == 0) {
             W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
             // Create a queue of requests using the allocated buffers
-            std::vector<std::unique_ptr<Request>> requests;
+            std::vector<std::unique_ptr<libcamera::Request>> requests;
             for (auto cfg: *cameraCfg) {
-                Stream *stream = cfg.stream();
-                const std::vector<std::unique_ptr<FrameBuffer>> &buffers = allocator->buffers(stream);
+                libcamera::Stream *stream = cfg.stream();
+                const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = allocator->buffers(stream);
                 for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
-                    std::unique_ptr<Request> request = gCamera->createRequest();
+                    std::unique_ptr<libcamera::Request> request = gCamera->createRequest();
                     if (request) {
-                        const std::unique_ptr<FrameBuffer> &buffer = buffers[x];
+                        const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[x];
                         errorCode = request->addBuffer(stream, buffer.get());
                         if (errorCode == 0) {
                             // Encode the width, height and stride into the cookie of
@@ -1625,10 +1650,11 @@ int main()
                     // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
                     // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
                     // in the output.
-                    // Note: we don't apply hls_time, to set the segment size, here; instead we use
-                    // that to set the "gop_size" of the codec, which is the distance between key-frames,
-                    // and then the HLS muxer picks that up and uses it as the segment size, which is much
-                    // better, since it ensures a key-frame at the start of every segment.
+                    // Note: we don't apply hls_time, to set the segment size, here; instead we set
+                    // the "gop_size" of the codec, which is the distance between key-frames, to
+                    // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
+                    // as the segment size, which is much better, since it ensures a key-frame at the
+                    // start of every segment.
                     if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
                         (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
                         (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
@@ -1712,7 +1738,7 @@ int main()
                 }
                 if (errorCode == 0) {
                     // Now set up the OpenCV background subtractor object
-                    gBackgroundSubtractor = createBackgroundSubtractorMOG2();
+                    gBackgroundSubtractor = cv::createBackgroundSubtractorMOG2();
                     if (gBackgroundSubtractor) {
                         // We have not yet set any of the controls for the camera;
                         // the only one we care about here is the frame rate,
@@ -1720,11 +1746,12 @@ int main()
                         // and a maximum, setting both the same fixes the rate.
                         // We create a camera control list and pass it to
                         // the start() method when we start the camera.
-                        ControlList cameraControls;
+                        libcamera::ControlList cameraControls;
                         // Units are microseconds.
                         int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
-                        cameraControls.set(controls::FrameDurationLimits, Span<const std::int64_t, 2>({frameDurationLimit,
-                                                                                                       frameDurationLimit}));
+                        cameraControls.set(libcamera::controls::FrameDurationLimits,
+                                           libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
+                                                                                   frameDurationLimit}));
                         // Attach the requestCompleted() handler
                         // function to its events and start the camera,
                         // everything else happens in the callback function
@@ -1747,9 +1774,10 @@ int main()
                         system("rm " W_HLS_PLAYLIST_FILE_NAME);
                         system("rm " W_HLS_FILE_NAME_ROOT "*.ts"); 
 
+                        // Pedal to da metal
                         W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
                         gCamera->start(&cameraControls);
-                        for (std::unique_ptr<Request> &request: requests) {
+                        for (std::unique_ptr<libcamera::Request> &request: requests) {
                             gCamera->queueRequest(request.get());
                         }
 
@@ -1792,7 +1820,8 @@ int main()
         gCamera->release();
         gCamera.reset();
         // These are done last for safety as everything
-        // should have been flushed through above
+        // should already have been flushed through
+        // anyway above
         imageProcessingQueueClear();
         avFrameQueueClear();
         // Stop the control thread
@@ -1805,9 +1834,9 @@ int main()
                    gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
                    gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
                    gVideoStreamFrameOutputCount);
-        W_LOG_INFO("average frame gap (at end of camera processing) over"
-                   " last %d frames %lld ms (a rate of %lld frames/second),"
-                   " largest gap %lld ms.",
+        W_LOG_INFO("average frame gap (at end of video output) over the last"
+                   " %d frames %lld ms (a rate of %lld frames/second), largest"
+                   " gap %lld ms.",
                    W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
                    std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
                    1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
