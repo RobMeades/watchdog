@@ -1,0 +1,26 @@
+[Unit]
+Description=Run the watchdog
+
+# Wait for networking to have started
+After=network-online.target
+Wants=network-online.target systemd-networkd-wait-online.service
+
+# If the watchdog tries to restart twice within 15 seconds then
+# leave it stopped
+StartLimitIntervalSec=15
+StartLimitBurst=2
+
+[Service]
+# Start in the Apache-served directory
+WorkingDirectory=/home/http
+
+# Start the watchdog and put the video output in a video sub-directory
+# of WorkingDirectory
+ExecStart=/home/http/watchdog -d video
+
+# Restart the watchdog if it fails, with a 5 second wait
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

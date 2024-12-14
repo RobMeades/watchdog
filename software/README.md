@@ -183,6 +183,24 @@ sudo mount -a
 tmpfs             102400       0    102400   0% /home/http/video
 ```
 
+Since the watchdog will write logging output, and that will end up in the system log when watchdog is run as a service (see below), you should also move system logs to RAM, following the advice [here](https://pimylifeup.com/raspberry-pi-log2ram/#:~:text=When%20you%20reboot%20your%20Raspberry,at%20%E2%80%9C%20%2Fvar%2Fhdd.) i.e.:
+
+```
+sudo apt install rsync
+wget https://github.com/azlux/log2ram/archive/master.tar.gz -O log2ram.tar.gz
+tar xf log2ram.tar.gz
+cd log2ram-master
+sudo ./install.sh
+```
+
+Reboot for the changes to take effect and follow the instructions [here](https://github.com/azlux/log2ram?tab=readme-ov-file#is-it-working) to check that `log2ram` is working, primarily:
+
+```
+systemctl status log2ram
+```
+
+...and if it isn't working, take a look at the [troubleshooting section](https://github.com/azlux/log2ram?tab=readme-ov-file#troubleshooting).
+
 # Build/Run
 Clone this repo to the Pi, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:
 
@@ -203,6 +221,34 @@ Otherwise, the default (log level 1) is to run with information, warning and err
 
 # Serve
 To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `./watchdog -d video` from there to put your video output files in the `video` sub-directory.
+
+# Wstching Service
+To start the watchdog at boot, copy the file [watchdog.service](watchdog.service] from this directory, replacing `/home/http` with whatever you have chosen as `your_document_root`, into `/etc/systemd/system/`, then do:
+
+```
+sudo systemctl start watchdog
+sudo systemctl enable watchdog
+```
+
+Note: if you get the `.service` file onto the Pi with `sftp` or the like then you will need to convert the line-endings to Linux or `systemd` won't like it, see "A Note On Developing" below for how to do that.
+
+Check that the watchdog has atarted with:
+
+```
+sudo systemctl status watchdog
+ ```
+
+If it has not, take a look at what it said with:
+
+```
+sudo journalctl -u watchdog
+```
+
+...or, if it has, take a look at what it is saying with:
+
+```
+ sudo journalctl -u watchdog -f
+```
 
 # A Note On Developing
 Since this is a simple application, a single source file, I edited `watchdog.cpp` on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put` the file to the Pi before compiling in an `ssh` terminal to the Pi.  You can open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
