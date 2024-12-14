@@ -63,7 +63,7 @@ if (Hls.isSupported()) {
     //  alert("HLS error: \n" + JSON.stringify(data, null, 4));
     //});
 
-    hls.loadSource('watchdog.m3u8');
+    hls.loadSource('video/watchdog.m3u8');
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, startPlaying);
     hls.on(Hls.Events.ERROR, function (event, data) {
@@ -88,7 +88,7 @@ if (Hls.isSupported()) {
     // hls.js is not supported on platforms that do not have Media Source Extensions (MSE) enabled.
     // When the browser has built-in HLS support (check using `canPlayType`), we can provide an HLS manifest (i.e. .m3u8 URL) directly to the video element through the `src` property.
     // This is using the built-in support of the plain video element, without using hls.js.
-    video.src = 'watchdog.m3u8';
+    video.src = 'video/watchdog.m3u8';
     video.addEventListener('loadedmetadata', startPlaying);
 }
 </script>

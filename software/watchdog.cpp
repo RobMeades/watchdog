@@ -297,8 +297,8 @@ extern "C" {
 #endif
 
 #ifndef W_HLS_BASE_URL
-// The URL to serve from.
-# define W_HLS_BASE_URL "http://10.10.1.16/"
+// The URL to serve from (must NOT end with a "/").
+# define W_HLS_BASE_URL "http://10.10.1.16"
 #endif
 
 /* ----------------------------------------------------------------
@@ -1546,7 +1546,7 @@ static void requestCompleted(libcamera::Request *request)
 
 // Given a C string that is assumed to be a path, return the directory
 // portion of that as a C++ string.
-static std::string getDirectoryPath(const char *path, bool absolute)
+static std::string getDirectoryPath(const char *path, bool absolute=false)
 {
     std::string directoryPath;
 
@@ -1597,11 +1597,11 @@ static std::string getFileName(const char *path)
     return fileName;
 }
 
-// Process the command-line parameters.  If this function
-// returns an error and parameters is not nullptr, it will populate
+// Process the command-line parameters.  If this function returns
+// an error and parameters is not nullptr, it will populate
 // parameters with the defaults.
-static int processCommandLine(int argc, char *argv[],
-                              wCommandLineParameters_t *parameters)
+static int commandLineParse(int argc, char *argv[],
+                            wCommandLineParameters_t *parameters)
 {
     int errorCode = -EINVAL;
     int x = 0;
@@ -1611,7 +1611,7 @@ static int processCommandLine(int argc, char *argv[],
         parameters->outputDirectory = std::string(W_HLS_OUTPUT_DIRECTORY_DEFAULT);
         parameters->outputFileName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
         if ((argc > 0) && (argv)) {
-            // Find the exe name in the first argument
+            // Find the program name in the first argument
             parameters->programName = getFileName(argv[x]);
             x++;
             // Look for all the command line parameters
@@ -1623,7 +1623,7 @@ static int processCommandLine(int argc, char *argv[],
                     x++;
                     if (x < argc) {
                         errorCode = 0;
-                        std::string str = getDirectoryPath(argv[x], true);
+                        std::string str = getDirectoryPath(argv[x]);
                         if (!str.empty()) {
                             parameters->outputDirectory = str;
                         }
@@ -1716,7 +1716,7 @@ int main(int argc, char *argv[])
     wCommandLineParameters_t commandLineParameters;
 
    // Process the command-line parameters
-   if (processCommandLine(argc, argv, &commandLineParameters) == 0) {
+   if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
        commandLinePrintChoices(&commandLineParameters);
         // Create and start a camera manager instance
         std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
@@ -1853,7 +1853,10 @@ int main(int argc, char *argv[])
                         // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
                         // as the segment size, which is much better, since it ensures a key-frame at the
                         // start of every segment.
-                        if ((av_dict_set(&hlsOptions, "hls_base_url", W_HLS_BASE_URL, 0) == 0) &&
+                        if ((av_dict_set(&hlsOptions, "hls_base_url",
+                                         std::string(W_HLS_BASE_URL W_DIR_SEPARATOR +
+                                                     commandLineParameters.outputDirectory +
+                                                     W_DIR_SEPARATOR).c_str(), 0) == 0) &&
                             (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
                             (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
                             (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&

@@ -155,6 +155,34 @@ Restart Apache for the changes to take effect:
 sudo systemctl restart apache2
 ```
 
+# Increasing SD Card Life
+In order to increase the life of the SD card in the Pi, what with all of this video streaming activity, it is a good idea to create a RAM disk.  Edit `/etc/fstab` to append the following line, replacing `your_document_root` with wherever you put your Apache document root above; this will put the `video` sub-directory into RAM:
+
+```
+tmpfs your_document_root/video  tmpfs defaults,noatime,size=100m 0 0
+```
+
+If you are nervous about editing what is a vital file, run the following command to check that it is good before rebooting:
+
+```
+sudo findmnt --verify --verbose
+```
+
+If you haven't already created the directory `your_document_root/video` this will show up as an error; create it with `mkdir your_document_root/video`.
+
+To activate the changes:
+
+```
+sudo systemctl daemon-reload
+sudo mount -a
+```
+
+`df` should show a 100&nbsp;Mbyte `tmpfs` file system at `your_document_root/video`, e.g.:
+
+```
+tmpfs             102400       0    102400   0% /home/http/video
+```
+
 # Build/Run
 Clone this repo to the Pi, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:
 
@@ -174,7 +202,7 @@ LIBCAMERA_LOG_LEVELS=0 ./watchdog
 Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
 # Serve
-To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `./watchdog` from there.
+To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `./watchdog -d video` from there to put your video output files in the `video` sub-directory.
 
 # A Note On Developing
 Since this is a simple application, a single source file, I edited `watchdog.cpp` on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put` the file to the Pi before compiling in an `ssh` terminal to the Pi.  You can open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
