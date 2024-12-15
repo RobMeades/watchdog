@@ -5,29 +5,30 @@
 <body>
 
 <style>
-.btnDefault {
-    height: 155px;
-    width: 236px;
+.btn {
+    width: 950px;
+    height: 540px;
     background-image:url(play.png);
     background-repeat:no-repeat;
+    background-color: transparent;
+    border:0
 }
-.btnPlaying {
-    height: 155px; 
-    width: 236px;
-    background-image:url(playing.png);
-    background-repeat:no-repeat;
+.container .btn {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+}
+
+.container {
+  margin: 0 auto;
+  width: 100%;
 }
 </style>
 
-<center>
-<button class="btnDefault" id="play" hidden />
-</center>
-<center>
-<p>Video should load below: when it does, press above to play (5 second latency).</p>
-</center>
-<center>
-<video width="950" height="540" id="video"></video>
-</center>
+<div class="container">
+   <video width="950" height="540" id="video"></video>
+   <button class="btn" id="play" hidden />
+</div>
 
 <script>
 'use strict';
@@ -41,8 +42,7 @@ function startPlaying() {
     playButton.addEventListener('click', function() {
         video.play();
         video.muted = true;
-        playButton.classList.add('btnPlaying');
-        playButton.classList.remove('btn');
+        playButton.hidden = true;
     });
     playButton.hidden = false;
 }
@@ -66,7 +66,7 @@ if (Hls.isSupported()) {
     hls.loadSource('video/watchdog.m3u8');
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, startPlaying);
-    hls.on(Hls.Events.ERROR, function (event, data) {
+    hls.on(Hls.Events.ERROR, function(event, data) {
         if (data.fatal) {
             switch (data.type) {
                 case Hls.ErrorTypes.NETWORK_ERROR:

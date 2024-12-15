@@ -1896,8 +1896,16 @@ int main(int argc, char *argv[])
                                         // will emit a warning that frames having zero duration will mean
                                         // the HLS segment timing is orf
                                         avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
-                                        AVDictionary *codecOptions = nullptr; // Not currently used
-                                        if ((avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
+                                        AVDictionary *codecOptions = nullptr;
+                                        // Note: have to set "tune" to "zerolatency" below for the hls.js HLS
+                                        // client to work correctly: if you do not then hls.js will only work
+                                        // if it is started at exactly the same time as the served stream is
+                                        // first started and, also, without this setting hls.js will never
+                                        // regain sync should if fall off the stream.  I have no idea why; it
+                                        // took me a week of trial and error with a zillion settings to find
+                                        // this out.
+                                        if ((av_dict_set(&codecOptions, "tune", "zerolatency", 0) == 0) &&
+                                            (avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
                                             (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
                                             (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
                                             // avformat_write_header() and avcodec_open2() modify
@@ -1905,11 +1913,11 @@ int main(int argc, char *argv[])
                                             // found
                                             const AVDictionaryEntry *entry = nullptr;
                                             while ((entry = av_dict_iterate(hlsOptions, entry))) {
-                                                W_LOG_WARN("HLS option \"%s\" value \"%s\" not found.",
+                                                W_LOG_WARN("HLS option \"%s\", or value \"%s\", not found.",
                                                            entry->key, entry->value);
                                             }
                                             while ((entry = av_dict_iterate(codecOptions, entry))) {
-                                                W_LOG_WARN("Codec option \"%s\" value \"%s\" not found.",
+                                                W_LOG_WARN("Codec option \"%s\", or value \"%s\", not found.",
                                                            entry->key, entry->value);
                                             }
                                             // Don't see why this should be necessary (everything in here
@@ -1982,7 +1990,7 @@ int main(int argc, char *argv[])
                                                commandLineParameters.outputDirectory +
                                                W_DIR_SEPARATOR +
                                                commandLineParameters.outputFileName +
-                                               W_HLS_SEGMENT_FILE_EXTENSION +
+                                               "*" W_HLS_SEGMENT_FILE_EXTENSION +
                                                W_SYSTEM_SILENT).c_str());
 
                             // Make sure the output directory exists
