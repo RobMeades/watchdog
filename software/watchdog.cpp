@@ -62,6 +62,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <signal.h>
 
 // The libcamera stuff.
 #include <libcamera/libcamera.h>
@@ -457,6 +458,9 @@ typedef struct {
 /* ----------------------------------------------------------------
  * VARIABLES
  * -------------------------------------------------------------- */
+
+// Flag that tells us whether or not we've had a CTRL-C.
+volatile sig_atomic_t gTerminate = 0;
 
 // Pointer to camera: global as the requestCompleted() callback will use it.
 static std::shared_ptr<libcamera::Camera> gCamera = nullptr;
@@ -1544,6 +1548,12 @@ static void requestCompleted(libcamera::Request *request)
  * STATIC FUNCTIONS: COMMAND LINE STUFF
  * -------------------------------------------------------------- */
 
+// Catch a termination signal
+static void sighandler(int signal)
+{
+    gTerminate = 1;
+}
+
 // Given a C string that is assumed to be a path, return the directory
 // portion of that as a C++ string.
 static std::string getDirectoryPath(const char *path, bool absolute=false)
@@ -1715,9 +1725,12 @@ int main(int argc, char *argv[])
     AVStream *avStream = nullptr;
     wCommandLineParameters_t commandLineParameters;
 
-   // Process the command-line parameters
-   if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
-       commandLinePrintChoices(&commandLineParameters);
+    // Process the command-line parameters
+    if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
+        commandLinePrintChoices(&commandLineParameters);
+        // Capture CTRL-C so that exit in an organised fashion
+        signal(SIGINT, sighandler);
+
         // Create and start a camera manager instance
         std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
         cm->start();
@@ -1901,9 +1914,9 @@ int main(int argc, char *argv[])
                                         // client to work correctly: if you do not then hls.js will only work
                                         // if it is started at exactly the same time as the served stream is
                                         // first started and, also, without this setting hls.js will never
-                                        // regain sync should if fall off the stream.  I have no idea why; it
+                                        // regain sync should it fall off the stream.  I have no idea why; it
                                         // took me a week of trial and error with a zillion settings to find
-                                        // this out.
+                                        // this out
                                         if ((av_dict_set(&codecOptions, "tune", "zerolatency", 0) == 0) &&
                                             (avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
                                             (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
@@ -1998,15 +2011,17 @@ int main(int argc, char *argv[])
                                                commandLineParameters.outputDirectory).c_str());
 
                             // Pedal to da metal
-                            W_LOG_INFO("starting the camera and queueing requests (press <enter> to stop).");
+                            W_LOG_INFO("starting the camera and queueing requests (CTRL-C to stop).");
                             gCamera->start(&cameraControls);
                             for (std::unique_ptr<libcamera::Request> &request: requests) {
                                 gCamera->queueRequest(request.get());
                             }
 
-                            std::cin.get();
+                            while (!gTerminate) {
+                                sleep(1);
+                            }
 
-                            W_LOG_INFO("stopping the camera.");
+                            W_LOG_INFO("CTRL-C received, stopping the camera.");
                             gCamera->stop();
                         } else {
                             errorCode = -ENOMEM;
