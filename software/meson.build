@@ -14,4 +14,5 @@ watchdog = executable('watchdog',
                                      dependency('libavcodec', required: true),
                                      dependency('libavdevice', required: true),
                                      dependency('libavutil', required: true),
-                                     dependency('opencv4', required: true)])
+                                     dependency('opencv4', required: true),
+                                     dependency('libgpiod', required: true)])

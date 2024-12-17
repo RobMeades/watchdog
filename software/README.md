@@ -24,6 +24,8 @@ sudo apt update
 sudo apt upgrade
 ```
 
+## Camera
+
 Power the Pi down again and plug in the V3 camera.  Power-up the Pi once more, log in over `ssh` and check that an image can be captured from the camera with:
 
 ```
@@ -79,6 +81,8 @@ cam -c 1 -I
 
 ...displays the pixel formats supported, etc.
 
+## OpenCV
+
 Install [OpenCV](https://opencv.org/) and its development libraries with:
 
 ```
@@ -91,7 +95,9 @@ Install the dependencies for [FFmpeg](https://www.ffmpeg.org/) as follows; you p
 sudo apt install imagemagick libasound2-dev libass-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libfreetype6-dev libgmp-dev libmp3lame-dev libopencore-amrnb-dev libopencore-amrwb-dev libopus-dev librtmp-dev libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-net-dev libsdl2-ttf-dev libsnappy-dev libsoxr-dev libssh-dev libtool libv4l-dev libva-dev libvdpau-dev libvo-amrwbenc-dev libvorbis-dev libwebp-dev libx264-dev libx265-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb1-dev libxml2-dev lzma-dev nasm python3-dev python3-pip texinfo yasm zlib1g-dev libdrm-dev
 ```
 
-Then fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) with:
+## FFmpeg
+
+Fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) with:
 
 ```
 cd ~
@@ -103,6 +109,8 @@ sudo make install
 ```
 
 Note: for the PiZero2W replace `--arch=arm64` with `--arch=armel`.
+
+## Apache
 
 As a browser interface, being a traditionalist, I would suggest installing Apache with:
 
@@ -153,6 +161,13 @@ Restart Apache for the changes to take effect:
 
 ```
 sudo systemctl restart apache2
+```
+
+## GPIO
+To read and write GPIOs we need `libgpiod` (v1.6); install the development libraries with:
+
+```
+sudo apt install libgpiod-dev
 ```
 
 # Increasing SD Card Life
@@ -208,19 +223,19 @@ Clone this repo to the Pi, `cd` to the directory where you cloned it, then `cd` 
 meson setup build
 cd build
 ninja
-./watchdog
+sudo ./watchdog
 ```
 
 To run with maximum debug from [libcamera](https://libcamera.org/), use:
 
 ```
-LIBCAMERA_LOG_LEVELS=0 ./watchdog
+LIBCAMERA_LOG_LEVELS=0 sudo ./watchdog
 ```
 
 Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
 # Serve
-To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `./watchdog -d video` from there to put your video output files in the `video` sub-directory.
+To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.
 
 # Wstching Service
 To start the watchdog at boot, copy the file [watchdog.service](watchdog.service] from this directory, replacing `/home/http` with whatever you have chosen as `your_document_root`, into `/etc/systemd/system/`, then do:

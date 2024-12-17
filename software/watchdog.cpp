@@ -19,7 +19,7 @@
  * multiple files with proper APIs between the image processing,
  * image streaming and control parts (there are queues between them for
  * this purpose) but since I'm editing on a PC and running on a
- * headless Raspbarry Pi, having a single .cpp file that I can sftp
+ * headless Raspberry Pi, having a single .cpp file that I can sftp
  * between the two makes life a lot simpler  Sorry software gods.
  *
  * This code makes use of:
@@ -35,15 +35,19 @@
  *   encode a HLS-format video output stream; appalling documentation
  *   (99% of people seem to use it via the command-line) and support
  *   only via IRC.
+ * - libgpiod: to read/write GPIO pins.  Note that the Raspberry Pi 5
+ *   is different to all of the other Pis where GPIOs are concerned,
+ *   see http://git.munts.com/muntsos/doc/AppNote11-link-gpiochip.pdf,
+ *   in case this happens again.
  *
  * Note: to run with maximum debug from libcamera, execute this program
  * as:
  *
- * LIBCAMERA_LOG_LEVELS=0 ./watchdog
+ * LIBCAMERA_LOG_LEVELS=0 sudo ./watchdog
  *
  * ...or to switch all debug output off:
  *
- * LIBCAMERA_LOG_LEVELS=3 ./watchdog
+ * LIBCAMERA_LOG_LEVELS=3 sudo ./watchdog
  *
  * The default is to run with  log level 1, which includes
  * information, warning and errors from libcamera, but not pure debug.
@@ -61,8 +65,11 @@
 // The Linux/Posix stuff.
 #include <sys/mman.h>
 #include <sys/time.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 #include <signal.h>
+#include <poll.h>
+#include <gpiod.h>
 
 // The libcamera stuff.
 #include <libcamera/libcamera.h>
@@ -312,6 +319,115 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: GPIO RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT
+// The GPIO input pin that detects the state of the "look left limit"
+// switch as one is standing behind the watchdog, looking out of
+// the watchdog's eyes, i.e. it is the limit switch on the _right_
+// side of the collar as one is standing behind the watchdog.
+# define W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT 0
+#endif
+
+#ifndef W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT
+// The GPIO input pin that detects the state of the "look right limit"
+// switch as one is standing behind the watchdog, looking out of
+// the watchdog's eyes, i.e. it is the limit switch on the _left_
+// side of the collar as one is standing behind the watchdog.
+# define W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT 0
+#endif
+
+#ifndef W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT
+// The GPIO input pin detecting the state of the "look down limit", i.e.
+// the switch on the front of the watchdog's body.
+# define W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT 0
+#endif
+
+#ifndef W_GPIO_PIN_INPUT_LOOK_UP_LIMIT
+// The GPIO input pin detecting the state of the "look up limit", i.e.
+// the switch on the rear of the watchdog's body.
+# define W_GPIO_PIN_INPUT_LOOK_UP_LIMIT 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_ROTATE_ENABLE
+// The GPIO output pin that enables the stepper motor that rotates the
+// watchdog's head.
+# define W_GPIO_PIN_OUTPUT_ROTATE_ENABLE 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION
+// The GPIO output pin that sets the direction of rotation: 1 for clock-wise,
+// 0 for anti-clockwise.
+# define W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_ROTATE_STEP
+// The GPIO output pin that, when pulsed, causes the rotation stepper motor
+// to move one step.
+# define W_GPIO_PIN_OUTPUT_ROTATE_STEP 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE
+// The GPIO output pin that enables the stepper motor that lowers and
+// raises the watchdog's head.
+# define W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION
+// The GPIO output pin that sets the direction of vertical motion: 1 for,
+// down, 0 for up.
+# define W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_STEP
+// The GPIO output pin that, when pulsed, causes the vertical stepper motor
+// to move one step.
+# define W_GPIO_PIN_OUTPUT_VERTICAL_STEP 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_EYE_LEFT
+// The GPIO pin driving the LED in the left eye of the watchdog.
+# define W_GPIO_PIN_OUTPUT_EYE_LEFT 0
+#endif
+
+#ifndef W_GPIO_PIN_OUTPUT_EYE_RIGHT
+// The GPIO pin driving the LED in the right eye of the watchdog.
+# define W_GPIO_PIN_OUTPUT_EYE_RIGHT 0
+#endif
+
+#ifndef W_GPIO_CHIP_NUMBER
+// The number of the GPIO chip to use: must be 4 for a Pi 5 as that's
+// the chip that is wired to the header pins.
+# define W_GPIO_CHIP_NUMBER 4
+#endif
+
+#ifndef W_GPIO_CONSUMER_NAME
+// A string to identify us as a consumer of a GPIO pin.
+# define W_GPIO_CONSUMER_NAME "watchdog"
+#endif
+
+#ifndef W_GPIO_DEBOUNCE_THRESHOLD
+// The number of times an input pin must have read a consistently
+// different level to the current level for us to believe that it
+// really has changed state.  With a GPIO tick timer of 1 ms and
+// four input pins, that means that the pin must have read the same
+// level for a full 12 milliseconds before we believe it.
+# define W_GPIO_DEBOUNCE_THRESHOLD 3
+#endif
+
+#ifndef W_GPIO_TICK_TIMER_PERIOD_US
+// The GPIO tick timer period in microseconds: this is used to
+// debounce the input pins, reading one each time, so will
+// run around the four inputs once every fourth period, so using
+// 1 millisecond here would mean an input line is read every
+// 4 milliseconds and so a W_GPIO_DEBOUNCE_THRESHOLD of 3 would
+// mean that a GPIO would need to have read a consistent level
+// for 12 milliseconds.
+# define W_GPIO_TICK_TIMER_PERIOD_US 1000
+#endif
+
+/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LOGGING
  * -------------------------------------------------------------- */
 
@@ -445,7 +561,30 @@ typedef struct {
 } wMsgContainer_t;
 
 /* ----------------------------------------------------------------
- * TYPES: MISC
+ * TYPES: GPIO RELATED
+ * -------------------------------------------------------------- */
+
+// A GPIO input debouncer.
+typedef struct {
+    struct gpiod_line *line;
+    unsigned int notLevelCount;
+} wGpioDebounce_t;
+
+// A GPIO input pin and its state.
+typedef struct {
+    unsigned int pin;
+    unsigned int level;
+    wGpioDebounce_t debounce;
+} wGpioInput_t;
+
+// A GPIO output pin and the state it should be initialised to.
+typedef struct {
+    unsigned int pin;
+    unsigned int initialLevel;
+} wGpioOutput_t;
+
+/* ----------------------------------------------------------------
+ * TYPES: COMMAND-LINE RELATED
  * -------------------------------------------------------------- */
 
 // Parameters passed to this program.
@@ -522,9 +661,47 @@ static std::mutex gMsgContainerListMutex;
 static unsigned int gMsgBodySize[] = {0,  // Not used
                                       sizeof(wMsgBodyFocusChange_t)};
 
-// Flag to track that we're running (so that the threads know when
-// to exit).
-static bool gRunning = false;
+// Our GPIO chip.
+static gpiod_chip *gGpioChip = nullptr;
+
+// Array of GPIO input pins.
+static wGpioInput_t gGpioInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT}};
+
+// Array of GPIO output pins with their initial levels.
+static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_ENABLE,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_STEP,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT,
+                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT,
+                                          .initialLevel = 0}};
+
+// Counter of where the GPIO tick handler is in the set of input pins.
+static unsigned int gGpioInputPinIndex = 0;
+
+// Monitor the number of times we've read GPIOs.
+static uint64_t gGpioInputReadCount = 0;
+
+// Monitor the start and stop time of GPIO reading, purely for debug
+// purposes
+static std::chrono::system_clock::time_point gGpioInputReadStart;
+static std::chrono::system_clock::time_point gGpioInputReadStop;
+
+// Remember the number of times the GPIO read thread has not been called
+// dead on time, purely for debug
+static uint64_t gGpioInputReadSlipCount = 0;
 
 // Array of log prefixes for the different log types.
 static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
@@ -804,6 +981,9 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         avFrame->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
         avFrame->pts = sequenceNumber;
         avFrame->duration = 1;
+        // avFrameFreeCallback() is the function which ultimately frees
+        // the video data we are passing around, once the video codec has
+        // finished with it
         avFrame->buf[0] = av_buffer_create(data, length,
                                            avFrameFreeCallback,
                                            (void *) (uint64_t) sequenceNumber,
@@ -829,6 +1009,8 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
             if (queueLength < W_AVFRAME_LIST_MAX_ELEMENTS) {
                 errorCode = queueLength + 1;
                 try {
+                    // Ownership of the data in the frame
+                    // effectively passes to videoEncodeLoop()
                     gAvFrameList.push_back(avFrame);
                     gVideoStreamFrameInputCount++;
                 }
@@ -945,14 +1127,18 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
     int32_t errorCode = 0;
     AVFrame *avFrame = nullptr;
 
-    while (gRunning) {
+    while (!gTerminate) {
         if (avFrameQueueTryPop(&avFrame) == 0) {
             // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
-           errorCode = avcodec_send_frame(codecContext, avFrame);
+            // Ownership of the data in the frame now passes
+            // to the video codec and will be free'd by
+            // avFrameFreeCallback()
+            errorCode = avcodec_send_frame(codecContext, avFrame);
             if (errorCode == 0) {
                 errorCode = videoOutput(codecContext, formatContext);
-                // Keep track of timing here, at the arse end,
-                // for debug purposes
+                // Keep track of timing here, at the end of the 
+                // complicated camera/video-frame antics, for debug
+                // purposes
                 monitorTimingUpdate(&gCameraStreamMonitorTiming);
             } else {
                 W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
@@ -1186,6 +1372,233 @@ static cv::Point pointProtectedGet(wPointProtected_t *pointProtected)
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: GPIO RELATED
+ * -------------------------------------------------------------- */
+
+// Return the line for a GPIO pin, opening the chip if necessary.
+static struct gpiod_line *gpioLineGet(unsigned int pin)
+{
+    struct gpiod_line *line = nullptr;
+
+    if (!gGpioChip) {
+        gGpioChip = gpiod_chip_open_by_number(W_GPIO_CHIP_NUMBER);
+    }
+    if (gGpioChip) {
+        line = gpiod_chip_get_line(gGpioChip, pin);
+    }
+
+    return line;
+}
+
+// Release a GPIO pin if it has been taken before.
+static void gpioRelease(struct gpiod_line *line)
+{
+    if (gpiod_line_consumer(line) != nullptr) {
+        gpiod_line_release(line);
+    }
+}
+
+// Check if a GPIO pin has already been configured as an output.
+static bool gpioIsOutput(struct gpiod_line *line)
+{
+    return ((gpiod_line_consumer(line) != nullptr) &&
+            (gpiod_line_direction(line) == GPIOD_LINE_DIRECTION_OUTPUT));
+}
+
+// Configure a GPIO pin.
+static int gpioCfg(unsigned int pin, bool isOutput, unsigned int level = 0)
+{
+    int errorCode = -EINVAL;
+    struct gpiod_line *line = gpioLineGet(pin);
+
+    if (line) {
+        gpioRelease(line);
+        if (isOutput) {
+            errorCode = gpiod_line_request_output(line,
+                                                  W_GPIO_CONSUMER_NAME,
+                                                  level);
+        } else {
+            errorCode = gpiod_line_request_input(line,
+                                                 W_GPIO_CONSUMER_NAME);
+        }
+    }
+
+    return errorCode;
+}
+
+// Set the state of a GPIO pin.
+static int gpioSet(unsigned int pin, unsigned int level)
+{
+    int errorCode = -EINVAL;
+    struct gpiod_line *line = gpioLineGet(pin);
+
+    if (line) {
+        if (gpioIsOutput(line)) {
+            errorCode = gpiod_line_set_value(line, level);
+        } else {
+            gpioRelease(line);
+            errorCode = gpiod_line_request_output(line,
+                                                  W_GPIO_CONSUMER_NAME,
+                                                  level);
+        }
+    }
+
+    return errorCode;
+}
+
+// Get the state of a GPIO pin.
+static int gpioGet(unsigned int pin)
+{
+    int levelOrErrorCode = -EINVAL;
+
+    struct gpiod_line *line = gpioLineGet(pin);
+    if (line) {
+        levelOrErrorCode = gpiod_line_get_value(line);
+    }
+
+    return levelOrErrorCode;
+}
+
+// GPIO task/thread/thing to debounce inputs and provide a stable
+// input level in gGpioInputPin[].
+//
+// Note: it would have been nice to read the GPIOs in a signal handler
+// directly but the libgpiod functions are not async-safe (brgl,
+// author of libgpiod, confirmed this), hence we use a timer and read
+// the GPIOs in this thread, triggered from that timer.  This loop
+// should be run at max priority and we monitor whether any timer ticks
+// are missed in gGpioInputReadSlipCount.
+static void gpioReadLoop(int timerFd)
+{
+    unsigned int level;
+    uint64_t numExpiriesSaved = 0;
+    uint64_t numExpiries;
+    uint64_t numExpiriesPassed;
+    struct pollfd pollFd[1] = {0};
+    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
+    sigset_t sigMask;
+
+    pollFd[0].fd = timerFd;
+    pollFd[0].events = POLLIN | POLLERR | POLLHUP;
+    sigemptyset(&sigMask);
+    sigaddset(&sigMask, SIGINT);
+    gGpioInputReadStart = std::chrono::system_clock::now();
+    while (!gTerminate) {
+        // Block waiting for the timer to go off for up to a time,
+        // or for CTRL-C to land; when the timer goes off the number
+        // of times it has expired is returned in numExpiries
+        if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
+            (read(timerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+            gGpioInputReadCount++;
+            numExpiriesPassed = numExpiries - numExpiriesSaved;
+            if (numExpiriesPassed > 1) {
+                gGpioInputReadSlipCount += numExpiriesPassed - 1;
+            }
+            // Read the level from the next input pin in the array
+            wGpioInput_t *gpioInput = &(gGpioInputPin[gGpioInputPinIndex]);
+            level = gpiod_line_get_value(gpioInput->debounce.line);
+            if (gpioInput->level != level) {
+                // Level is different to the last stable level, increment count
+                gpioInput->debounce.notLevelCount++;
+                if (gpioInput->debounce.notLevelCount > W_GPIO_DEBOUNCE_THRESHOLD) {
+                    // Count is big enough that we're sure, set the level and
+                    // reset the count
+                    gpioInput->level = level;
+                    gpioInput->debounce.notLevelCount = 0;
+                }
+            } else {
+                // Current level is the same as the stable level, zero the change count
+                gpioInput->debounce.notLevelCount = 0;
+            }
+
+            // Next input pin next time
+            gGpioInputPinIndex++;
+            if (gGpioInputPinIndex >= W_ARRAY_COUNT(gGpioInputPin)) {
+                gGpioInputPinIndex = 0;
+            }
+            numExpiriesSaved = numExpiries;
+        }
+    }
+    gGpioInputReadStop = std::chrono::system_clock::now();
+}
+
+// Initialise the GPIO pins and return the file handle of a timer
+// that can be used in gpioInputLoop() to perform debouncing.
+static int gpioInit()
+{
+    int fdOrerrorCode = 0;
+
+    // Configure all of the input pins and
+    // get their initial states
+    for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
+                       (fdOrerrorCode == 0); x++) {
+        wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
+        fdOrerrorCode = gpioCfg(gpioInput->pin, false);
+        if (fdOrerrorCode == 0) {
+            gpioInput->level = gpioGet(gpioInput->pin);
+            gpioInput->debounce.line = gpioLineGet(gpioInput->pin);
+            gpioInput->debounce.notLevelCount = 0;
+        } else {
+            W_LOG_ERROR("unable to set pin %d as an input!",
+                        gpioInput->pin);
+        }
+    }
+
+    // Configure all of the output pins to their
+    // initial states
+    for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioOutputPin)) &&
+                       (fdOrerrorCode == 0); x++) {
+        wGpioOutput_t *gpioOutput = &(gGpioOutputPin[x]);
+        fdOrerrorCode = gpioCfg(gpioOutput->pin, true, gpioOutput->initialLevel);
+        if (fdOrerrorCode != 0) {
+            W_LOG_ERROR("unable to set pin %d as an output and %s!",
+                        gpioOutput->pin,
+                        gpioOutput->initialLevel ? "high" : "low");
+        }
+    }
+
+    if (fdOrerrorCode == 0) {
+        // Set up a tick to drive gpioInputLoop()
+        fdOrerrorCode = timerfd_create(CLOCK_MONOTONIC, 0);
+        if (fdOrerrorCode >= 0) {
+            struct itimerspec timerSpec = {0};
+            timerSpec.it_value.tv_nsec = W_GPIO_TICK_TIMER_PERIOD_US * 1000;
+            timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+            if (timerfd_settime(fdOrerrorCode, 0, &timerSpec, nullptr) != 0) {
+                close(fdOrerrorCode);
+                fdOrerrorCode = -errno;
+                W_LOG_ERROR("unable to set signal action or set timer, error code %d.",
+                            fdOrerrorCode);
+            }
+        } else {
+            fdOrerrorCode = -errno;
+            W_LOG_ERROR("unable to create timer, error code %d.", fdOrerrorCode);
+        }
+    }
+
+    return fdOrerrorCode;
+}
+
+// Deinitialise the GPIO pins.
+static void gpioDeinit()
+{
+    struct gpiod_line *line;
+
+    for (size_t x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
+        line = gpioLineGet(x);
+        if (line) {
+            gpioRelease(line);
+        }
+    }
+    for (size_t x = 0; x < W_ARRAY_COUNT(gGpioOutputPin); x++) {
+        line = gpioLineGet(x);
+        if (line) {
+            gpioRelease(line);
+        }
+    }
+}
+
+/* ----------------------------------------------------------------
  * STATIC FUNCTIONS: CONTROL THREAD RELATED
  * -------------------------------------------------------------- */
 
@@ -1280,7 +1693,7 @@ static void controlLoop()
 {
     wMsgContainer_t msg;
 
-    while (gRunning) {
+    while (!gTerminate) {
         if (controlQueueTryPop(&msg) == 0) {
             switch (msg.type) {
                 case W_MSG_TYPE_NONE:
@@ -1370,7 +1783,7 @@ static void imageProcessingLoop()
     wBuffer_t buffer;
     cv::Point point;
 
-    while (gRunning) {
+    while (!gTerminate) {
         if (imageProcessingQueueTryPop(&buffer) == 0) {
             // Do the OpenCV things.  From the comment on this post:
             // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
@@ -1446,8 +1859,8 @@ static void imageProcessingLoop()
                            W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
             }
 
-           // Stream the camera frame via FFmpeg: avFrameQueuePush()
-           // will free the image data buffer we were passed
+            // Stream the camera frame via FFmpeg: avFrameQueuePush()
+            // will free the image data buffer we were passed
             unsigned int queueLength = avFrameQueuePush(buffer.data, buffer.length,
                                                         buffer.sequence,
                                                         buffer.width,
@@ -1549,7 +1962,7 @@ static void requestCompleted(libcamera::Request *request)
  * -------------------------------------------------------------- */
 
 // Catch a termination signal
-static void sighandler(int signal)
+static void terminateSignalHandler(int signal)
 {
     gTerminate = 1;
 }
@@ -1707,6 +2120,8 @@ static void commandLinePrintHelp(wCommandLineParameters_t *defaults)
         std::cout << " (default " << defaults->outputFileName << ")";
     }
     std::cout << "." << std::endl;
+    std::cout << "Note that this program needs to be able to change scheduling";
+    std::cout << " priority which requires elevated privileges." << std::endl;
 }
 
 /* ----------------------------------------------------------------
@@ -1717,19 +2132,21 @@ static void commandLinePrintHelp(wCommandLineParameters_t *defaults)
 int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
-    std::thread controlThread;
-    std::thread imageProcessingThread;
-    std::thread videoEncodeThread;
+    wCommandLineParameters_t commandLineParameters;
     AVFormatContext *avFormatContext = nullptr;
     AVCodecContext *avCodecContext = nullptr;
     AVStream *avStream = nullptr;
-    wCommandLineParameters_t commandLineParameters;
+    int timerFd = -1;
+    std::thread gpioReadThread;
+    std::thread controlThread;
+    std::thread imageProcessingThread;
+    std::thread videoEncodeThread;
 
     // Process the command-line parameters
     if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
         commandLinePrintChoices(&commandLineParameters);
         // Capture CTRL-C so that exit in an organised fashion
-        signal(SIGINT, sighandler);
+        signal(SIGINT, terminateSignalHandler);
 
         // Create and start a camera manager instance
         std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
@@ -1979,50 +2396,70 @@ int main(int argc, char *argv[])
                             // everything else happens in the callback function
                             gCamera->requestCompleted.connect(requestCompleted);
 
-                            gRunning = true;
-
-                            // Kick off a control thread
-                            controlThread = std::thread(controlLoop);
-
-                            // Kick off a thread to encode video frames
-                            videoEncodeThread = std::thread{videoEncodeLoop,
-                                                            avCodecContext,
-                                                            avFormatContext}; 
-
-                            // Kick off our image processing thread
-                            imageProcessingThread = std::thread(imageProcessingLoop);
-
-                            // Remove any old files for a clean start
-                            system(std::string("rm " +
-                                               commandLineParameters.outputDirectory +
-                                               W_DIR_SEPARATOR +
-                                               commandLineParameters.outputFileName +
-                                               W_HLS_PLAYLIST_FILE_EXTENSION +
-                                               W_SYSTEM_SILENT).c_str() );
-                            system(std::string("rm " +
-                                               commandLineParameters.outputDirectory +
-                                               W_DIR_SEPARATOR +
-                                               commandLineParameters.outputFileName +
-                                               "*" W_HLS_SEGMENT_FILE_EXTENSION +
-                                               W_SYSTEM_SILENT).c_str());
-
-                            // Make sure the output directory exists
-                            system(std::string("mkdir -p " +
-                                               commandLineParameters.outputDirectory).c_str());
-
-                            // Pedal to da metal
-                            W_LOG_INFO("starting the camera and queueing requests (CTRL-C to stop).");
-                            gCamera->start(&cameraControls);
-                            for (std::unique_ptr<libcamera::Request> &request: requests) {
-                                gCamera->queueRequest(request.get());
+                            // Initialise GPIOs and a thread driven by a timer to
+                            // monitor them
+                            errorCode = gpioInit();
+                            if (errorCode >= 0) {
+                                timerFd = errorCode;
+                                gpioReadThread = std::thread(gpioReadLoop, timerFd);
+                                // Set the thread priority for GPIO reads
+                                // to maximum as we never want to miss one
+                                struct sched_param scheduling;
+                                scheduling.sched_priority = sched_get_priority_max(SCHED_FIFO);
+                                errorCode = pthread_setschedparam(gpioReadThread.native_handle(),
+                                                                  SCHED_FIFO, &scheduling);
+                                if (errorCode != 0) {
+                                    W_LOG_ERROR("unable to set thread priority for GPIO reads"
+                                                " (error %d), maybe need sudo?", errorCode);
+                                }
+                            } else {
+                                W_LOG_ERROR("error %d initialising GPIOs!", errorCode);
                             }
 
-                            while (!gTerminate) {
-                                sleep(1);
-                            }
+                            if (errorCode == 0) {
+                                // Kick off a control thread
+                                controlThread = std::thread(controlLoop);
 
-                            W_LOG_INFO("CTRL-C received, stopping the camera.");
-                            gCamera->stop();
+                                // Kick off a thread to encode video frames
+                                videoEncodeThread = std::thread{videoEncodeLoop,
+                                                                avCodecContext,
+                                                                avFormatContext}; 
+
+                                // Kick off our image processing thread
+                                imageProcessingThread = std::thread(imageProcessingLoop);
+
+                                // Remove any old files for a clean start
+                                system(std::string("rm " +
+                                                   commandLineParameters.outputDirectory +
+                                                   W_DIR_SEPARATOR +
+                                                   commandLineParameters.outputFileName +
+                                                   W_HLS_PLAYLIST_FILE_EXTENSION +
+                                                   W_SYSTEM_SILENT).c_str() );
+                                system(std::string("rm " +
+                                                   commandLineParameters.outputDirectory +
+                                                   W_DIR_SEPARATOR +
+                                                   commandLineParameters.outputFileName +
+                                                   "*" W_HLS_SEGMENT_FILE_EXTENSION +
+                                                   W_SYSTEM_SILENT).c_str());
+
+                                // Make sure the output directory exists
+                                system(std::string("mkdir -p " +
+                                                   commandLineParameters.outputDirectory).c_str());
+
+                                // Pedal to da metal
+                                W_LOG_INFO("starting the camera and queueing requests (CTRL-C to stop).");
+                                gCamera->start(&cameraControls);
+                                for (std::unique_ptr<libcamera::Request> &request: requests) {
+                                    gCamera->queueRequest(request.get());
+                                }
+
+                                while (!gTerminate) {
+                                    sleep(1);
+                                }
+
+                                W_LOG_INFO("CTRL-C received, stopping the camera.");
+                                gCamera->stop();
+                            }
                         } else {
                             errorCode = -ENOMEM;
                             W_LOG_ERROR("unable to create background subtractor!");
@@ -2033,7 +2470,8 @@ int main(int argc, char *argv[])
 
             // Tidy up
             W_LOG_DEBUG("tidying up.");
-            gRunning = false;
+            // Make sure we're terminating
+            gTerminate = true;
             // Stop the image processing thread
             if (imageProcessingThread.joinable()) {
                imageProcessingThread.join();
@@ -2067,6 +2505,15 @@ int main(int argc, char *argv[])
                controlThread.join();
             }
             controlQueueClear();
+            // Stop the GPIO tick timer
+            if (timerFd >= 0) {
+                if (gpioReadThread.joinable()) {
+                   gpioReadThread.join();
+                }
+                close(timerFd);
+            }
+            // Give back the GPIOs
+            gpioDeinit();
             W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                        " %d encoded video frame(s)).",
                        gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
@@ -2079,6 +2526,12 @@ int main(int argc, char *argv[])
                        std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
                        1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
                        std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.largest).count());
+            uint64_t gpioReadsPerInput = gGpioInputReadCount / W_ARRAY_COUNT(gGpioInputPin);
+            W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
+                       " GPIO input read thread wasn't called on schedule %lld time(s).",
+                       (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gGpioInputReadStop - gGpioInputReadStart).count() *
+                        W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
+                       gGpioInputReadSlipCount);
         } else {
             W_LOG_ERROR("no cameras found!");
         }
