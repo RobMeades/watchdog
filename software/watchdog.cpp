@@ -243,6 +243,56 @@ extern "C" {
 # define W_DRAWING_RADIUS_FOCUS_CIRCLE  150
 #endif
 
+#ifndef W_DRAWING_DATE_TIME_FONT_HEIGHT
+// Font height scale for the date/time stamp: 0.5 is nice and small
+// and fits within the rectangle set out below.
+# define W_DRAWING_DATE_TIME_FONT_HEIGHT 0.5
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_HEIGHT_PIXELS
+// The height of the date/time box in pixels: 20 is high enough for
+// text height set to 0.5 with a small margin.
+# define W_DRAWING_DATE_TIME_HEIGHT_PIXELS 20
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_WIDTH_PIXELS
+// The width of the date/time box in pixels: 190 is wide enough for
+// a full "%Y-%m-%d %H:%M:%S date/time stamp with font size 0.5 and
+// a small margin.
+# define W_DRAWING_DATE_TIME_WIDTH_PIXELS 190
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_MARGIN_PIXELS_X
+// Horizontal margin for the text inside its date/time box: 2 is good.
+# define W_DRAWING_DATE_TIME_MARGIN_PIXELS_X 2
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y
+// Vertical margin for the text inside its date/time box: needs to be
+// more than the X margin to look right, 5 is good.
+# define W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y 5
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_X
+// Horizontal offset for the date/time box when it is placed into the
+// main image: 5 will position it nicely on the left. 
+# define W_DRAWING_DATE_TIME_REGION_OFFSET_X 5
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_Y
+// Vertical offset for the date/time box when it is placed into the
+// main image: 5 will position it nicely at the bottom (i.e. this is
+// taken away from the image height when making an OpenCV Point). 
+# define W_DRAWING_DATE_TIME_REGION_OFFSET_Y 5
+#endif
+
+#ifndef W_DRAWING_DATE_TIME_ALPHA
+// Opacity, AKA alpha, of the date/time box on top of the main image,
+// range 1 to 0. 0.7 is readable but you can still see the
+// underlying image.
+# define W_DRAWING_DATE_TIME_ALPHA 0.7
+#endif
+
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: IMAGE PROCESSING RELATED
  * -------------------------------------------------------------- */
@@ -1858,6 +1908,38 @@ static void imageProcessingLoop()
                            W_DRAWING_SHADE_FOCUS_CIRCLE,
                            W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
             }
+
+            // Finally, write the current local time onto the frame
+            // First get the time as a string
+            char textBuffer[64];
+            time_t rawTime;
+            time(&rawTime);
+            const auto localTime = localtime(&rawTime);
+            strftime(textBuffer, sizeof(textBuffer), "%F %T", localTime);
+            std::string timeString(textBuffer);
+
+            // Create a white image of the size of the rectangle
+            // we want the time to fit inside
+            cv::Mat frameDateTime(W_DRAWING_DATE_TIME_HEIGHT_PIXELS,
+                                  W_DRAWING_DATE_TIME_WIDTH_PIXELS, CV_8UC1,
+                                  cv::Scalar(255, 255, 255));
+            // Write the text to this frame in black
+            cv::putText(frameDateTime, timeString,
+                        cv::Point(W_DRAWING_DATE_TIME_MARGIN_PIXELS_X,
+                                  W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
+                                  W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y),
+                        cv::FONT_HERSHEY_SIMPLEX,
+                        W_DRAWING_DATE_TIME_FONT_HEIGHT, cv::Scalar(0, 0, 0), 1);
+            // Create a rectangle of the same size, positioned on the main image
+            cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_X,
+                                               buffer.height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
+                                               W_DRAWING_DATE_TIME_REGION_OFFSET_Y,
+                                               W_DRAWING_DATE_TIME_WIDTH_PIXELS,
+                                               W_DRAWING_DATE_TIME_HEIGHT_PIXELS); 
+            // Add frameDateTime to frameOpenCvGray inside dateTimeRegion
+            cv::addWeighted(frameOpenCvGray(dateTimeRegion), W_DRAWING_DATE_TIME_ALPHA,
+                            frameDateTime, 1 - W_DRAWING_DATE_TIME_ALPHA, 0.0,
+                            frameOpenCvGray(dateTimeRegion));
 
             // Stream the camera frame via FFmpeg: avFrameQueuePush()
             // will free the image data buffer we were passed
