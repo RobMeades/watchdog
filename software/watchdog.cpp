@@ -128,7 +128,7 @@ extern "C" {
 #define W_STRINGIFY_QUOTED(x) W_STRINGIFY_LITERAL(x)
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: CAMERA-RELATED
+ * COMPILE-TIME MACROS: CAMERA RELATED
  * -------------------------------------------------------------- */
 
 #ifndef W_CAMERA_STREAM_ROLE
@@ -204,6 +204,11 @@ extern "C" {
 # define W_DRAWING_SHADE_WHITE 255
 #endif
 
+#ifndef W_DRAWING_SHADE_BLACK
+// Black, to be included in an OpenCV Scalar.
+# define W_DRAWING_SHADE_BLACK 0
+#endif
+
 #ifndef W_DRAWING_SHADE_LIGHT_GRAY
 // Light gray, to be included in an OpenCV Scalar for an 8-bit
 // gray-scale image.
@@ -243,6 +248,17 @@ extern "C" {
 # define W_DRAWING_RADIUS_FOCUS_CIRCLE  150
 #endif
 
+// The colour we draw the date/time text.
+#define W_DRAWING_DATE_TIME_TEXT_SHADE cv::Scalar(W_DRAWING_SHADE_BLACK, \
+                                                  W_DRAWING_SHADE_BLACK, \
+                                                  W_DRAWING_SHADE_BLACK)
+
+#ifndef W_DRAWING_DATE_TIME_TEXT_THICKNESS
+// The thickness of the line drawing the date/time text: 1 is
+// perfectly readable.
+# define W_DRAWING_DATE_TIME_TEXT_THICKNESS 1
+#endif
+
 #ifndef W_DRAWING_DATE_TIME_FONT_HEIGHT
 // Font height scale for the date/time stamp: 0.5 is nice and small
 // and fits within the rectangle set out below.
@@ -257,7 +273,7 @@ extern "C" {
 
 #ifndef W_DRAWING_DATE_TIME_WIDTH_PIXELS
 // The width of the date/time box in pixels: 190 is wide enough for
-// a full "%Y-%m-%d %H:%M:%S date/time stamp with font size 0.5 and
+// a full %Y-%m-%d %H:%M:%S date/time stamp with font size 0.5 and
 // a small margin.
 # define W_DRAWING_DATE_TIME_WIDTH_PIXELS 190
 #endif
@@ -272,6 +288,12 @@ extern "C" {
 // more than the X margin to look right, 5 is good.
 # define W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y 5
 #endif
+
+// The background colour we draw the rectangle that the date/time is
+// printed on.
+#define W_DRAWING_DATE_TIME_REGION_SHADE cv::Scalar(W_DRAWING_SHADE_WHITE, \
+                                                    W_DRAWING_SHADE_WHITE, \
+                                                    W_DRAWING_SHADE_WHITE)
 
 #ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_X
 // Horizontal offset for the date/time box when it is placed into the
@@ -478,7 +500,7 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: LOGGING
+ * COMPILE-TIME MACROS: LOGGING RELATED
  * -------------------------------------------------------------- */
 
 #ifndef W_MONITOR_TIMING_LENGTH
@@ -645,46 +667,28 @@ typedef struct {
 } wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------
- * VARIABLES
+ * VARIABLES: CAMERA RELATED
  * -------------------------------------------------------------- */
-
-// Flag that tells us whether or not we've had a CTRL-C.
-volatile sig_atomic_t gTerminate = 0;
 
 // Pointer to camera: global as the requestCompleted() callback will use it.
 static std::shared_ptr<libcamera::Camera> gCamera = nullptr;
 
-// Count of frames received from the camera.
+// Count of frames received from the camera, purely for information.
 static unsigned int gCameraStreamFrameCount = 0;
 
-// Count of frames passed into video codec.
-static unsigned int gVideoStreamFrameInputCount = 0;
-
-// Count of frames received from the video codec.
-static unsigned int gVideoStreamFrameOutputCount = 0;
-
-// Remember the size of the frame list going to video, purely for
-// debug purposes.
-static unsigned int gVideoStreamFrameListSize = 0;
-
-// Remember the size of the image processing list, purely for
-// debug purposes.
-static unsigned int gImageProcessingListSize = 0;
-
-// Keep track of timing on the camera stream.
-static wMonitorTiming_t gCameraStreamMonitorTiming;
+/* ----------------------------------------------------------------
+ * VARIABLES: IMAGE PROCESSING RELATED
+ * -------------------------------------------------------------- */
 
 // Pointer to the OpenCV background subtractor: global as the
 // requestCompleted() callback will use it.
 static std::shared_ptr<cv::BackgroundSubtractor> gBackgroundSubtractor = nullptr;
 
 // A place to store the foreground mask for the OpenCV stream,
-// globl as the requestCompleted() callback will populate it.
+// global as the requestCompleted() callback will populate it.
 static cv::Mat gMaskForeground;
 
-// The place that we should be looking, in view coordinates;
-// have to prefix Point with the namespace of cv as there is
-// also a Point in libcamera.
+// The place that we should be looking, in view coordinates.
 // Note: use pointProtectedSet() to set this variable and
 // pointProtectedGet() to read it.
 static wPointProtected_t gFocusPointView = {.point = {0, 0}};
@@ -695,11 +699,40 @@ static std::list<wBuffer_t> gImageProcessingList;
 // Mutex to protect the linked list of image buffers.
 static std::mutex gImageProcessingListMutex;
 
+// Remember the size of the image processing list, purely for
+// information.
+static unsigned int gImageProcessingListSize = 0;
+
+/* ----------------------------------------------------------------
+ * VARIABLES: VIDEO RELATED
+ * -------------------------------------------------------------- */
+
+// Count of frames passed to the video codec, purely for information.
+static unsigned int gVideoStreamFrameInputCount = 0;
+
+// Count of frames received from the video codec, purely for
+// information.
+static unsigned int gVideoStreamFrameOutputCount = 0;
+
+// Remember the size of the frame list going to video, purely
+// for information.
+static unsigned int gVideoStreamFrameListSize = 0;
+
+// Keep track of timing on the video stream, purely for information.
+static wMonitorTiming_t gVideoStreamMonitorTiming;
+
 // Linked list of video frames, FFmpeg-style.
 static std::list<AVFrame *> gAvFrameList;
 
 // Mutex to protect the linked list of FFmpeg-format video frames.
 static std::mutex gAvFrameListMutex;
+
+/* ----------------------------------------------------------------
+ * VARIABLES: CONTROL RELATED
+ * -------------------------------------------------------------- */
+
+// Flag that tells us whether or not we've had a CTRL-C.
+volatile sig_atomic_t gTerminated = 0;
 
 // Linked list of messages for the control thread.
 static std::list<wMsgContainer_t> gMsgContainerList;
@@ -707,9 +740,14 @@ static std::list<wMsgContainer_t> gMsgContainerList;
 // Mutex to protect the linked list of messages.
 static std::mutex gMsgContainerListMutex;
 
-// Array of message body sizes versus message body.
+// Array of message body sizes; order should match the
+// members of wMsgType_t.
 static unsigned int gMsgBodySize[] = {0,  // Not used
                                       sizeof(wMsgBodyFocusChange_t)};
+
+/* ----------------------------------------------------------------
+ * VARIABLES: GPIO RELATED
+ * -------------------------------------------------------------- */
 
 // Our GPIO chip.
 static gpiod_chip *gGpioChip = nullptr;
@@ -741,17 +779,20 @@ static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_ENABLE
 // Counter of where the GPIO tick handler is in the set of input pins.
 static unsigned int gGpioInputPinIndex = 0;
 
-// Monitor the number of times we've read GPIOs.
+// Monitor the number of times we've read GPIOs, purely for information.
 static uint64_t gGpioInputReadCount = 0;
 
-// Monitor the start and stop time of GPIO reading, purely for debug
-// purposes
+// Monitor the start and stop time of GPIO reading, purely for information
 static std::chrono::system_clock::time_point gGpioInputReadStart;
 static std::chrono::system_clock::time_point gGpioInputReadStop;
 
 // Remember the number of times the GPIO read thread has not been called
-// dead on time, purely for debug
+// dead on time, purely for information.
 static uint64_t gGpioInputReadSlipCount = 0;
+
+/* ----------------------------------------------------------------
+ * VARIABLES: LOGGING RELATED
+ * -------------------------------------------------------------- */
 
 // Array of log prefixes for the different log types.
 static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
@@ -760,7 +801,7 @@ static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
 static FILE *gLogDestination[] = {stdout, stdout, stderr, stdout};
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: LOGGING/MONITORING
+ * STATIC FUNCTIONS: LOGGING/MONITORING RELATED
  * -------------------------------------------------------------- */
 
 // Return the right output stream for a log type.
@@ -1177,7 +1218,7 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
     int32_t errorCode = 0;
     AVFrame *avFrame = nullptr;
 
-    while (!gTerminate) {
+    while (!gTerminated) {
         if (avFrameQueueTryPop(&avFrame) == 0) {
             // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
             // Ownership of the data in the frame now passes
@@ -1189,7 +1230,7 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
                 // Keep track of timing here, at the end of the 
                 // complicated camera/video-frame antics, for debug
                 // purposes
-                monitorTimingUpdate(&gCameraStreamMonitorTiming);
+                monitorTimingUpdate(&gVideoStreamMonitorTiming);
             } else {
                 W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
             }
@@ -1533,7 +1574,7 @@ static void gpioReadLoop(int timerFd)
     sigemptyset(&sigMask);
     sigaddset(&sigMask, SIGINT);
     gGpioInputReadStart = std::chrono::system_clock::now();
-    while (!gTerminate) {
+    while (!gTerminated) {
         // Block waiting for the timer to go off for up to a time,
         // or for CTRL-C to land; when the timer goes off the number
         // of times it has expired is returned in numExpiries
@@ -1576,15 +1617,15 @@ static void gpioReadLoop(int timerFd)
 // that can be used in gpioInputLoop() to perform debouncing.
 static int gpioInit()
 {
-    int fdOrerrorCode = 0;
+    int fdOrErrorCode = 0;
 
     // Configure all of the input pins and
     // get their initial states
     for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
-                       (fdOrerrorCode == 0); x++) {
+                       (fdOrErrorCode == 0); x++) {
         wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
-        fdOrerrorCode = gpioCfg(gpioInput->pin, false);
-        if (fdOrerrorCode == 0) {
+        fdOrErrorCode = gpioCfg(gpioInput->pin, false);
+        if (fdOrErrorCode == 0) {
             gpioInput->level = gpioGet(gpioInput->pin);
             gpioInput->debounce.line = gpioLineGet(gpioInput->pin);
             gpioInput->debounce.notLevelCount = 0;
@@ -1597,36 +1638,36 @@ static int gpioInit()
     // Configure all of the output pins to their
     // initial states
     for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioOutputPin)) &&
-                       (fdOrerrorCode == 0); x++) {
+                       (fdOrErrorCode == 0); x++) {
         wGpioOutput_t *gpioOutput = &(gGpioOutputPin[x]);
-        fdOrerrorCode = gpioCfg(gpioOutput->pin, true, gpioOutput->initialLevel);
-        if (fdOrerrorCode != 0) {
+        fdOrErrorCode = gpioCfg(gpioOutput->pin, true, gpioOutput->initialLevel);
+        if (fdOrErrorCode != 0) {
             W_LOG_ERROR("unable to set pin %d as an output and %s!",
                         gpioOutput->pin,
                         gpioOutput->initialLevel ? "high" : "low");
         }
     }
 
-    if (fdOrerrorCode == 0) {
+    if (fdOrErrorCode == 0) {
         // Set up a tick to drive gpioInputLoop()
-        fdOrerrorCode = timerfd_create(CLOCK_MONOTONIC, 0);
-        if (fdOrerrorCode >= 0) {
+        fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, 0);
+        if (fdOrErrorCode >= 0) {
             struct itimerspec timerSpec = {0};
             timerSpec.it_value.tv_nsec = W_GPIO_TICK_TIMER_PERIOD_US * 1000;
             timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-            if (timerfd_settime(fdOrerrorCode, 0, &timerSpec, nullptr) != 0) {
-                close(fdOrerrorCode);
-                fdOrerrorCode = -errno;
+            if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
+                close(fdOrErrorCode);
+                fdOrErrorCode = -errno;
                 W_LOG_ERROR("unable to set signal action or set timer, error code %d.",
-                            fdOrerrorCode);
+                            fdOrErrorCode);
             }
         } else {
-            fdOrerrorCode = -errno;
-            W_LOG_ERROR("unable to create timer, error code %d.", fdOrerrorCode);
+            fdOrErrorCode = -errno;
+            W_LOG_ERROR("unable to create timer, error code %d.", fdOrErrorCode);
         }
     }
 
-    return fdOrerrorCode;
+    return fdOrErrorCode;
 }
 
 // Deinitialise the GPIO pins.
@@ -1743,7 +1784,7 @@ static void controlLoop()
 {
     wMsgContainer_t msg;
 
-    while (!gTerminate) {
+    while (!gTerminated) {
         if (controlQueueTryPop(&msg) == 0) {
             switch (msg.type) {
                 case W_MSG_TYPE_NONE:
@@ -1833,7 +1874,7 @@ static void imageProcessingLoop()
     wBuffer_t buffer;
     cv::Point point;
 
-    while (!gTerminate) {
+    while (!gTerminated) {
         if (imageProcessingQueueTryPop(&buffer) == 0) {
             // Do the OpenCV things.  From the comment on this post:
             // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
@@ -1915,21 +1956,25 @@ static void imageProcessingLoop()
             time_t rawTime;
             time(&rawTime);
             const auto localTime = localtime(&rawTime);
+            // %F %T is pretty much ISO8601 format, Chinese format,
+            // descending order of magnitude
             strftime(textBuffer, sizeof(textBuffer), "%F %T", localTime);
             std::string timeString(textBuffer);
 
-            // Create a white image of the size of the rectangle
-            // we want the time to fit inside
+            // Create a frame, filled with its ahade (white), of the
+            // size of the rectangle we want the time to fit inside
             cv::Mat frameDateTime(W_DRAWING_DATE_TIME_HEIGHT_PIXELS,
                                   W_DRAWING_DATE_TIME_WIDTH_PIXELS, CV_8UC1,
-                                  cv::Scalar(255, 255, 255));
-            // Write the text to this frame in black
+                                  W_DRAWING_DATE_TIME_REGION_SHADE);
+            // Write the text to this frame in its shade (black)
             cv::putText(frameDateTime, timeString,
                         cv::Point(W_DRAWING_DATE_TIME_MARGIN_PIXELS_X,
                                   W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
                                   W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y),
                         cv::FONT_HERSHEY_SIMPLEX,
-                        W_DRAWING_DATE_TIME_FONT_HEIGHT, cv::Scalar(0, 0, 0), 1);
+                        W_DRAWING_DATE_TIME_FONT_HEIGHT,
+                        W_DRAWING_DATE_TIME_TEXT_SHADE,
+                        W_DRAWING_DATE_TIME_TEXT_THICKNESS);
             // Create a rectangle of the same size, positioned on the main image
             cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_X,
                                                buffer.height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
@@ -2043,10 +2088,10 @@ static void requestCompleted(libcamera::Request *request)
  * STATIC FUNCTIONS: COMMAND LINE STUFF
  * -------------------------------------------------------------- */
 
-// Catch a termination signal
+// Catch a termination signal.
 static void terminateSignalHandler(int signal)
 {
-    gTerminate = 1;
+    gTerminated = 1;
 }
 
 // Given a C string that is assumed to be a path, return the directory
@@ -2227,7 +2272,7 @@ int main(int argc, char *argv[])
     // Process the command-line parameters
     if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
         commandLinePrintChoices(&commandLineParameters);
-        // Capture CTRL-C so that exit in an organised fashion
+        // Capture CTRL-C so that we can exit in an organised fashion
         signal(SIGINT, terminateSignalHandler);
 
         // Create and start a camera manager instance
@@ -2474,7 +2519,7 @@ int main(int argc, char *argv[])
                                                libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
                                                                                        frameDurationLimit}));
                             // Attach the requestCompleted() handler
-                            // function to its events and start the camera,
+                            // function to its events and start the camera;
                             // everything else happens in the callback function
                             gCamera->requestCompleted.connect(requestCompleted);
 
@@ -2535,7 +2580,7 @@ int main(int argc, char *argv[])
                                     gCamera->queueRequest(request.get());
                                 }
 
-                                while (!gTerminate) {
+                                while (!gTerminated) {
                                     sleep(1);
                                 }
 
@@ -2552,8 +2597,8 @@ int main(int argc, char *argv[])
 
             // Tidy up
             W_LOG_DEBUG("tidying up.");
-            // Make sure we're terminating
-            gTerminate = true;
+            // Make sure all threads know we have terminated
+            gTerminated = true;
             // Stop the image processing thread
             if (imageProcessingThread.joinable()) {
                imageProcessingThread.join();
@@ -2596,6 +2641,7 @@ int main(int argc, char *argv[])
             }
             // Give back the GPIOs
             gpioDeinit();
+            // Print a load of diagnostic information
             W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                        " %d encoded video frame(s)).",
                        gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
@@ -2604,10 +2650,10 @@ int main(int argc, char *argv[])
             W_LOG_INFO("average frame gap (at end of video output) over the last"
                        " %d frames %lld ms (a rate of %lld frames/second), largest"
                        " gap %lld ms.",
-                       W_ARRAY_COUNT(gCameraStreamMonitorTiming.gap),
-                       std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
-                       1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.average).count(),
-                       std::chrono::duration_cast<std::chrono::milliseconds>(gCameraStreamMonitorTiming.largest).count());
+                       W_ARRAY_COUNT(gVideoStreamMonitorTiming.gap),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.average).count(),
+                       1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.average).count(),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.largest).count());
             uint64_t gpioReadsPerInput = gGpioInputReadCount / W_ARRAY_COUNT(gGpioInputPin);
             W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
                        " GPIO input read thread wasn't called on schedule %lld time(s).",
@@ -2625,7 +2671,7 @@ int main(int argc, char *argv[])
         commandLinePrintHelp(&commandLineParameters);
     }
 
-    return (int) errorCode;
+    return errorCode;
 }
 
 // End of file
