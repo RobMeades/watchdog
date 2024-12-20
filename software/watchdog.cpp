@@ -15,8 +15,8 @@
  */
 
 /** @file
- * @brief The watchdog application, main().  This should be split into
- * multiple files with proper APIs between the image processing,
+ * @brief The watchdog application, main().  This would normally be
+ * split into multiple files with proper APIs between the image processing,
  * image streaming and control parts (there are queues between them for
  * this purpose) but since I'm editing on a PC and running on a
  * headless Raspberry Pi, having a single .cpp file that I can sftp
@@ -61,12 +61,14 @@
 #include <thread>
 #include <mutex>
 #include <list>
+#include <atomic>
 
 // The Linux/Posix stuff.
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
 #include <gpiod.h>
@@ -295,17 +297,17 @@ extern "C" {
                                                     W_DRAWING_SHADE_WHITE, \
                                                     W_DRAWING_SHADE_WHITE)
 
-#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_X
+#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X
 // Horizontal offset for the date/time box when it is placed into the
 // main image: 5 will position it nicely on the left. 
-# define W_DRAWING_DATE_TIME_REGION_OFFSET_X 5
+# define W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X 5
 #endif
 
-#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_Y
+#ifndef W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y
 // Vertical offset for the date/time box when it is placed into the
 // main image: 5 will position it nicely at the bottom (i.e. this is
 // taken away from the image height when making an OpenCV Point). 
-# define W_DRAWING_DATE_TIME_REGION_OFFSET_Y 5
+# define W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y 5
 #endif
 
 #ifndef W_DRAWING_DATE_TIME_ALPHA
@@ -398,80 +400,87 @@ extern "C" {
 // The GPIO input pin that detects the state of the "look left limit"
 // switch as one is standing behind the watchdog, looking out of
 // the watchdog's eyes, i.e. it is the limit switch on the _right_
-// side of the collar as one is standing behind the watchdog.
-# define W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT 0
+// side of the collar as one is standing behind the watchdog
+// looking forward.
+# define W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT 1
 #endif
 
 #ifndef W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT
 // The GPIO input pin that detects the state of the "look right limit"
 // switch as one is standing behind the watchdog, looking out of
 // the watchdog's eyes, i.e. it is the limit switch on the _left_
-// side of the collar as one is standing behind the watchdog.
-# define W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT 0
+// side of the collar as one is standing behind the watchdog
+// looking forward.
+# define W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT 2
 #endif
 
 #ifndef W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT
 // The GPIO input pin detecting the state of the "look down limit", i.e.
 // the switch on the front of the watchdog's body.
-# define W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT 0
+# define W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT 3
 #endif
 
 #ifndef W_GPIO_PIN_INPUT_LOOK_UP_LIMIT
 // The GPIO input pin detecting the state of the "look up limit", i.e.
 // the switch on the rear of the watchdog's body.
-# define W_GPIO_PIN_INPUT_LOOK_UP_LIMIT 0
+# define W_GPIO_PIN_INPUT_LOOK_UP_LIMIT 4
 #endif
 
-#ifndef W_GPIO_PIN_OUTPUT_ROTATE_ENABLE
+#ifndef W_GPIO_PIN_OUTPUT_ROTATE_DISABLE
 // The GPIO output pin that enables the stepper motor that rotates the
 // watchdog's head.
-# define W_GPIO_PIN_OUTPUT_ROTATE_ENABLE 0
+// NOTE: the pin on the Sparkfun board is labelled "enable" but a logic
+// 1 disables, a logic 0 enables, so it might better be called "enable bar"
+// or more clearly DISABlE
+# define W_GPIO_PIN_OUTPUT_ROTATE_DISABLE 5
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION
 // The GPIO output pin that sets the direction of rotation: 1 for clock-wise,
 // 0 for anti-clockwise.
-# define W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION 0
+# define W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION 6
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_ROTATE_STEP
 // The GPIO output pin that, when pulsed, causes the rotation stepper motor
 // to move one step.
-# define W_GPIO_PIN_OUTPUT_ROTATE_STEP 0
+# define W_GPIO_PIN_OUTPUT_ROTATE_STEP 7
 #endif
 
-#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE
+#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE
 // The GPIO output pin that enables the stepper motor that lowers and
 // raises the watchdog's head.
-# define W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE 0
+// NOTE: the pin on the Sparkfun board is labelled "enable" but a logic
+// 1 disables, a logic 0 enables, so it might better be called "enable bar"
+// or more clearly DISABlE
+# define W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE 8
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION
 // The GPIO output pin that sets the direction of vertical motion: 1 for,
 // down, 0 for up.
-# define W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION 0
+# define W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION 9
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_VERTICAL_STEP
 // The GPIO output pin that, when pulsed, causes the vertical stepper motor
 // to move one step.
-# define W_GPIO_PIN_OUTPUT_VERTICAL_STEP 0
+# define W_GPIO_PIN_OUTPUT_VERTICAL_STEP 10
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_EYE_LEFT
 // The GPIO pin driving the LED in the left eye of the watchdog.
-# define W_GPIO_PIN_OUTPUT_EYE_LEFT 0
+# define W_GPIO_PIN_OUTPUT_EYE_LEFT 12
 #endif
 
 #ifndef W_GPIO_PIN_OUTPUT_EYE_RIGHT
 // The GPIO pin driving the LED in the right eye of the watchdog.
-# define W_GPIO_PIN_OUTPUT_EYE_RIGHT 0
+# define W_GPIO_PIN_OUTPUT_EYE_RIGHT 13
 #endif
 
 #ifndef W_GPIO_CHIP_NUMBER
-// The number of the GPIO chip to use: must be 4 for a Pi 5 as that's
-// the chip that is wired to the header pins.
-# define W_GPIO_CHIP_NUMBER 4
+// The number of the GPIO chip to use: 0 for a Pi 5's header pins.
+# define W_GPIO_CHIP_NUMBER 0
 #endif
 
 #ifndef W_GPIO_CONSUMER_NAME
@@ -497,6 +506,20 @@ extern "C" {
 // mean that a GPIO would need to have read a consistent level
 // for 12 milliseconds.
 # define W_GPIO_TICK_TIMER_PERIOD_US 1000
+#endif
+
+#ifndef W_GPIO_PWM_TIMER_PERIOD_US
+// The GPIO PWM timer period in microseconds: used to drive PWM
+// where, since we don't have a capacitor on the LED, we drive
+// at quite a high rate.
+# define W_GPIO_PWM_TIMER_PERIOD_US 1000
+#endif
+
+#ifndef W_GPIO_PWM_MAX_COUNT
+// The number of PWM timer intervals that represents 100%.  With
+// a PWM timer period of 1 ms, using 20 here keeps the flicker rate
+// down to a non-visible 20 ms.
+# define W_GPIO_PWM_MAX_COUNT 20
 #endif
 
 /* ----------------------------------------------------------------
@@ -585,7 +608,7 @@ typedef struct {
 
 // A point with mutex protection, used for the focus point which
 // we need to write from the control thread and read from the
-// requestCompleted() callback. Aside from static initialisation,
+// requestCompleted() callback.  Aside from static initialisation,
 // pointProtectedSet() and pointProtectedGet() should always be
 // used to access a variable of this type.
 typedef struct {
@@ -636,24 +659,57 @@ typedef struct {
  * TYPES: GPIO RELATED
  * -------------------------------------------------------------- */
 
-// A GPIO input debouncer.
+// Storage for debouncing a GPIO.
 typedef struct {
     struct gpiod_line *line;
     unsigned int notLevelCount;
 } wGpioDebounce_t;
 
-// A GPIO input pin and its state.
+// The possible bias for a GPIO input.
+typedef enum {
+    W_GPIO_BIAS_NONE,
+    W_GPIO_BIAS_PULL_DOWN,
+    W_GPIO_BIAS_PULL_UP
+} wGpioBias_t;
+
+// A GPIO input pin, its biasing and current state.
 typedef struct {
     unsigned int pin;
+    const char *name;
+    wGpioBias_t bias;
     unsigned int level;
     wGpioDebounce_t debounce;
 } wGpioInput_t;
 
-// A GPIO output pin and the state it should be initialised to.
+// The possible drive strengths for a GPIO output.
+typedef enum {
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA = 0,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_4_MA = 1,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_6_MA = 2,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_8_MA = 3,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_10_MA = 4,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_12_MA = 5,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_14_MA = 6,
+    W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA = 7
+} wGpioDriveStrength_t;
+
+// A GPIO output pin with required drive strength
+// and the state the pin should be initialised to.
 typedef struct {
     unsigned int pin;
+    const char *name;
+    wGpioDriveStrength_t driveStrength;
     unsigned int initialLevel;
 } wGpioOutput_t;
+
+// An output pin that is a PWM pin.
+typedef struct {
+    unsigned int pin;
+    // Atomic since it is read from the PWM thread and can be
+    // written by anyone
+    std::atomic<unsigned int> levelPercent;
+    struct gpiod_line *line;
+} wGpioPwm_t;
 
 /* ----------------------------------------------------------------
  * TYPES: COMMAND-LINE RELATED
@@ -707,6 +763,12 @@ static unsigned int gImageProcessingListSize = 0;
  * VARIABLES: VIDEO RELATED
  * -------------------------------------------------------------- */
 
+// Linked list of video frames, FFmpeg-style.
+static std::list<AVFrame *> gAvFrameList;
+
+// Mutex to protect the linked list of FFmpeg-format video frames.
+static std::mutex gAvFrameListMutex;
+
 // Count of frames passed to the video codec, purely for information.
 static unsigned int gVideoStreamFrameInputCount = 0;
 
@@ -720,12 +782,6 @@ static unsigned int gVideoStreamFrameListSize = 0;
 
 // Keep track of timing on the video stream, purely for information.
 static wMonitorTiming_t gVideoStreamMonitorTiming;
-
-// Linked list of video frames, FFmpeg-style.
-static std::list<AVFrame *> gAvFrameList;
-
-// Mutex to protect the linked list of FFmpeg-format video frames.
-static std::mutex gAvFrameListMutex;
 
 /* ----------------------------------------------------------------
  * VARIABLES: CONTROL RELATED
@@ -753,36 +809,66 @@ static unsigned int gMsgBodySize[] = {0,  // Not used
 static gpiod_chip *gGpioChip = nullptr;
 
 // Array of GPIO input pins.
-static wGpioInput_t gGpioInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT}};
+static wGpioInput_t gGpioInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
+                                        .name = "look left limit",
+                                        .bias = W_GPIO_BIAS_PULL_UP},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
+                                        .name = "look right limit",
+                                        .bias = W_GPIO_BIAS_PULL_UP},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
+                                        .name = "look down limit",
+                                        .bias = W_GPIO_BIAS_PULL_UP},
+                                       {.pin = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT,
+                                        .name = "look up limit",
+                                        .bias = W_GPIO_BIAS_PULL_UP}};
 
-// Array of GPIO output pins with their initial levels.
-static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_ENABLE,
-                                          .initialLevel = 0},
+// Array of GPIO output pins with their drive strengths
+// and initial levels.
+static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
+                                          .name = "rotate disable",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
+                                          .initialLevel = 1},
                                          {.pin = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
+                                          .name = "rotate direction",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
                                           .initialLevel = 0},
                                          {.pin = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
+                                          .name = "rotate step",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
                                           .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_ENABLE,
-                                          .initialLevel = 0},
+                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
+                                          .name = "vertical disable",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
+                                          .initialLevel = 1},
                                          {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
+                                          .name = "vertical direction",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
                                           .initialLevel = 0},
                                          {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_STEP,
+                                          .name = "vertical step",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
                                           .initialLevel = 0},
                                          {.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT,
+                                          .name = "left eye",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA,
                                           .initialLevel = 0},
                                          {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT,
+                                          .name = "right eye",
+                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA,
                                           .initialLevel = 0}};
 
-// Counter of where the GPIO tick handler is in the set of input pins.
-static unsigned int gGpioInputPinIndex = 0;
+// Array of PWM output pins (which must also be in gGpioOutputPin[]).
+static wGpioPwm_t gGpioPwmPin[] = {{.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT},
+                                   {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT}};
+
+// Array of names for the bias types, just for printing; must be in the same
+// order as wGpioBias_t;
+static const char *gGpioBiasStr[] = {"none", "pull down", "pull up"};
 
 // Monitor the number of times we've read GPIOs, purely for information.
 static uint64_t gGpioInputReadCount = 0;
 
-// Monitor the start and stop time of GPIO reading, purely for information
+// Monitor the start and stop time of GPIO reading, purely for information.
 static std::chrono::system_clock::time_point gGpioInputReadStart;
 static std::chrono::system_clock::time_point gGpioInputReadStop;
 
@@ -1496,8 +1582,12 @@ static bool gpioIsOutput(struct gpiod_line *line)
             (gpiod_line_direction(line) == GPIOD_LINE_DIRECTION_OUTPUT));
 }
 
-// Configure a GPIO pin.
-static int gpioCfg(unsigned int pin, bool isOutput, unsigned int level = 0)
+// Configure a GPIO pin.  level and driveStrength are ignored for
+// an input pin, bias is ignored for an output pin.
+static int gpioCfg(unsigned int pin, bool isOutput,
+                   wGpioBias_t bias = W_GPIO_BIAS_NONE,
+                   unsigned int level = 0,
+                   wGpioDriveStrength_t driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA)
 {
     int errorCode = -EINVAL;
     struct gpiod_line *line = gpioLineGet(pin);
@@ -1508,13 +1598,78 @@ static int gpioCfg(unsigned int pin, bool isOutput, unsigned int level = 0)
             errorCode = gpiod_line_request_output(line,
                                                   W_GPIO_CONSUMER_NAME,
                                                   level);
+            if (errorCode == 0) {
+                // Set the drive strength; from the Raspberry Pi site:
+                // https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#gpio-addresses
+                // ...one writes 0x5a000000 OR'ed with the drive strength
+                // in bits 0, 1 and 2 to address 0x7e10002c for GPIOs 0-27,
+                // address 0x7e100030 for GPIOs 28-45 or address 0x7e100034
+                // for GPIOs 46-53.  All of the GPIO pins on the Pi header
+                // are in the first set, which makes things simple.
+                off64_t address = 0x7e10002c;
+                // Need to use mmap() to get at the memory location and that requires
+                // us to find the start of the memory page our address is within 
+                int pageSize = getpagesize();
+                // Note: getpagesize() returns a size in bytes
+                off64_t baseAddress = (address / pageSize) * pageSize;
+                off64_t offset = address - baseAddress;
+                //unsigned char *baseAddress = (unsigned char *) (((long int) (address + pageSize)) & (long int) ~(pageSize - 1));
+                //long int offset = address - baseAddress;
+                int memFd = open("/dev/mem", O_RDWR);
+                if (memFd) {
+                    unsigned char *addressMapped = static_cast<unsigned char *> (mmap(nullptr, offset + sizeof(int),
+                                                                                      PROT_READ | PROT_WRITE, MAP_SHARED,
+                                                                                      memFd, baseAddress));
+                    if (addressMapped) {
+                        // Since each address covers a range of pins, make sure
+                        // not to lower the drive strength again if a pin in the
+                        // same range is being written later
+                        int value = *(addressMapped + offset);
+                        if ((value & 0x07) < driveStrength) {
+                            // Bit positions 3 and 4 have a slew-rate and hysteresis
+                            // setting respectively; preserve those when writing
+                            // the new drive strength
+                            *(addressMapped + offset) = (value & 0x00000018) | 0x5a000000 | driveStrength;
+                        }
+                        munmap(addressMapped, offset + sizeof(int));
+                    }
+                    close(memFd);
+                } else {
+                    W_LOG_ERROR("unable to access memory: do you need sudo?");
+                }
+            }
         } else {
-            errorCode = gpiod_line_request_input(line,
-                                                 W_GPIO_CONSUMER_NAME);
+            int flags = 0;
+            switch (bias) {
+                case W_GPIO_BIAS_PULL_DOWN:
+                    flags |= GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_DOWN;
+                    break;
+                case W_GPIO_BIAS_PULL_UP:
+                    flags |= GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_UP;
+                    break;
+                default:
+                    break;
+            }
+            errorCode = gpiod_line_request_input_flags(line,
+                                                       W_GPIO_CONSUMER_NAME,
+                                                       flags);
         }
     }
 
     return errorCode;
+}
+
+// Get the state of a GPIO pin.
+static int gpioGet(unsigned int pin)
+{
+    int levelOrErrorCode = -EINVAL;
+
+    struct gpiod_line *line = gpioLineGet(pin);
+    if (line) {
+        levelOrErrorCode = gpiod_line_get_value(line);
+    }
+
+    return levelOrErrorCode;
 }
 
 // Set the state of a GPIO pin.
@@ -1537,14 +1692,79 @@ static int gpioSet(unsigned int pin, unsigned int level)
     return errorCode;
 }
 
-// Get the state of a GPIO pin.
-static int gpioGet(unsigned int pin)
+// Get the entry for a PWM pin in gGpioPwmPin.
+static wGpioPwm_t *gpioPwmEntry(unsigned int pin)
+{
+    wGpioPwm_t *gpioPwm = nullptr;
+
+    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioPwmPin)) &&
+                             (gpioPwm == nullptr); x++) {
+        if (gGpioPwmPin[x].pin == pin) {
+            gpioPwm = &(gGpioPwmPin[x]);
+        }
+    }
+
+    return gpioPwm;
+}
+
+// Get the level of a PWM output pin; the pin must be in
+// gGpioPwmPin[].
+static int gpioPwmGet(unsigned int pin)
 {
     int levelOrErrorCode = -EINVAL;
+    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
 
-    struct gpiod_line *line = gpioLineGet(pin);
-    if (line) {
-        levelOrErrorCode = gpiod_line_get_value(line);
+    if (gpioPwm) {
+        levelOrErrorCode = gpioPwm->levelPercent;
+    }
+
+    return levelOrErrorCode;
+}
+
+// Set the level of a PWM output pin; the pin must be in
+// gGpioPwmPin[].
+static int gpioPwmSet(unsigned int pin, unsigned int levelPercent)
+{
+    int errorCode = -EINVAL;
+    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
+
+    if (gpioPwm) {
+        gpioPwm->levelPercent = levelPercent;
+        errorCode = 0;
+    }
+
+    return errorCode;
+}
+
+// Increment the level of a PWM output pin, returning the new
+// level; the pin must be in gGpioPwmPin[].
+static int gpioPwmInc(unsigned int pin)
+{
+    int levelOrErrorCode = -EINVAL;
+    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
+
+    if (gpioPwm) {
+        if (gpioPwm->levelPercent < 100) {
+            gpioPwm->levelPercent++;
+        }
+        levelOrErrorCode = gpioPwm->levelPercent;
+    }
+
+    return levelOrErrorCode;
+}
+
+// Decrement the level of a PWM output pin, returning the new
+// level; the pin must be in gGpioPwmPin[].
+static int gpioPwmDec(unsigned int pin)
+{
+    int levelOrErrorCode = -EINVAL;
+    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
+
+    if (gpioPwm) {
+        if (gpioPwm->levelPercent > 0) {
+            gpioPwm->levelPercent--;
+        }
+        levelOrErrorCode = gpioPwm->levelPercent;
     }
 
     return levelOrErrorCode;
@@ -1557,10 +1777,11 @@ static int gpioGet(unsigned int pin)
 // directly but the libgpiod functions are not async-safe (brgl,
 // author of libgpiod, confirmed this), hence we use a timer and read
 // the GPIOs in this thread, triggered from that timer.  This loop
-// should be run at max priority and we monitor whether any timer ticks
-// are missed in gGpioInputReadSlipCount.
+// should be run at max priority; any timer ticks that are missed are
+// monitored in gGpioInputReadSlipCount.
 static void gpioReadLoop(int timerFd)
 {
+    unsigned int x = 0;
     unsigned int level;
     uint64_t numExpiriesSaved = 0;
     uint64_t numExpiries;
@@ -1575,7 +1796,7 @@ static void gpioReadLoop(int timerFd)
     sigaddset(&sigMask, SIGINT);
     gGpioInputReadStart = std::chrono::system_clock::now();
     while (!gTerminated) {
-        // Block waiting for the timer to go off for up to a time,
+        // Block waiting for the tick timer to go off for up to a time,
         // or for CTRL-C to land; when the timer goes off the number
         // of times it has expired is returned in numExpiries
         if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
@@ -1586,7 +1807,7 @@ static void gpioReadLoop(int timerFd)
                 gGpioInputReadSlipCount += numExpiriesPassed - 1;
             }
             // Read the level from the next input pin in the array
-            wGpioInput_t *gpioInput = &(gGpioInputPin[gGpioInputPinIndex]);
+            wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
             level = gpiod_line_get_value(gpioInput->debounce.line);
             if (gpioInput->level != level) {
                 // Level is different to the last stable level, increment count
@@ -1603,9 +1824,9 @@ static void gpioReadLoop(int timerFd)
             }
 
             // Next input pin next time
-            gGpioInputPinIndex++;
-            if (gGpioInputPinIndex >= W_ARRAY_COUNT(gGpioInputPin)) {
-                gGpioInputPinIndex = 0;
+            x++;
+            if (x >= W_ARRAY_COUNT(gGpioInputPin)) {
+                x = 0;
             }
             numExpiriesSaved = numExpiries;
         }
@@ -1613,37 +1834,83 @@ static void gpioReadLoop(int timerFd)
     gGpioInputReadStop = std::chrono::system_clock::now();
 }
 
+// Task/thread/thing to drive the PWM output of the pins
+// in gGpioPwmPin[].
+static void gpioPwmLoop(int pwmFd)
+{
+    unsigned int pwmCount = 0;
+    uint64_t numExpiries;
+    struct pollfd pollFd[1] = {0};
+    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
+    sigset_t sigMask;
+
+    pollFd[0].fd = pwmFd;
+    pollFd[0].events = POLLIN | POLLERR | POLLHUP;
+    sigemptyset(&sigMask);
+    sigaddset(&sigMask, SIGINT);
+    while (!gTerminated) {
+        // Block waiting for the PWM timer to go off for up to a time,
+        // or for CTRL-C to land
+        if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
+            (read(pwmFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+            // Progress all of the PWM pins
+            for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
+                wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
+                // If the "percentage" count has passed beyond the value
+                // for this pin, set the output low, otherwise if we're
+                // starting the count again and the percentage is non-zero,
+                // set the output pin high
+                if (pwmCount == 0) {
+                    if (gpioPwm->levelPercent > 0) {
+                        gpiod_line_set_value(gpioPwm->line, 1);
+                    }
+                } else if (pwmCount >= gpioPwm->levelPercent * W_GPIO_PWM_MAX_COUNT / 100) {
+                    gpiod_line_set_value(gpioPwm->line, 0);
+                }
+            }
+            pwmCount++;
+            if (pwmCount >= W_GPIO_PWM_MAX_COUNT) {
+                pwmCount = 0;
+            }
+        }
+    }
+}
+
 // Initialise the GPIO pins and return the file handle of a timer
 // that can be used in gpioInputLoop() to perform debouncing.
-static int gpioInit()
+static int gpioInit(int *fdPwm)
 {
     int fdOrErrorCode = 0;
 
-    // Configure all of the input pins and
-    // get their initial states
-    for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
-                       (fdOrErrorCode == 0); x++) {
+    // Configure all of the input pins and get their initial states
+    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
+                             (fdOrErrorCode == 0); x++) {
         wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
-        fdOrErrorCode = gpioCfg(gpioInput->pin, false);
+        fdOrErrorCode = gpioCfg(gpioInput->pin, false, gpioInput->bias);
         if (fdOrErrorCode == 0) {
             gpioInput->level = gpioGet(gpioInput->pin);
             gpioInput->debounce.line = gpioLineGet(gpioInput->pin);
             gpioInput->debounce.notLevelCount = 0;
         } else {
-            W_LOG_ERROR("unable to set pin %d as an input!",
-                        gpioInput->pin);
+            W_LOG_ERROR("unable to set pin %d as an input with bias %s!",
+                        gpioInput->pin,
+                        gGpioBiasStr[gpioInput->bias]);
         }
     }
 
-    // Configure all of the output pins to their
-    // initial states
-    for (size_t x = 0; (x < W_ARRAY_COUNT(gGpioOutputPin)) &&
-                       (fdOrErrorCode == 0); x++) {
+    // Configure all of the output pins to their initial states
+    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioOutputPin)) &&
+                             (fdOrErrorCode == 0); x++) {
         wGpioOutput_t *gpioOutput = &(gGpioOutputPin[x]);
-        fdOrErrorCode = gpioCfg(gpioOutput->pin, true, gpioOutput->initialLevel);
+        fdOrErrorCode = gpioCfg(gpioOutput->pin, true,
+                                W_GPIO_BIAS_NONE,
+                                gpioOutput->initialLevel,
+                                gpioOutput->driveStrength);
         if (fdOrErrorCode != 0) {
-            W_LOG_ERROR("unable to set pin %d as an output and %s!",
+            W_LOG_ERROR("unable to set pin %d as an output,"
+                        " drive strength %d and %s!",
                         gpioOutput->pin,
+                        gpioOutput->driveStrength,
                         gpioOutput->initialLevel ? "high" : "low");
         }
     }
@@ -1658,12 +1925,47 @@ static int gpioInit()
             if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
                 close(fdOrErrorCode);
                 fdOrErrorCode = -errno;
-                W_LOG_ERROR("unable to set signal action or set timer, error code %d.",
+                W_LOG_ERROR("unable to set GPIO tick timer, error code %d.",
                             fdOrErrorCode);
             }
         } else {
             fdOrErrorCode = -errno;
-            W_LOG_ERROR("unable to create timer, error code %d.", fdOrErrorCode);
+            W_LOG_ERROR("unable to create GPIO tick timer, error code %d.",
+                        fdOrErrorCode);
+        }
+    }
+
+    if ((fdOrErrorCode >= 0) && (fdPwm)) {
+        // Set up a tick to drive PWM
+        *fdPwm = timerfd_create(CLOCK_MONOTONIC, 0);
+        if (*fdPwm >= 0) {
+            struct itimerspec timerSpec = {0};
+            timerSpec.it_value.tv_nsec = W_GPIO_PWM_TIMER_PERIOD_US * 1000;
+            timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+            if (timerfd_settime(*fdPwm, 0, &timerSpec, nullptr) == 0) {
+                // Now that the timer is set, populate gGpioPwmPin
+                for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
+                    wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
+                    gpioPwm->line = gpioLineGet(gpioPwm->pin);
+                    gpioPwm->levelPercent = 0;
+                    for (unsigned int y = 0; y < W_ARRAY_COUNT(gGpioOutputPin); y++) {
+                        wGpioOutput_t *gpioOutput = &(gGpioOutputPin[y]);
+                        if (gpioPwm->pin == gpioOutput->pin) {
+                            gpioPwm->levelPercent = gpioOutput->initialLevel * 100;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                close(fdOrErrorCode);
+                fdOrErrorCode = -errno;
+                W_LOG_ERROR("unable to set GPIO PWM timer, error code %d.",
+                            fdOrErrorCode);
+            }
+        } else {
+            close(fdOrErrorCode);
+            fdOrErrorCode = -errno;
+            W_LOG_ERROR("unable to create PWM timer, error code %d.", fdOrErrorCode);
         }
     }
 
@@ -1675,13 +1977,13 @@ static void gpioDeinit()
 {
     struct gpiod_line *line;
 
-    for (size_t x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
+    for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
         line = gpioLineGet(x);
         if (line) {
             gpioRelease(line);
         }
     }
-    for (size_t x = 0; x < W_ARRAY_COUNT(gGpioOutputPin); x++) {
+    for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioOutputPin); x++) {
         line = gpioLineGet(x);
         if (line) {
             gpioRelease(line);
@@ -1976,9 +2278,9 @@ static void imageProcessingLoop()
                         W_DRAWING_DATE_TIME_TEXT_SHADE,
                         W_DRAWING_DATE_TIME_TEXT_THICKNESS);
             // Create a rectangle of the same size, positioned on the main image
-            cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_X,
+            cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X,
                                                buffer.height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
-                                               W_DRAWING_DATE_TIME_REGION_OFFSET_Y,
+                                               W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y,
                                                W_DRAWING_DATE_TIME_WIDTH_PIXELS,
                                                W_DRAWING_DATE_TIME_HEIGHT_PIXELS); 
             // Add frameDateTime to frameOpenCvGray inside dateTimeRegion
@@ -2082,6 +2384,80 @@ static void requestCompleted(libcamera::Request *request)
             gCamera->queueRequest(request);
         }
     }
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: HW SELF-TEST
+ * -------------------------------------------------------------- */
+
+// Run a self test of all of the HW.
+static int hwTest()
+{
+    int errorCode = -ENXIO;
+
+    W_LOG_INFO("running HW test.");
+    // Create and start a camera manager instance
+    std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
+    cm->start();
+
+    // List the available cameras
+    for (auto const &camera: cm->cameras()) {
+        errorCode = 0;
+        W_LOG_INFO("found camera ID %s.", camera->id().c_str());
+        W_LOG_DEBUG_START("camera properties:\n");
+        auto cameraProperties =  camera->properties();
+        auto idMap = cameraProperties.idMap();
+        unsigned int x = 0;
+        for(auto &controlValue: cameraProperties) {
+            auto controlId = idMap->at(controlValue.first);
+            if (x > 0) {
+                W_LOG_DEBUG_MORE("\n");
+            }
+            W_LOG_DEBUG_MORE("  %06d [%s]: %s",
+                             controlValue.first,
+                             controlId->name().c_str(),
+                             controlValue.second.toString().c_str());
+            x++;
+        }
+        W_LOG_DEBUG_END;
+    }
+
+    cm->stop();
+
+    if (errorCode == 0) {
+        // Have a camera, next light up the eyes
+        for (unsigned int y = 0; y < W_ARRAY_COUNT(gGpioPwmPin); y++) {
+            wGpioPwm_t *gpioPwm = &(gGpioPwmPin[y]);
+            unsigned int target = 100;
+            for (unsigned int x = 0; x < 100 * 2; x++) {
+                if (target == 100) {
+                    if (gpioPwmInc(gpioPwm->pin) >= 100) {
+                        target = 0;
+                    }
+                } else {
+                    if (gpioPwmDec(gpioPwm->pin) == 0) {
+                        target = 100;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    }
+
+    if (errorCode == 0) {
+        int state[20] = {0};
+        while (!gTerminated) {
+            for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
+                int y = gpioGet(gGpioInputPin[x].pin);
+                if (state[x] != y) {
+                    W_LOG_DEBUG("### %s pin changed state to %s.", gGpioInputPin[x].name, y ? "high" : "low");
+                    state[x] = y;
+                }
+            }
+        }
+    }
+
+    return errorCode;
 }
 
 /* ----------------------------------------------------------------
@@ -2264,6 +2640,8 @@ int main(int argc, char *argv[])
     AVCodecContext *avCodecContext = nullptr;
     AVStream *avStream = nullptr;
     int timerFd = -1;
+    int pwmFd = -1;
+    std::thread gpioPwmThread;
     std::thread gpioReadThread;
     std::thread controlThread;
     std::thread imageProcessingThread;
@@ -2275,286 +2653,273 @@ int main(int argc, char *argv[])
         // Capture CTRL-C so that we can exit in an organised fashion
         signal(SIGINT, terminateSignalHandler);
 
-        // Create and start a camera manager instance
-        std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
-        cm->start();
-
-        // List the available cameras
-        for (auto const &camera: cm->cameras()) {
-            W_LOG_INFO("found camera ID %s.", camera->id().c_str());
-            W_LOG_DEBUG_START("camera properties:\n");
-            auto cameraProperties =  camera->properties();
-            auto idMap = cameraProperties.idMap();
-            unsigned int x = 0;
-            for(auto &controlValue: cameraProperties) {
-                auto controlId = idMap->at(controlValue.first);
-                if (x > 0) {
-                    W_LOG_DEBUG_MORE("\n");
-                }
-                W_LOG_DEBUG_MORE("  %06d [%s]: %s",
-                                 controlValue.first,
-                                 controlId->name().c_str(),
-                                 controlValue.second.toString().c_str());
-                x++;
+        // Initialise GPIOs, a thread driven by a timer to
+        // monitor them, and a PWM timer to drive PWM
+        // operation
+        errorCode = gpioInit(&pwmFd);
+        if (errorCode >= 0) {
+            timerFd = errorCode;
+            // Start the PWM thread
+            gpioPwmThread = std::thread(gpioPwmLoop, pwmFd);
+            // Start the read thread
+            gpioReadThread = std::thread(gpioReadLoop, timerFd);
+            // Set the thread priority for GPIO reads
+            // to maximum as we never want to miss one
+            struct sched_param scheduling;
+            scheduling.sched_priority = sched_get_priority_max(SCHED_FIFO);
+            errorCode = pthread_setschedparam(gpioReadThread.native_handle(),
+                                              SCHED_FIFO, &scheduling);
+            if (errorCode == 0) {
+                // We should now be able to run a self test
+                errorCode = hwTest();
+            } else {
+                W_LOG_ERROR("unable to set thread priority for GPIO reads"
+                            " (error %d), maybe need sudo?", errorCode);
             }
-            W_LOG_DEBUG_END;
+        } else {
+            W_LOG_ERROR("error %d initialising GPIOs!", errorCode);
         }
 
-        // Acquire the first (and probably only) camera
-        auto cameras = cm->cameras();
-        if (!cameras.empty()) {
-            std::string cameraId = cameras[0]->id();
-            W_LOG_INFO("acquiring camera %s.", cameraId.c_str());
-            gCamera = cm->get(cameraId);
-            gCamera->acquire();
+        if (errorCode == 0) {
+            errorCode = -ENOMEM;
+            // Kick off a control thread
+            controlThread = std::thread(controlLoop);
 
-            // Configure the camera with the stream
-            std::unique_ptr<libcamera::CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
-            cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
-                                  W_CAMERA_STREAM_WIDTH_PIXELS,
-                                  W_CAMERA_STREAM_HEIGHT_PIXELS);
+            // Create and start a camera manager instance
+            std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
+            cm->start();
 
-            // Validate and apply the configuration
-            if (cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
-                W_LOG_DEBUG("libcamera will adjust those values.");
-            }
-            gCamera->configure(cameraCfg.get());
+           // Acquire the first (and probably only) camera
+            auto cameras = cm->cameras();
+            if (!cameras.empty()) {
+                std::string cameraId = cameras[0]->id();
+                W_LOG_INFO("acquiring camera %s.", cameraId.c_str());
+                gCamera = cm->get(cameraId);
+                gCamera->acquire();
 
-            W_LOG_INFO_START("validated/applied camera configuration: ");
-            for (std::size_t x = 0; x < cameraCfg->size(); x++) {
-                if (x > 0) {
-                    W_LOG_INFO_MORE(", ");
+                // Configure the camera with the stream
+                std::unique_ptr<libcamera::CameraConfiguration> cameraCfg = gCamera->generateConfiguration({W_CAMERA_STREAM_ROLE});
+                cameraStreamConfigure(cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
+                                      W_CAMERA_STREAM_WIDTH_PIXELS,
+                                      W_CAMERA_STREAM_HEIGHT_PIXELS);
+
+                // Validate and apply the configuration
+                if (cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
+                    W_LOG_DEBUG("libcamera will adjust those values.");
                 }
-                W_LOG_INFO_MORE("%s", cameraCfg->at(x).toString().c_str());
-                x++;
-            }
-            W_LOG_INFO_MORE(".");
-            W_LOG_INFO_END;
+                gCamera->configure(cameraCfg.get());
 
-            // Allocate frame buffers
-            libcamera::FrameBufferAllocator *allocator = new libcamera::FrameBufferAllocator(gCamera);
-            errorCode = 0;
-            for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
-                errorCode = allocator->allocate(cfg->stream());
-                if (errorCode >= 0) {
-                    W_LOG_DEBUG("allocated %d buffer(s) for stream %s.", errorCode,
-                                cfg->toString().c_str());
-                    errorCode = 0;
-                } else {
-                    W_LOG_ERROR("unable to allocate frame buffers (error code %d)!.",
-                                errorCode);
+                W_LOG_INFO_START("validated/applied camera configuration: ");
+                for (std::size_t x = 0; x < cameraCfg->size(); x++) {
+                    if (x > 0) {
+                        W_LOG_INFO_MORE(", ");
+                    }
+                    W_LOG_INFO_MORE("%s", cameraCfg->at(x).toString().c_str());
+                    x++;
                 }
-            }
-            if (errorCode == 0) {
-                W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
-                // Create a queue of requests using the allocated buffers
-                std::vector<std::unique_ptr<libcamera::Request>> requests;
-                for (auto cfg: *cameraCfg) {
-                    libcamera::Stream *stream = cfg.stream();
-                    const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = allocator->buffers(stream);
-                    for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
-                        std::unique_ptr<libcamera::Request> request = gCamera->createRequest();
-                        if (request) {
-                            const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[x];
-                            errorCode = request->addBuffer(stream, buffer.get());
-                            if (errorCode == 0) {
-                                // Encode the width, height and stride into the cookie of
-                                // the FrameBuffer as we will need that information later
-                                // when converting the FrameBuffer to a form that OpenCV
-                                // and FFmpeg understand
-                                buffer->setCookie(cookieEncode(stream->configuration().size.width,
-                                                               stream->configuration().size.height,
-                                                               stream->configuration().stride));
-                                requests.push_back(std::move(request));
-                            } else {
-                                W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
-                                             errorCode);
-                            }
-                        } else {
-                            errorCode = -ENOMEM;
-                            W_LOG_ERROR("unable to create request to camera!");
-                        }
+                W_LOG_INFO_MORE(".");
+                W_LOG_INFO_END;
+
+                // Allocate frame buffers
+                libcamera::FrameBufferAllocator *allocator = new libcamera::FrameBufferAllocator(gCamera);
+                errorCode = 0;
+                for (auto cfg = cameraCfg->begin(); (cfg != cameraCfg->end()) && (errorCode == 0); cfg++) {
+                    errorCode = allocator->allocate(cfg->stream());
+                    if (errorCode >= 0) {
+                        W_LOG_DEBUG("allocated %d buffer(s) for stream %s.", errorCode,
+                                    cfg->toString().c_str());
+                        errorCode = 0;
+                    } else {
+                        W_LOG_ERROR("unable to allocate frame buffers (error code %d)!.",
+                                    errorCode);
                     }
                 }
                 if (errorCode == 0) {
-                    errorCode = -ENOMEM;
-                    // That's got pretty much all of the libcamera stuff, the camera
-                    // setup, done.  Now set up the output stream for video recording
-                    // using FFmpeg, format being HLS containing H.264-encoded data.
-                    const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
-                    avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
-                                                   nullptr,
-                                                   (commandLineParameters.outputDirectory + 
-                                                    std::string(W_DIR_SEPARATOR) +
-                                                    commandLineParameters.outputFileName +
-                                                    std::string(W_HLS_PLAYLIST_FILE_EXTENSION)).c_str());
-                    if (avFormatContext) {
-                        // Configure the HLS options
-                        AVDictionary *hlsOptions = nullptr;
-                        // Note: the original example I was following:
-                        // https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124
-                        // set a load of "segment_*" (e.g. segment_time_delta='1.0', segment_list_flags='cache+live')
-                        // options, however, though these exist in a "stream segment muxer" (see libavformat\segment.c)
-                        // they don't seem to be at all associated with the HLS stream as configured here
-                        // and the original example was including them wrongly (it just added them with
-                        // an av_dict_set() individually, whereas in fact they have to be added as
-                        // sub-dictionary (a string of key-value pairs separated by a colon) with the
-                        // key "hls_segment_options") and so it wouldn't have known they had no effect
-                        // as avformat_write_header() ignores unused dictionary entries.  So I've
-                        // not included the "segment_*" options here.
-                        // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
-                        // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
-                        // in the output.
-                        // Note: we don't apply hls_time, to set the segment size, here; instead we set
-                        // the "gop_size" of the codec, which is the distance between key-frames, to
-                        // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
-                        // as the segment size, which is much better, since it ensures a key-frame at the
-                        // start of every segment.
-                        if ((av_dict_set(&hlsOptions, "hls_base_url",
-                                         std::string(W_HLS_BASE_URL W_DIR_SEPARATOR +
-                                                     commandLineParameters.outputDirectory +
-                                                     W_DIR_SEPARATOR).c_str(), 0) == 0) &&
-                            (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
-                            (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
-                            (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
-                            (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
-                                                                   "program_date_time", 0) == 0)) { // Not required but nice to have
-                            //  Set up the H264 video output stream over HLS
-                            avStream = avformat_new_stream(avFormatContext, nullptr);
-                            if (avStream) {
-                                errorCode = -ENODEV;
-                                const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
-                                if (videoOutputCodec) {
-                                    errorCode = -ENOMEM;
-                                    avCodecContext = avcodec_alloc_context3(videoOutputCodec);
-                                    if (avCodecContext) {
-                                        W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
-                                        avCodecContext->width = cameraCfg->at(0).size.width;
-                                        avCodecContext->height = cameraCfg->at(0).size.height;
-                                        avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
-                                        avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
-                                        // Make sure we get a key frame every segment, otherwise if the
-                                        // HLS client has to seek backwards from the front and can't find
-                                        // a key frame it may fail to play the stream
-                                        avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
-                                        // From the discussion here:
-                                        // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
-                                        // ... the intended effect of setting keyint_min to twice
-                                        // the GOP size is that key-frames can still be inserted
-                                        // at a scene-cut but they don't become the kind of key-frame
-                                        // that would cause a segment to end early; this keeps the rate
-                                        // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
-                                        avCodecContext->keyint_min = avCodecContext->gop_size * 2;
-                                        avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
-                                        avCodecContext->codec_id = AV_CODEC_ID_H264;
-                                        avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
-                                        // This is needed to include the frame duration in the encoded
-                                        // output, otherwise the HLS bit of av_interleaved_write_frame()
-                                        // will emit a warning that frames having zero duration will mean
-                                        // the HLS segment timing is orf
-                                        avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
-                                        AVDictionary *codecOptions = nullptr;
-                                        // Note: have to set "tune" to "zerolatency" below for the hls.js HLS
-                                        // client to work correctly: if you do not then hls.js will only work
-                                        // if it is started at exactly the same time as the served stream is
-                                        // first started and, also, without this setting hls.js will never
-                                        // regain sync should it fall off the stream.  I have no idea why; it
-                                        // took me a week of trial and error with a zillion settings to find
-                                        // this out
-                                        if ((av_dict_set(&codecOptions, "tune", "zerolatency", 0) == 0) &&
-                                            (avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
-                                            (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
-                                            (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
-                                            // avformat_write_header() and avcodec_open2() modify
-                                            // the options passed to them to be any options that weren't
-                                            // found
-                                            const AVDictionaryEntry *entry = nullptr;
-                                            while ((entry = av_dict_iterate(hlsOptions, entry))) {
-                                                W_LOG_WARN("HLS option \"%s\", or value \"%s\", not found.",
-                                                           entry->key, entry->value);
-                                            }
-                                            while ((entry = av_dict_iterate(codecOptions, entry))) {
-                                                W_LOG_WARN("Codec option \"%s\", or value \"%s\", not found.",
-                                                           entry->key, entry->value);
-                                            }
-                                            // Don't see why this should be necessary (everything in here
-                                            // seems to have its own copy of time_base: the AVCodecContext does,
-                                            // AVFrame does and apparently AVStream does), but the example:
-                                            // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
-                                            // does it and if you don't do it the output has no timing.
-                                            avStream->time_base = avCodecContext->time_base;
-                                            errorCode = 0;
-                                        } else {
-                                            W_LOG_ERROR("unable to either open video codec or write AV format header!");
-                                        }
-                                    } else {
-                                        W_LOG_ERROR("unable to allocate memory for video output context!");
-                                    }
+                    W_LOG_DEBUG("creating requests to the camera using the allocated buffers.");
+                    // Create a queue of requests using the allocated buffers
+                    std::vector<std::unique_ptr<libcamera::Request>> requests;
+                    for (auto cfg: *cameraCfg) {
+                        libcamera::Stream *stream = cfg.stream();
+                        const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = allocator->buffers(stream);
+                        for (unsigned int x = 0; (x < buffers.size()) && (errorCode == 0); x++) {
+                            std::unique_ptr<libcamera::Request> request = gCamera->createRequest();
+                            if (request) {
+                                const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[x];
+                                errorCode = request->addBuffer(stream, buffer.get());
+                                if (errorCode == 0) {
+                                    // Encode the width, height and stride into the cookie of
+                                    // the FrameBuffer as we will need that information later
+                                    // when converting the FrameBuffer to a form that OpenCV
+                                    // and FFmpeg understand
+                                    buffer->setCookie(cookieEncode(stream->configuration().size.width,
+                                                                   stream->configuration().size.height,
+                                                                   stream->configuration().stride));
+                                    requests.push_back(std::move(request));
                                 } else {
-                                    W_LOG_ERROR("unable to find H.264 codec in FFmpeg!");
+                                    W_LOG_ERROR("can't attach buffer to camera request (error code %d)!",
+                                                 errorCode);
                                 }
                             } else {
-                                W_LOG_ERROR("unable to allocate memory for video output stream!");
+                                errorCode = -ENOMEM;
+                                W_LOG_ERROR("unable to create request to camera!");
                             }
-                        } else {
-                            W_LOG_ERROR("unable to allocate memory for a dictionary entry that configures HLS!");
                         }
-                    } else {
-                        W_LOG_ERROR("unable to allocate memory for video output context!");
                     }
                     if (errorCode == 0) {
-                        // Now set up the OpenCV background subtractor object
-                        gBackgroundSubtractor = cv::createBackgroundSubtractorMOG2();
-                        if (gBackgroundSubtractor) {
-                            // We have not yet set any of the controls for the camera;
-                            // the only one we care about here is the frame rate,
-                            // so that the settings above match.  There is a minimum
-                            // and a maximum, setting both the same fixes the rate.
-                            // We create a camera control list and pass it to
-                            // the start() method when we start the camera.
-                            libcamera::ControlList cameraControls;
-                            // Units are microseconds.
-                            int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
-                            cameraControls.set(libcamera::controls::FrameDurationLimits,
-                                               libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
-                                                                                       frameDurationLimit}));
-                            // Attach the requestCompleted() handler
-                            // function to its events and start the camera;
-                            // everything else happens in the callback function
-                            gCamera->requestCompleted.connect(requestCompleted);
-
-                            // Initialise GPIOs and a thread driven by a timer to
-                            // monitor them
-                            errorCode = gpioInit();
-                            if (errorCode >= 0) {
-                                timerFd = errorCode;
-                                gpioReadThread = std::thread(gpioReadLoop, timerFd);
-                                // Set the thread priority for GPIO reads
-                                // to maximum as we never want to miss one
-                                struct sched_param scheduling;
-                                scheduling.sched_priority = sched_get_priority_max(SCHED_FIFO);
-                                errorCode = pthread_setschedparam(gpioReadThread.native_handle(),
-                                                                  SCHED_FIFO, &scheduling);
-                                if (errorCode != 0) {
-                                    W_LOG_ERROR("unable to set thread priority for GPIO reads"
-                                                " (error %d), maybe need sudo?", errorCode);
+                        errorCode = -ENOMEM;
+                        // That's got pretty much all of the libcamera stuff, the camera
+                        // setup, done.  Now set up the output stream for video recording
+                        // using FFmpeg, format being HLS containing H.264-encoded data.
+                        const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
+                        avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
+                                                       nullptr,
+                                                       (commandLineParameters.outputDirectory + 
+                                                        std::string(W_DIR_SEPARATOR) +
+                                                        commandLineParameters.outputFileName +
+                                                        std::string(W_HLS_PLAYLIST_FILE_EXTENSION)).c_str());
+                        if (avFormatContext) {
+                            // Configure the HLS options
+                            AVDictionary *hlsOptions = nullptr;
+                            // Note: the original example I was following:
+                            // https://medium.com/@vladakuc/hls-video-streaming-from-opencv-and-ffmpeg-828ca80b4124
+                            // set a load of "segment_*" (e.g. segment_time_delta='1.0', segment_list_flags='cache+live')
+                            // options, however, though these exist in a "stream segment muxer" (see libavformat\segment.c)
+                            // they don't seem to be at all associated with the HLS stream as configured here
+                            // and the original example was including them wrongly (it just added them with
+                            // an av_dict_set() individually, whereas in fact they have to be added as
+                            // sub-dictionary (a string of key-value pairs separated by a colon) with the
+                            // key "hls_segment_options") and so it wouldn't have known they had no effect
+                            // as avformat_write_header() ignores unused dictionary entries.  So I've
+                            // not included the "segment_*" options here.
+                            // Look at the bottom of libavformat\hlsenc.c and libavformat\mpegtsenc.c for the
+                            // options that _do_ apply, or pipe "ffmpeg -h full" to file and search for "HLS"
+                            // in the output.
+                            // Note: we don't apply hls_time, to set the segment size, here; instead we set
+                            // the "gop_size" of the codec, which is the distance between key-frames, to
+                            // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
+                            // as the segment size, which is much better, since it ensures a key-frame at the
+                            // start of every segment.
+                            if ((av_dict_set(&hlsOptions, "hls_base_url",
+                                             std::string(W_HLS_BASE_URL W_DIR_SEPARATOR +
+                                                         commandLineParameters.outputDirectory +
+                                                         W_DIR_SEPARATOR).c_str(), 0) == 0) &&
+                                (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
+                                (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
+                                (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
+                                (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
+                                                                       "program_date_time", 0) == 0)) { // Not required but nice to have
+                                //  Set up the H264 video output stream over HLS
+                                avStream = avformat_new_stream(avFormatContext, nullptr);
+                                if (avStream) {
+                                    errorCode = -ENODEV;
+                                    const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
+                                    if (videoOutputCodec) {
+                                        errorCode = -ENOMEM;
+                                        avCodecContext = avcodec_alloc_context3(videoOutputCodec);
+                                        if (avCodecContext) {
+                                            W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
+                                            avCodecContext->width = cameraCfg->at(0).size.width;
+                                            avCodecContext->height = cameraCfg->at(0).size.height;
+                                            avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
+                                            avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
+                                            // Make sure we get a key frame every segment, otherwise if the
+                                            // HLS client has to seek backwards from the front and can't find
+                                            // a key frame it may fail to play the stream
+                                            avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
+                                            // From the discussion here:
+                                            // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
+                                            // ... the intended effect of setting keyint_min to twice
+                                            // the GOP size is that key-frames can still be inserted
+                                            // at a scene-cut but they don't become the kind of key-frame
+                                            // that would cause a segment to end early; this keeps the rate
+                                            // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
+                                            avCodecContext->keyint_min = avCodecContext->gop_size * 2;
+                                            avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+                                            avCodecContext->codec_id = AV_CODEC_ID_H264;
+                                            avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+                                            // This is needed to include the frame duration in the encoded
+                                            // output, otherwise the HLS bit of av_interleaved_write_frame()
+                                            // will emit a warning that frames having zero duration will mean
+                                            // the HLS segment timing is orf
+                                            avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
+                                            AVDictionary *codecOptions = nullptr;
+                                            // Note: have to set "tune" to "zerolatency" below for the hls.js HLS
+                                            // client to work correctly: if you do not then hls.js will only work
+                                            // if it is started at exactly the same time as the served stream is
+                                            // first started and, also, without this setting hls.js will never
+                                            // regain sync should it fall off the stream.  I have no idea why; it
+                                            // took me a week of trial and error with a zillion settings to find
+                                            // this out
+                                            if ((av_dict_set(&codecOptions, "tune", "zerolatency", 0) == 0) &&
+                                                (avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
+                                                (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
+                                                (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                                // avformat_write_header() and avcodec_open2() modify
+                                                // the options passed to them to be any options that weren't
+                                                // found
+                                                const AVDictionaryEntry *entry = nullptr;
+                                                while ((entry = av_dict_iterate(hlsOptions, entry))) {
+                                                    W_LOG_WARN("HLS option \"%s\", or value \"%s\", not found.",
+                                                               entry->key, entry->value);
+                                                }
+                                                while ((entry = av_dict_iterate(codecOptions, entry))) {
+                                                    W_LOG_WARN("Codec option \"%s\", or value \"%s\", not found.",
+                                                               entry->key, entry->value);
+                                                }
+                                                // Don't see why this should be necessary (everything in here
+                                                // seems to have its own copy of time_base: the AVCodecContext does,
+                                                // AVFrame does and apparently AVStream does), but the example:
+                                                // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
+                                                // does it and if you don't do it the output has no timing.
+                                                avStream->time_base = avCodecContext->time_base;
+                                                errorCode = 0;
+                                            } else {
+                                                W_LOG_ERROR("unable to either open video codec or write AV format header!");
+                                            }
+                                        } else {
+                                            W_LOG_ERROR("unable to allocate memory for video output context!");
+                                        }
+                                    } else {
+                                        W_LOG_ERROR("unable to find H.264 codec in FFmpeg!");
+                                    }
+                                } else {
+                                    W_LOG_ERROR("unable to allocate memory for video output stream!");
                                 }
                             } else {
-                                W_LOG_ERROR("error %d initialising GPIOs!", errorCode);
+                                W_LOG_ERROR("unable to allocate memory for a dictionary entry that configures HLS!");
                             }
-
-                            if (errorCode == 0) {
-                                // Kick off a control thread
-                                controlThread = std::thread(controlLoop);
+                        } else {
+                            W_LOG_ERROR("unable to allocate memory for video output context!");
+                        }
+                        if (errorCode == 0) {
+                            errorCode = -ENOMEM;
+                            // Now set up the OpenCV background subtractor object
+                            gBackgroundSubtractor = cv::createBackgroundSubtractorMOG2();
+                            if (gBackgroundSubtractor) {
+                                errorCode = 0;
+                                // We have not yet set any of the controls for the camera;
+                                // the only one we care about here is the frame rate,
+                                // so that the settings above match.  There is a minimum
+                                // and a maximum, setting both the same fixes the rate.
+                                // We create a camera control list and pass it to
+                                // the start() method when we start the camera.
+                                libcamera::ControlList cameraControls;
+                                // Units are microseconds.
+                                int64_t frameDurationLimit = 1000000 / W_CAMERA_FRAME_RATE_HERTZ;
+                                cameraControls.set(libcamera::controls::FrameDurationLimits,
+                                                   libcamera::Span<const std::int64_t, 2>({frameDurationLimit,
+                                                                                           frameDurationLimit}));
+                                // Attach the requestCompleted() handler
+                                // function to its events and start the camera;
+                                // everything else happens in the callback function
+                                gCamera->requestCompleted.connect(requestCompleted);
 
                                 // Kick off a thread to encode video frames
                                 videoEncodeThread = std::thread{videoEncodeLoop,
                                                                 avCodecContext,
                                                                 avFormatContext}; 
-
                                 // Kick off our image processing thread
                                 imageProcessingThread = std::thread(imageProcessingLoop);
-
                                 // Remove any old files for a clean start
                                 system(std::string("rm " +
                                                    commandLineParameters.outputDirectory +
@@ -2586,17 +2951,23 @@ int main(int argc, char *argv[])
 
                                 W_LOG_INFO("CTRL-C received, stopping the camera.");
                                 gCamera->stop();
+                            } else {
+                                W_LOG_ERROR("unable to create background subtractor!");
                             }
-                        } else {
-                            errorCode = -ENOMEM;
-                            W_LOG_ERROR("unable to create background subtractor!");
                         }
                     }
                 }
+                for (auto cfg: *cameraCfg) {
+                    allocator->free(cfg.stream());
+                }
+                delete allocator;
+                gCamera->release();
+                gCamera.reset();
             }
 
             // Tidy up
             W_LOG_DEBUG("tidying up.");
+            cm->stop();
             // Make sure all threads know we have terminated
             gTerminated = true;
             // Stop the image processing thread
@@ -2616,12 +2987,6 @@ int main(int argc, char *argv[])
                 avio_closep(&avFormatContext->pb);
                 avformat_free_context(avFormatContext);
             }
-            for (auto cfg: *cameraCfg) {
-                allocator->free(cfg.stream());
-            }
-            delete allocator;
-            gCamera->release();
-            gCamera.reset();
             // These are done last for safety as everything
             // should already have been flushed through
             // anyway above
@@ -2638,6 +3003,13 @@ int main(int argc, char *argv[])
                    gpioReadThread.join();
                 }
                 close(timerFd);
+            }
+            // Stop the GPIO PWM timer
+            if (pwmFd >= 0) {
+                if (gpioPwmThread.joinable()) {
+                   gpioPwmThread.join();
+                }
+                close(pwmFd);
             }
             // Give back the GPIOs
             gpioDeinit();
@@ -2663,9 +3035,6 @@ int main(int argc, char *argv[])
         } else {
             W_LOG_ERROR("no cameras found!");
         }
-
-        // Tidy up
-        cm->stop();
     } else {
         // Print help about the commad line, including the defaults
         commandLinePrintHelp(&commandLineParameters);
