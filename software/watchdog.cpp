@@ -318,24 +318,8 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: IMAGE PROCESSING RELATED
- * -------------------------------------------------------------- */
-
-#ifndef W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS
-// The number of elements in the video processing queue: not so
-// many of these as the buffers are usually quite large, we just
-// need to keep up.
-# define W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS 10
-#endif
-
-/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: VIDEO-CODING RELATED
  * -------------------------------------------------------------- */
-
-#ifndef W_AVFRAME_LIST_MAX_ELEMENTS
-// The maximum number of elements in the video frame queue.
-# define W_AVFRAME_LIST_MAX_ELEMENTS 1000
-#endif
 
 // The stream time-base as an AVRational (integer pair, numerator
 // then denominator) that FFmpeg understands.
@@ -381,15 +365,6 @@ extern "C" {
 #ifndef W_HLS_BASE_URL
 // The URL to serve from (must NOT end with a "/").
 # define W_HLS_BASE_URL "http://10.10.1.16"
-#endif
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: CONTROL RELATED
- * -------------------------------------------------------------- */
-
-#ifndef W_CONTROL_MSG_LIST_MAX_ELEMENTS
-// The maximum number of elements in the control message queue.
-# define W_CONTROL_MSG_LIST_MAX_ELEMENTS 1000
 #endif
 
 /* ----------------------------------------------------------------
@@ -574,6 +549,32 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: MESSAGING RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_MSG_QUEUE_MAX_NUM_HANDLERS
+// The maximum number of message handlers for any given queue.
+# define W_MSG_QUEUE_MAX_NUM_HANDLERS 10
+#endif
+
+#ifndef W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING
+// The number of messages in the video processing queue: not so
+// many of these as the buffers are usually quite large, we just
+// need to keep up.
+# define W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING 10
+#endif
+
+#ifndef W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE
+// The maximum size of the video frame queue; lots of room needed.
+# define W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE 1000
+#endif
+
+#ifndef W_MSG_QUEUE_MAX_SIZE_CONTROL
+// The maximum number of message in the control message queue.
+# define W_MSG_QUEUE_MAX_SIZE_CONTROL 100
+#endif
+
+/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LOGGING RELATED
  * -------------------------------------------------------------- */
 
@@ -647,16 +648,6 @@ typedef struct {
  * TYPES: IMAGE RELATED
  * -------------------------------------------------------------- */
 
-// A buffer of data from the camera.
-typedef struct {
-    unsigned int width;
-    unsigned int height;
-    unsigned int stride;
-    unsigned int sequence;
-    uint8_t *data;
-    unsigned int length;
-} wBuffer_t;
-
 // A point with mutex protection, used for the focus point which
 // we need to write from the control thread and read from the
 // requestCompleted() callback.  Aside from static initialisation,
@@ -675,16 +666,41 @@ typedef struct {
 } wRectInfo_t;
 
 /* ----------------------------------------------------------------
- * TYPES: CONTROL MESSAGING RELATED
+ * TYPES: FFMPEG RELATED
  * -------------------------------------------------------------- */
 
-// Message types that can be passed to the control thread, must
-// match the entries in the union of message bodies and the
-// mapping to message body sizes in gMsgBodySize[].
+// Context needed by the video encode message handler.
+typedef struct {
+    AVFormatContext *formatContext;
+    AVCodecContext *codecContext;
+} wVideoEncodeContext_t;
+
+/* ----------------------------------------------------------------
+ * TYPES: MESSAGE TYPES AND THEIR BODIES
+ * -------------------------------------------------------------- */
+
+// Message types that can be passed to a queue, must match the
+// entries in the union of message bodies and the mapping to
+// message body sizes in gMsgBodySize[].
 typedef enum {
     W_MSG_TYPE_NONE,
+    W_MSG_TYPE_IMAGE_BUFFER,              // wMsgBodyImageBuffer_t
+    W_MSG_TYPE_AVFRAME_PTR_PTR,           // Pointer to an AVFrame * (i.e. an FFMpeg type)
     W_MSG_TYPE_FOCUS_CHANGE               // wMsgBodyFocusChange_t
 } wMsgType_t;
+
+// The message body structure corresponding to W_MSG_TYPE_IMAGE_BUFFER.
+typedef struct {
+    unsigned int width;
+    unsigned int height;
+    unsigned int stride;
+    unsigned int sequence;
+    uint8_t *data;
+    unsigned int length;
+} wMsgBodyImageBuffer_t;
+
+// AVFrame **, the message structure corresponding to W_MSG_TYPE_AVFRAME_PTR_PTR,
+// is defined by FFmpeg.
 
 // The message body structure corresponding to W_MSG_TYPE_FOCUS_CHANGE.
 typedef struct {
@@ -697,14 +713,62 @@ typedef struct {
 // entry for it in gMsgBodySize[].
 typedef union {
     int unused;                           // W_MSG_TYPE_NONE
+    wMsgBodyImageBuffer_t imageBuffer;    // W_MSG_QUEUE_IMAGE_PROCESSING
+    AVFrame **avFrame;                    // W_MSG_TYPE_AVFRAME_PTR_PTR
     wMsgBodyFocusChange_t focusChange;    // W_MSG_TYPE_FOCUS_CHANGE
 } wMsgBody_t;
 
-// Structure to pass information to the control thread.
+// Container for a message type and body pair, the thing that is
+// actually queued.
 typedef struct {
     wMsgType_t type;
     wMsgBody_t *body;
 } wMsgContainer_t;
+
+/* ----------------------------------------------------------------
+ * TYPES: MESSAGE QUEUES
+ * -------------------------------------------------------------- */
+
+// The types of message queues: order must match the order of the
+// members of gMsgQueue.
+typedef enum {
+    W_MSG_QUEUE_CONTROL,
+    W_MSG_QUEUE_IMAGE_PROCESSING,
+    W_MSG_QUEUE_VIDEO_ENCODE
+} wMsgQueueType_t;
+
+// Function signature of a message handler.
+typedef void (wMsgHandlerFunction_t)(wMsgBody_t *msgBody, void *context);
+
+// A message handler: the message handling function and the message
+// type it handles.
+typedef struct {
+    wMsgType_t msgType;
+    wMsgHandlerFunction_t *function;
+    // If non-NULL then this will be called to free items _inside_
+    // the message body; there is no need to call it to free the
+    // message body itself, msgQueueLoop() and msgQueueClear()
+    // will do that always.
+    wMsgHandlerFunction_t *free;
+} wMsgHandler_t;
+
+// Definition of a message queue.
+typedef struct {
+    const char *name; // Name for queue, must not be longer than pthread_setname_np() allows (e.g. 16 characters)
+    std::list<wMsgContainer_t> *containerList; // Pointer to a list of messages in containers
+    std::timed_mutex *mutex; // Pointer to a mutex to protect the list
+    unsigned int maxSize; // The maximum number of elements that can put on the list
+    unsigned int previousSize; // The last recorded length of the list (for debug, used by the caller)
+    wMsgHandler_t handler[W_MSG_QUEUE_MAX_NUM_HANDLERS]; // The message handlers for this queue, end with W_MSG_TYPE_NONE/nullptr/nullptr
+} wMsgQueue_t;
+
+// Forward declarations required since a message handler may push
+// messages to another queue.
+static int msgQueuePush(wMsgQueueType_t queueType,
+                        wMsgType_t msgType, wMsgBody_t *body);
+static unsigned int msgQueuePreviousSizeGet(wMsgQueueType_t queueType);
+static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
+                                    unsigned int previousSize);
 
 /* ----------------------------------------------------------------
  * TYPES: GPIO RELATED
@@ -813,6 +877,13 @@ typedef struct {
 } wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------
+ * VARIABLES: MISC
+ * -------------------------------------------------------------- */
+
+// Flag that tells us whether or not we've had a CTRL-C.
+volatile sig_atomic_t gTerminated = 0;
+
+/* ----------------------------------------------------------------
  * VARIABLES: CAMERA RELATED
  * -------------------------------------------------------------- */
 
@@ -839,25 +910,9 @@ static cv::Mat gMaskForeground;
 // pointProtectedGet() to read it.
 static wPointProtected_t gFocusPointView = {.point = {0, 0}};
 
-// Linked list of image buffers.
-static std::list<wBuffer_t> gImageProcessingList;
-
-// Mutex to protect the linked list of image buffers.
-static std::timed_mutex gImageProcessingListMutex;
-
-// Remember the size of the image processing list, purely for
-// information.
-static unsigned int gImageProcessingListSize = 0;
-
 /* ----------------------------------------------------------------
  * VARIABLES: VIDEO RELATED
  * -------------------------------------------------------------- */
-
-// Linked list of video frames, FFmpeg-style.
-static std::list<AVFrame *> gAvFrameList;
-
-// Mutex to protect the linked list of FFmpeg-format video frames.
-static std::timed_mutex gAvFrameListMutex;
 
 // Count of frames passed to the video codec, purely for information.
 static unsigned int gVideoStreamFrameInputCount = 0;
@@ -866,30 +921,46 @@ static unsigned int gVideoStreamFrameInputCount = 0;
 // information.
 static unsigned int gVideoStreamFrameOutputCount = 0;
 
-// Remember the size of the frame list going to video, purely
-// for information.
-static unsigned int gVideoStreamFrameListSize = 0;
-
 // Keep track of timing on the video stream, purely for information.
 static wMonitorTiming_t gVideoStreamMonitorTiming;
 
 /* ----------------------------------------------------------------
- * VARIABLES: CONTROL RELATED
+ * VARIABLES: MESSAGING RELATED
  * -------------------------------------------------------------- */
 
-// Flag that tells us whether or not we've had a CTRL-C.
-volatile sig_atomic_t gTerminated = 0;
-
-// Linked list of messages for the control thread.
-static std::list<wMsgContainer_t> gMsgContainerList;
-
-// Mutex to protect the linked list of messages.
-static std::timed_mutex gMsgContainerListMutex;
+// NOTE: there are more messaging related variables below
+// the definition of the message handling functions.
 
 // Array of message body sizes; order should match the
 // members of wMsgType_t.
 static unsigned int gMsgBodySize[] = {0,  // Not used
+                                      sizeof(wMsgBodyImageBuffer_t),
+                                      sizeof(AVFrame **),
                                       sizeof(wMsgBodyFocusChange_t)};
+
+// Message queue for the control thread, used by gMsgQueue[],
+// which is defined below the message handlers.
+std::list<wMsgContainer_t> gMsgContainerListControl;
+
+// Mutex to protect the control thread message queue, used by
+// gMsgQueue[], which is defined below the message handlers.
+std::timed_mutex gMsgMutexContol;
+
+// Message queue for the image processing thread, used by gMsgQueue[],
+// which is defined below the message handlers.
+std::list<wMsgContainer_t> gMsgContainerListImageProcessing;
+
+// Mutex to protect the image processing thread message queue, used
+// by gMsgQueue[], which is defined below the message handlers.
+std::timed_mutex gMsgMutexImageProcessing;
+
+// Message queue for the video encode thread, used by gMsgQueue[],
+// which is defined below the message handlers.
+std::list<wMsgContainer_t> gMsgContainerListVideoEncode;
+
+// Mutex to protect the video encode thread message queue, used
+// by gMsgQueue[], which is defined below the message handlers.
+std::timed_mutex gMsgMutexVideoEncode;
 
 /* ----------------------------------------------------------------
  * VARIABLES: GPIO RELATED
@@ -967,7 +1038,7 @@ static std::chrono::system_clock::time_point gGpioInputReadStop;
 static uint64_t gGpioInputReadSlipCount = 0;
 
 /* ----------------------------------------------------------------
- * VARIABLES: MOVEMENT RELATED
+ * VARIABLES: MOTOR RELATED
  * -------------------------------------------------------------- */
 
 // Movement tracking: order must match wMovementType_t.
@@ -1300,22 +1371,9 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
         }
 
         if (errorCode == 0) {
-            gAvFrameListMutex.lock();
-            errorCode = -ENOBUFS;
-            unsigned int queueLength = gAvFrameList.size();
-            if (queueLength < W_AVFRAME_LIST_MAX_ELEMENTS) {
-                errorCode = queueLength + 1;
-                try {
-                    // Ownership of the data in the frame
-                    // effectively passes to videoEncodeLoop()
-                    gAvFrameList.push_back(avFrame);
-                    gVideoStreamFrameInputCount++;
-                }
-                catch(int x) {
-                    errorCode = -x;
-                }
-            }
-            gAvFrameListMutex.unlock();
+            errorCode = msgQueuePush(W_MSG_QUEUE_VIDEO_ENCODE,
+                                     W_MSG_TYPE_AVFRAME_PTR_PTR,
+                                     (wMsgBody_t *) &avFrame);
         }
 
         if (errorCode < 0) {
@@ -1328,35 +1386,6 @@ static int avFrameQueuePush(uint8_t *data, unsigned int length,
     }
 
     return errorCode;
-}
-
-// Try to pop a video frame off the queue.
-static int avFrameQueueTryPop(AVFrame **avFrame)
-{
-    int errorCode = -EAGAIN;
-
-    if (avFrame && gAvFrameListMutex.try_lock_for(std::chrono::seconds(1))) {
-        if (!gAvFrameList.empty()) {
-            *avFrame = gAvFrameList.front();
-            gAvFrameList.pop_front();
-            errorCode = 0;
-        }
-        gAvFrameListMutex.unlock();
-    }
-
-    return errorCode;
-}
-
-// Empty the video frame queue.
-static void avFrameQueueClear()
-{
-    AVFrame *avFrame = nullptr;
-
-    gAvFrameListMutex.lock();
-    while (avFrameQueueTryPop(&avFrame) == 0) {
-        av_frame_free(&avFrame);
-    }
-    gAvFrameListMutex.unlock();
 }
 
 // Get video from the codec and write it to the output.
@@ -1416,39 +1445,6 @@ static int videoOutputFlush(AVCodecContext *codecContext, AVFormatContext *forma
     }
 
     return errorCode;
-}
-
-// Video encode task/thread/thing.
-static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *formatContext)
-{
-    int32_t errorCode = 0;
-    AVFrame *avFrame = nullptr;
-
-    while (!gTerminated) {
-        if (avFrameQueueTryPop(&avFrame) == 0) {
-            // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
-            // Ownership of the data in the frame now passes
-            // to the video codec and will be free'd by
-            // avFrameFreeCallback()
-            errorCode = avcodec_send_frame(codecContext, avFrame);
-            if (errorCode == 0) {
-                errorCode = videoOutput(codecContext, formatContext);
-                // Keep track of timing here, at the end of the 
-                // complicated camera/video-frame antics, for debug
-                // purposes
-                monitorTimingUpdate(&gVideoStreamMonitorTiming);
-            } else {
-                W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
-            }
-            // Now we can free the frame
-            av_frame_free(&avFrame);
-            if ((errorCode != 0) && (errorCode != AVERROR(EAGAIN))) {
-                W_LOG_ERROR("error %d from FFmpeg!", errorCode);
-            }
-        }
-    }
-
-    W_LOG_DEBUG("Video encode loop has exited");
 }
 
 /* ----------------------------------------------------------------
@@ -2131,45 +2127,293 @@ static void gpioDeinit()
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: CONTROL THREAD RELATED
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyImageBuffer_t (OpenCV)
  * -------------------------------------------------------------- */
 
-// Push a message onto the control queue.  body is copied so
-// it can be passed in any which way (and it is up to the
-// caller of controlQueueTryPop() to free any message body).
-// The addresses of any members of wMsgBody_t can be passed
-// in, cast to wMsgBody_t *.
-static int controlQueuePush(wMsgType_t type, wMsgBody_t *body)
+// Message handler for wMsgBodyImageBuffer_t.
+static void msgHandlerImageBuffer(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyImageBuffer_t *imageBuffer = (wMsgBodyImageBuffer_t *) msgBody;
+    cv::Point point;
+
+    // This handler doesn't use any context
+    (void) context;
+
+    // Do the OpenCV things.  From the comment on this post:
+    // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
+    // ...we can bring in just the Y portion of the frame as, effectively,
+    // a gray-scale image using CV_8UC1, which can be processed
+    // quickly. Note that OpenCV is operating in-place on the
+    // data, it does not perform a copy
+    cv::Mat frameOpenCvGray(imageBuffer->height, imageBuffer->width, CV_8UC1,
+                            imageBuffer->data, imageBuffer->stride);
+
+    // Update the background model: this will cause moving areas to
+    // appear as pixels with value 255, stationary areas to appear
+    // as pixels with value 0
+    gBackgroundSubtractor->apply(frameOpenCvGray, gMaskForeground);
+
+    // Apply thresholding to the foreground mask to remove shadows:
+    // anything below the first number becomes zero, anything above
+    // the first number becomes the second number
+    cv::Mat maskThreshold(imageBuffer->height, imageBuffer->width, CV_8UC1);
+    cv::threshold(gMaskForeground, maskThreshold, 25, 255, cv::THRESH_BINARY);
+    // Perform erosions and dilations on the mask that will remove
+    // any small blobs
+    cv::Mat element = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::Mat maskDeblobbed(imageBuffer->height, imageBuffer->width, CV_8UC1);
+    cv::morphologyEx(maskThreshold, maskDeblobbed, cv::MORPH_OPEN, element);
+
+    // Find the edges of the moving areas, the ones with pixel value 255
+    // in the thresholded/deblobbed mask
+    std::vector<std::vector<cv::Point>> contours;
+    std::vector<cv::Vec4i> hierarchy;
+    cv::findContours(maskDeblobbed, contours, hierarchy,
+                     cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    // Filter the edges to keep just the major ones
+    std::vector<std::vector<cv::Point>> largeContours;
+    for (auto contour: contours) {
+        if (contourArea(contour) > 500) {
+            largeContours.push_back(contour);
+        }
+    }
+
+    // Find the place we should focus on the frame,
+    // if there is one
+    int areaPixels = findFocusFrame(largeContours, &point);
+    if ((areaPixels > 0) && (frameToViewAndLimit(&point, &point) == 0)) {
+        // Push the new focus to the control loop
+        wMsgBodyFocusChange_t focusChange = {.pointView = point,
+                                             .areaPixels = areaPixels};
+        msgQueuePush(W_MSG_QUEUE_CONTROL,
+                     W_MSG_TYPE_FOCUS_CHANGE, (wMsgBody_t *) &focusChange);
+    }
+
+#if 1
+    // Draw bounding boxes
+    for (auto contour: largeContours) {
+        cv::Rect rect = boundingRect(contour);
+        rectangle(frameOpenCvGray, rect,
+                  W_DRAWING_SHADE_MOVING_OBJECTS,
+                  W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS);
+    }
+#else
+    // Draw the wiggly edges
+    cv::drawContours(frameOpenCvGray, largeContours, 0,
+                     W_DRAWING_SHADE_MOVING_OBJECTS,
+                     W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS,
+                     LINE_8, hierarchy, 0);
+#endif
+
+    // Draw the current focus onto the gray OpenCV frame
+    point = pointProtectedGet(&gFocusPointView);
+    if (viewToFrameAndLimit(&point, &point) == 0) {
+        cv::circle(frameOpenCvGray, point,
+                   W_DRAWING_RADIUS_FOCUS_CIRCLE,
+                   W_DRAWING_SHADE_FOCUS_CIRCLE,
+                   W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
+    }
+
+    // Finally, write the current local time onto the frame
+    // First get the time as a string
+    char textBuffer[64];
+    time_t rawTime;
+    time(&rawTime);
+    const auto localTime = localtime(&rawTime);
+    // %F %T is pretty much ISO8601 format, Chinese format,
+    // descending order of magnitude
+    strftime(textBuffer, sizeof(textBuffer), "%F %T", localTime);
+    std::string timeString(textBuffer);
+
+    // Create a frame, filled with its ahade (white), of the
+    // size of the rectangle we want the time to fit inside
+    cv::Mat frameDateTime(W_DRAWING_DATE_TIME_HEIGHT_PIXELS,
+                          W_DRAWING_DATE_TIME_WIDTH_PIXELS, CV_8UC1,
+                          W_DRAWING_DATE_TIME_REGION_SHADE);
+    // Write the text to this frame in its shade (black)
+    cv::putText(frameDateTime, timeString,
+                cv::Point(W_DRAWING_DATE_TIME_MARGIN_PIXELS_X,
+                          W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
+                          W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y),
+                cv::FONT_HERSHEY_SIMPLEX,
+                W_DRAWING_DATE_TIME_FONT_HEIGHT,
+                W_DRAWING_DATE_TIME_TEXT_SHADE,
+                W_DRAWING_DATE_TIME_TEXT_THICKNESS);
+    // Create a rectangle of the same size, positioned on the main image
+    cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X,
+                                       imageBuffer->height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
+                                       W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y,
+                                       W_DRAWING_DATE_TIME_WIDTH_PIXELS,
+                                       W_DRAWING_DATE_TIME_HEIGHT_PIXELS); 
+    // Add frameDateTime to frameOpenCvGray inside dateTimeRegion
+    cv::addWeighted(frameOpenCvGray(dateTimeRegion), W_DRAWING_DATE_TIME_ALPHA,
+                    frameDateTime, 1 - W_DRAWING_DATE_TIME_ALPHA, 0.0,
+                    frameOpenCvGray(dateTimeRegion));
+
+    // Stream the camera frame via FFmpeg: avFrameQueuePush()
+    // will free the image data buffer we were passed
+    unsigned int queueLength = avFrameQueuePush(imageBuffer->data,
+                                                imageBuffer->length,
+                                                imageBuffer->sequence,
+                                                imageBuffer->width,
+                                                imageBuffer->height,
+                                                imageBuffer->stride);
+    if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
+        (queueLength != msgQueuePreviousSizeGet(W_MSG_QUEUE_VIDEO_ENCODE))) {
+        // Print the size of the backlog once a second if it has changed
+        W_LOG_DEBUG("backlog %d frame(s) on video streaming queue",
+                    queueLength);
+        msgQueuePreviousSizeSet(W_MSG_QUEUE_VIDEO_ENCODE, queueLength);
+    }
+}
+
+// Message handler free() function for wMsgBodyImageBuffer_t, used by
+// msgQueueClear().
+static void msgHandlerImageBufferFree(wMsgBody_t *msgBody, void *context)
+{
+    // This handler doesn't use any context
+    (void) context;
+
+    wMsgBodyImageBuffer_t *imageBuffer = (wMsgBodyImageBuffer_t *) msgBody;
+    free(imageBuffer->data);
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER AVFrame (FFmpeg encode)
+ * -------------------------------------------------------------- */
+
+// Message handler for AVFrame.
+static void msgHandlerAvFrame(wMsgBody_t *msgBody, void *context)
+{
+    AVFrame **avFrame = (AVFrame **) msgBody;
+    wVideoEncodeContext_t *videoEncodeContext = (wVideoEncodeContext_t *) context;
+    int32_t errorCode = 0;
+
+    // Procedure from https://ffmpeg.org/doxygen/7.0/group__lavc__encdec.html
+    // Ownership of the data in the frame now passes
+    // to the video codec and will be free'd by
+    // avFrameFreeCallback()
+    errorCode = avcodec_send_frame(videoEncodeContext->codecContext, *avFrame);
+    if (errorCode == 0) {
+        errorCode = videoOutput(videoEncodeContext->codecContext,
+                                videoEncodeContext->formatContext);
+        // Keep track of timing here, at the end of the 
+        // complicated camera/video-frame antics, for debug
+        // purposes
+        monitorTimingUpdate(&gVideoStreamMonitorTiming);
+    } else {
+        W_LOG_ERROR("error %d from avcodec_send_frame()!", errorCode);
+    }
+    // Now we can free the frame
+    av_frame_free(avFrame);
+    if ((errorCode != 0) && (errorCode != AVERROR(EAGAIN))) {
+        W_LOG_ERROR("error %d from FFmpeg!", errorCode);
+    }
+}
+
+// Message handler free() function for AVFrame, used by
+// msgQueueClear().
+static void msgHandlerAvFrameFree(wMsgBody_t *msgBody, void *context)
+{
+    // This handler doesn't use any context
+    (void) context;
+
+    AVFrame **avFrame = (AVFrame **) msgBody;
+    av_frame_free(avFrame);
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyFocusChange_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyFocusChange_t.
+static void msgHandlerFocusChange(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyFocusChange_t *focusChange = (wMsgBodyFocusChange_t *) msgBody;
+
+    // This handler doesn't use any context
+    (void) context;
+
+    W_LOG_DEBUG("MSG_FOCUS_CHANGE: x %d, y %d, area %d.",
+                focusChange->pointView.x, focusChange->pointView.y,
+                focusChange->areaPixels);
+    pointProtectedSet(&gFocusPointView, &(focusChange->pointView));
+}
+
+/* ----------------------------------------------------------------
+ * MORE VARIABLES: THE MESSAGE QUEUES WITH THEIR MESSAGE HANDLERS
+ * -------------------------------------------------------------- */
+
+// Array of message queues; order must match the members of
+// wMsgQueueType_t.
+static wMsgQueue_t gMsgQueue[] = {{"control",
+                                   &gMsgContainerListControl,
+                                   &gMsgMutexContol,
+                                   W_MSG_QUEUE_MAX_SIZE_CONTROL,
+                                   0,
+                                   {{W_MSG_TYPE_FOCUS_CHANGE, msgHandlerFocusChange, nullptr},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
+                                  {"imageProcess",
+                                   &gMsgContainerListImageProcessing,
+                                   &gMsgMutexImageProcessing,
+                                   W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING,
+                                   0,
+                                   {{W_MSG_TYPE_IMAGE_BUFFER, msgHandlerImageBuffer, msgHandlerImageBufferFree},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
+                                  {"videoEncode",
+                                   &gMsgContainerListVideoEncode,
+                                   &gMsgMutexVideoEncode,
+                                   W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE,
+                                   0,
+                                   {{W_MSG_TYPE_AVFRAME_PTR_PTR, msgHandlerAvFrame, msgHandlerAvFrameFree},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
+                                  };
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE QUEUES
+ * -------------------------------------------------------------- */
+
+// Push a message onto a queue.  body is copied so it can be passed
+// in any which way (and it is up to the caller of msgQueueTryPop()
+// to free the copied message body).  The addresses of any members
+// of wMsgBody_t can be passed in, cast to wMsgBody_t *.
+// I tried to do this properly as a union but gave up and cast
+// instead.
+static int msgQueuePush(wMsgQueueType_t queueType,
+                        wMsgType_t msgType, wMsgBody_t *body)
 {
     int errorCode = -EINVAL;
 
-    if (type < W_ARRAY_COUNT(gMsgBodySize)) {
+    if ((queueType < W_ARRAY_COUNT(gMsgQueue)) &&
+        (msgType < W_ARRAY_COUNT(gMsgBodySize))) {
         errorCode = 0;
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         wMsgBody_t *bodyCopy = nullptr;
-        if (gMsgBodySize[type] > 0) {
+        if (gMsgBodySize[msgType] > 0) {
             errorCode = -ENOMEM;
-            bodyCopy = (wMsgBody_t *) malloc(gMsgBodySize[type]);
+            bodyCopy = (wMsgBody_t *) malloc(gMsgBodySize[msgType]);
             if (bodyCopy) {
                 errorCode = 0;
-                memcpy(bodyCopy, body, gMsgBodySize[type]);
+                memcpy(bodyCopy, body, gMsgBodySize[msgType]);
             }
         }
         if (errorCode == 0) {
-            wMsgContainer_t container = {.type = type,
+            wMsgContainer_t container = {.type = msgType,
                                          .body = bodyCopy};
-            gMsgContainerListMutex.lock();
+            msgQueue->mutex->lock();
             errorCode = -ENOBUFS;
-            unsigned int queueLength = gMsgContainerList.size();
-            if (queueLength < W_CONTROL_MSG_LIST_MAX_ELEMENTS) {
+            unsigned int queueLength = msgQueue->containerList->size();
+            if (queueLength < msgQueue->maxSize) {
                 errorCode = queueLength + 1;
                 try {
-                    gMsgContainerList.push_back(container);
+                    msgQueue->containerList->push_back(container);
                 }
                 catch(int x) {
                     errorCode = -x;
                 }
             }
-            gMsgContainerListMutex.unlock();
+            msgQueue->mutex->unlock();
         }
 
         if (errorCode < 0) {
@@ -2177,274 +2421,163 @@ static int controlQueuePush(wMsgType_t type, wMsgBody_t *body)
                 free(bodyCopy);
             }
             W_LOG_ERROR("unable to push message type %d, body length %d,"
-                        " to control queue (%d)!",
-                        type, gMsgBodySize[type], errorCode);
+                        " to %s message queue (%d)!",
+                        msgType, gMsgBodySize[msgType],
+                        msgQueue->name, errorCode);
         }
     }
 
     return errorCode;
 }
 
-// Try to pop a message off the control queue.  If a message
-// is returned the caller must call free() on msg->body.
-static int controlQueueTryPop(wMsgContainer_t *msg)
+// Empty a message queue.
+static int msgQueueClear(wMsgQueueType_t queueType, void *context)
 {
-    int errorCode = -EAGAIN;
-
-    if (msg && gMsgContainerListMutex.try_lock_for(std::chrono::seconds(1))) {
-        if (!gMsgContainerList.empty()) {
-            *msg = gMsgContainerList.front();
-            gMsgContainerList.pop_front();
-            errorCode = 0;
-        }
-        gMsgContainerListMutex.unlock();
-    }
-
-    return errorCode;
-}
-
-// Empty the control queue.
-static void controlQueueClear()
-{
-    gMsgContainerListMutex.lock();
-    gMsgContainerList.clear();
-    gMsgContainerListMutex.unlock();
-}
-
-// Message handler for wMsgBodyFocusChange_t.
-static void controlMsgHandlerFocusChange(wMsgBodyFocusChange_t *focusChange)
-{
-    W_LOG_DEBUG("MSG_FOCUS_CHANGE: x %d, y %d, area %d.",
-                focusChange->pointView.x, focusChange->pointView.y,
-                focusChange->areaPixels);
-    pointProtectedSet(&gFocusPointView, &(focusChange->pointView));
-}
-
-// Control task/thread/thing.
-static void controlLoop()
-{
+    int errorCode = 0;
     wMsgContainer_t msg;
 
-    while (!gTerminated) {
-        if (controlQueueTryPop(&msg) == 0) {
-            switch (msg.type) {
-                case W_MSG_TYPE_NONE:
-                    break;
-                case W_MSG_TYPE_FOCUS_CHANGE:
-                    controlMsgHandlerFocusChange(&(msg.body->focusChange));
-                    break;
-                default:
-                    W_LOG_WARN("controlLoop() received unknown"
-                               " message type (%d)", msg.type);
-                    break;
+    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
+        if (msgQueue->mutex->try_lock_for(std::chrono::seconds(1))) {
+            while (!msgQueue->containerList->empty()) {
+                errorCode = 0;
+                msg = msgQueue->containerList->front();
+                msgQueue->containerList->pop_front();
+                // See if there is a free() function
+                wMsgHandler_t *handler = nullptr;
+                for (unsigned int x = 0;
+                     (x < W_ARRAY_COUNT(msgQueue->handler)) &&
+                     (handler = &(msgQueue->handler[x])) &&
+                     (handler->function != nullptr) &&
+                     (handler->msgType != msg.type);
+                     x++) {}
+                if (handler && (handler->free)) {
+                    // Call the free function
+                    handler->free(msg.body, context);
+                }
+                // Now free the body
+                free(msg.body);
             }
-            // Free the message body now that we're done
-            free(msg.body);
+            msgQueue->mutex->unlock();
+        } else {
+            W_LOG_WARN("unable to lock %s message queue to clear it.",
+                       msgQueue->name);
         }
     }
 
-    W_LOG_DEBUG("control loop has exited");
+    return errorCode;
 }
 
-/* ----------------------------------------------------------------
- * STATIC FUNCTIONS: IMAGE PROCESSING (MOSTLY OPENCV) RELATED
- * -------------------------------------------------------------- */
-
-// Push a data buffer onto the image processing queue.
-static int imageProcessingQueuePush(wBuffer_t *buffer)
+// Try to pop a message off a queue.  If a message is returned
+// the caller MUST call free() on msg->body.
+static int msgQueueTryPop(wMsgQueue_t *msgQueue,
+                          wMsgContainer_t *msg)
 {
     int errorCode = -EINVAL;
 
-    if (buffer) {
-        gImageProcessingListMutex.lock();
-        errorCode = -ENOBUFS;
-        unsigned int queueLength = gImageProcessingList.size();
-        if (queueLength < W_IMAGE_PROCESSING_LIST_MAX_ELEMENTS) {
-            errorCode = queueLength + 1;
-            try {
-                gImageProcessingList.push_back(*buffer);
-            }
-            catch(int x) {
-                errorCode = -x;
+    if (msgQueue && msg) {
+        errorCode = -EAGAIN;
+        if (msgQueue->mutex->try_lock_for(std::chrono::seconds(1))) {
+            if (!msgQueue->containerList->empty()) {
+                *msg = msgQueue->containerList->front();
+                msgQueue->containerList->pop_front();
+                errorCode = 0;
             }
         }
-        gImageProcessingListMutex.unlock();
-    }
-
-    if (errorCode < 0) {
-        W_LOG_ERROR("unable to push image to processing queue (%d)!",
-                    errorCode);
+        msgQueue->mutex->unlock();
     }
 
     return errorCode;
 }
 
-// Try to pop a message off the image processing queue.
-static int imageProcessingQueueTryPop(wBuffer_t *buffer)
+// The message handler loop.
+static void msgQueueLoop(wMsgQueueType_t queueType, void *context)
 {
-    int errorCode = -EAGAIN;
-
-    if (buffer && gImageProcessingListMutex.try_lock_for(std::chrono::seconds(1))) {
-        if (!gImageProcessingList.empty()) {
-            *buffer = gImageProcessingList.front();
-            gImageProcessingList.pop_front();
-            errorCode = 0;
-        }
-        gImageProcessingListMutex.unlock();
-    }
-
-    return errorCode;
-}
-
-// Empty the image processing queue.
-static void imageProcessingQueueClear()
-{
-    wBuffer_t buffer;
-
-    gImageProcessingListMutex.lock();
-    while (imageProcessingQueueTryPop(&buffer) == 0) {
-        free(buffer.data);
-    }
-    gImageProcessingListMutex.unlock();
-}
-
-// Image processing task/thread/thing.
-static void imageProcessingLoop()
-{
-    wBuffer_t buffer;
-    cv::Point point;
-
-    while (!gTerminated) {
-        if (imageProcessingQueueTryPop(&buffer) == 0) {
-            // Do the OpenCV things.  From the comment on this post:
-            // https://stackoverflow.com/questions/44517828/transform-a-yuv420p-qvideoframe-into-grayscale-opencv-mat
-            // ...we can bring in just the Y portion of the frame as, effectively,
-            // a gray-scale image using CV_8UC1, which can be processed
-            // quickly. Note that OpenCV is operating in-place on the
-            // data, it does not perform a copy
-            cv::Mat frameOpenCvGray(buffer.height, buffer.width, CV_8UC1,
-                                    buffer.data, buffer.stride);
-
-            // Update the background model: this will cause moving areas to
-            // appear as pixels with value 255, stationary areas to appear
-            // as pixels with value 0
-            gBackgroundSubtractor->apply(frameOpenCvGray, gMaskForeground);
-
-            // Apply thresholding to the foreground mask to remove shadows:
-            // anything below the first number becomes zero, anything above
-            // the first number becomes the second number
-            cv::Mat maskThreshold(buffer.height, buffer.width, CV_8UC1);
-            cv::threshold(gMaskForeground, maskThreshold, 25, 255, cv::THRESH_BINARY);
-            // Perform erosions and dilations on the mask that will remove
-            // any small blobs
-            cv::Mat element = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::Mat maskDeblobbed(buffer.height, buffer.width, CV_8UC1);
-            cv::morphologyEx(maskThreshold, maskDeblobbed, cv::MORPH_OPEN, element);
-
-            // Find the edges of the moving areas, the ones with pixel value 255
-            // in the thresholded/deblobbed mask
-            std::vector<std::vector<cv::Point>> contours;
-            std::vector<cv::Vec4i> hierarchy;
-            cv::findContours(maskDeblobbed, contours, hierarchy,
-                             cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-            // Filter the edges to keep just the major ones
-            std::vector<std::vector<cv::Point>> largeContours;
-            for (auto contour: contours) {
-                if (contourArea(contour) > 500) {
-                    largeContours.push_back(contour);
+    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
+        wMsgContainer_t msg;
+        W_LOG_DEBUG("%s: message loop has started", msgQueue->name);
+        while (!gTerminated) {
+            if (msgQueueTryPop(msgQueue, &msg) == 0) {
+                // Find the message handler
+                wMsgHandler_t *handler = nullptr;
+                for (unsigned int x = 0;
+                     (x < W_ARRAY_COUNT(msgQueue->handler)) &&
+                     (handler = &(msgQueue->handler[x])) &&
+                     (handler->function != nullptr) &&
+                     (handler->msgType != msg.type);
+                     x++) {}
+                if (handler && (handler->function)) {
+                    // Call the handler
+                    handler->function(msg.body, context);
+                } else {
+                    W_LOG_ERROR("%s: unhandled message type (%d)",
+                                msgQueue->name, msg.type);
                 }
-            }
-
-            // Find the place we should focus on the frame,
-            // if there is one
-            int areaPixels = findFocusFrame(largeContours, &point);
-            if ((areaPixels > 0) && (frameToViewAndLimit(&point, &point) == 0)) {
-                // Push the new focus to the control loop
-                wMsgBodyFocusChange_t focusChange = {.pointView = point,
-                                                     .areaPixels = areaPixels};
-                controlQueuePush(W_MSG_TYPE_FOCUS_CHANGE, (wMsgBody_t *) &focusChange);
-            }
-
-#if 1
-            // Draw bounding boxes
-            for (auto contour: largeContours) {
-                cv::Rect rect = boundingRect(contour);
-                rectangle(frameOpenCvGray, rect,
-                          W_DRAWING_SHADE_MOVING_OBJECTS,
-                          W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS);
-            }
-#else
-            // Draw the wiggly edges
-            cv::drawContours(frameOpenCvGray, largeContours, 0,
-                             W_DRAWING_SHADE_MOVING_OBJECTS,
-                             W_DRAWING_LINE_THICKNESS_MOVING_OBJECTS,
-                             LINE_8, hierarchy, 0);
-#endif
-
-            // Draw the current focus onto the gray OpenCV frame
-            point = pointProtectedGet(&gFocusPointView);
-            if (viewToFrameAndLimit(&point, &point) == 0) {
-                cv::circle(frameOpenCvGray, point,
-                           W_DRAWING_RADIUS_FOCUS_CIRCLE,
-                           W_DRAWING_SHADE_FOCUS_CIRCLE,
-                           W_DRAWING_LINE_THICKNESS_FOCUS_CIRCLE);
-            }
-
-            // Finally, write the current local time onto the frame
-            // First get the time as a string
-            char textBuffer[64];
-            time_t rawTime;
-            time(&rawTime);
-            const auto localTime = localtime(&rawTime);
-            // %F %T is pretty much ISO8601 format, Chinese format,
-            // descending order of magnitude
-            strftime(textBuffer, sizeof(textBuffer), "%F %T", localTime);
-            std::string timeString(textBuffer);
-
-            // Create a frame, filled with its ahade (white), of the
-            // size of the rectangle we want the time to fit inside
-            cv::Mat frameDateTime(W_DRAWING_DATE_TIME_HEIGHT_PIXELS,
-                                  W_DRAWING_DATE_TIME_WIDTH_PIXELS, CV_8UC1,
-                                  W_DRAWING_DATE_TIME_REGION_SHADE);
-            // Write the text to this frame in its shade (black)
-            cv::putText(frameDateTime, timeString,
-                        cv::Point(W_DRAWING_DATE_TIME_MARGIN_PIXELS_X,
-                                  W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
-                                  W_DRAWING_DATE_TIME_MARGIN_PIXELS_Y),
-                        cv::FONT_HERSHEY_SIMPLEX,
-                        W_DRAWING_DATE_TIME_FONT_HEIGHT,
-                        W_DRAWING_DATE_TIME_TEXT_SHADE,
-                        W_DRAWING_DATE_TIME_TEXT_THICKNESS);
-            // Create a rectangle of the same size, positioned on the main image
-            cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X,
-                                               buffer.height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
-                                               W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y,
-                                               W_DRAWING_DATE_TIME_WIDTH_PIXELS,
-                                               W_DRAWING_DATE_TIME_HEIGHT_PIXELS); 
-            // Add frameDateTime to frameOpenCvGray inside dateTimeRegion
-            cv::addWeighted(frameOpenCvGray(dateTimeRegion), W_DRAWING_DATE_TIME_ALPHA,
-                            frameDateTime, 1 - W_DRAWING_DATE_TIME_ALPHA, 0.0,
-                            frameOpenCvGray(dateTimeRegion));
-
-            // Stream the camera frame via FFmpeg: avFrameQueuePush()
-            // will free the image data buffer we were passed
-            unsigned int queueLength = avFrameQueuePush(buffer.data, buffer.length,
-                                                        buffer.sequence,
-                                                        buffer.width,
-                                                        buffer.height,
-                                                        buffer.stride);
-            if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
-                (queueLength != gVideoStreamFrameListSize)) {
-                // Print the size of the backlog once a second if it has changed
-                W_LOG_DEBUG("backlog %d frame(s) on video streaming queue",
-                            queueLength);
-                gVideoStreamFrameListSize = queueLength;
+                // Free the message body now that we're done
+                free(msg.body);
             }
         }
+        W_LOG_DEBUG("%s: message loop has ended", msgQueue->name);
+    } else {
+        W_LOG_ERROR("message queue type out of range (%d, limit %d)",
+                    queueType, W_ARRAY_COUNT(gMsgQueue));
+    }
+}
+
+// Start a message queue thread.
+static int msgQueueThreadStart(wMsgQueueType_t queueType,
+                               void *context,
+                               std::thread *thread)
+{
+    int errorCode = -EINVAL;
+
+    if (thread && (queueType < W_ARRAY_COUNT(gMsgQueue))) {
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
+        // This will go bang if the thread could not be created
+        *thread = std::thread(msgQueueLoop, queueType, context);
+        // Best effort, add the name so that it is displayed when debugging
+        pthread_setname_np(thread->native_handle(), msgQueue->name);
+        errorCode = 0;
     }
 
-    W_LOG_DEBUG("image processing loop has exited");
+    return errorCode;
+}
+
+// Stop a message queue thread.
+static void msgQueueThreadStop(wMsgQueueType_t queueType,
+                               void *context,
+                               std::thread *thread)
+{
+    if (thread && thread->joinable()) {
+       thread->join();
+    }
+    msgQueueClear(queueType, context);
+}
+
+// Get the previousSize record for the given message queue, used
+// by the caller for debugging queue build-ups.
+static unsigned int msgQueuePreviousSizeGet(wMsgQueueType_t queueType)
+{
+    unsigned int previousSize = 0;
+
+    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
+        previousSize = msgQueue->previousSize;
+    }
+
+    return previousSize;
+}
+
+// Set the previousSize record for the given message queue, used
+// by the caller for debugging queue build-ups.
+static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
+                                    unsigned int previousSize)
+{
+    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+        wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
+        msgQueue->previousSize = previousSize;
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -2489,19 +2622,21 @@ static void requestCompleted(libcamera::Request *request)
                 uint8_t *data = (uint8_t *) malloc(dmaBufferLength);
                 if (data) {
                     memcpy(data, dmaBuffer, dmaBufferLength);
-                    wBuffer_t buffer = {.width = width,
-                                        .height = height,
-                                        .stride = stride,
-                                        .sequence = metadata.sequence,
-                                        .data = data,
-                                        .length = dmaBufferLength};
-                    unsigned int queueLength = imageProcessingQueuePush(&buffer);
+                    wMsgBodyImageBuffer_t buffer = {.width = width,
+                                                    .height = height,
+                                                    .stride = stride,
+                                                    .sequence = metadata.sequence,
+                                                    .data = data,
+                                                    .length = dmaBufferLength};
+                    unsigned int queueLength = msgQueuePush(W_MSG_QUEUE_IMAGE_PROCESSING,
+                                                            W_MSG_TYPE_IMAGE_BUFFER,
+                                                            (wMsgBody_t *) &buffer);
                     if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
-                        (queueLength != gImageProcessingListSize)) {
+                        (queueLength != msgQueuePreviousSizeGet(W_MSG_QUEUE_IMAGE_PROCESSING))) {
                         // Print the size of the backlog once a second if it has changed
                         W_LOG_DEBUG("backlog %d frame in image processing queue(s)",
                                     queueLength);
-                        gImageProcessingListSize = queueLength;
+                        msgQueuePreviousSizeSet(W_MSG_QUEUE_IMAGE_PROCESSING, queueLength);
                     }
                     gCameraStreamFrameCount++;
                 } else {
@@ -2806,8 +2941,8 @@ static int motorCalibrate(wMotor_t *motor)
     return errorCode;
 }
 
-// Run a self test of all of the HW.
-static int hwTest()
+// Run a self test of all of the HW and calibrate the motors.
+static int hwInit()
 {
     int errorCode = -ENXIO;
 
@@ -3061,8 +3196,7 @@ int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
     wCommandLineParameters_t commandLineParameters;
-    AVFormatContext *avFormatContext = nullptr;
-    AVCodecContext *avCodecContext = nullptr;
+    wVideoEncodeContext_t videoEncode = {0};
     AVStream *avStream = nullptr;
     int timerFd = -1;
     int pwmFd = -1;
@@ -3097,8 +3231,8 @@ int main(int argc, char *argv[])
             errorCode = pthread_setschedparam(gpioReadThread.native_handle(),
                                               SCHED_FIFO, &scheduling);
             if (errorCode == 0) {
-                // We should now be able to run a self test
-                errorCode = hwTest();
+                // We should now be able to initialise the HW
+                errorCode = hwInit();
             } else {
                 W_LOG_ERROR("unable to set thread priority for GPIO reads"
                             " (error %d), maybe need sudo?", errorCode);
@@ -3108,11 +3242,8 @@ int main(int argc, char *argv[])
         }
 
         if (errorCode == 0) {
-            errorCode = -ENOMEM;
             // Kick off a control thread
-            controlThread = std::thread(controlLoop);
-            pthread_setname_np(controlThread.native_handle(), "controlLoop");
-
+            msgQueueThreadStart(W_MSG_QUEUE_CONTROL, nullptr, &controlThread);
             // Create and start a camera manager instance
             std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
             cm->start();
@@ -3199,13 +3330,13 @@ int main(int argc, char *argv[])
                         // setup, done.  Now set up the output stream for video recording
                         // using FFmpeg, format being HLS containing H.264-encoded data.
                         const AVOutputFormat *avOutputFormat = av_guess_format("hls", nullptr, nullptr);
-                        avformat_alloc_output_context2(&avFormatContext, avOutputFormat,
+                        avformat_alloc_output_context2(&(videoEncode.formatContext), avOutputFormat,
                                                        nullptr,
                                                        (commandLineParameters.outputDirectory + 
                                                         std::string(W_DIR_SEPARATOR) +
                                                         commandLineParameters.outputFileName +
                                                         std::string(W_HLS_PLAYLIST_FILE_EXTENSION)).c_str());
-                        if (avFormatContext) {
+                        if (videoEncode.formatContext) {
                             // Configure the HLS options
                             AVDictionary *hlsOptions = nullptr;
                             // Note: the original example I was following:
@@ -3237,23 +3368,23 @@ int main(int argc, char *argv[])
                                 (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file
                                                                        "program_date_time", 0) == 0)) { // Not required but nice to have
                                 //  Set up the H264 video output stream over HLS
-                                avStream = avformat_new_stream(avFormatContext, nullptr);
+                                avStream = avformat_new_stream(videoEncode.formatContext, nullptr);
                                 if (avStream) {
                                     errorCode = -ENODEV;
                                     const AVCodec *videoOutputCodec = avcodec_find_encoder_by_name("libx264");
                                     if (videoOutputCodec) {
                                         errorCode = -ENOMEM;
-                                        avCodecContext = avcodec_alloc_context3(videoOutputCodec);
-                                        if (avCodecContext) {
+                                        videoEncode.codecContext = avcodec_alloc_context3(videoOutputCodec);
+                                        if (videoEncode.codecContext) {
                                             W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
-                                            avCodecContext->width = cameraCfg->at(0).size.width;
-                                            avCodecContext->height = cameraCfg->at(0).size.height;
-                                            avCodecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
-                                            avCodecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
+                                            videoEncode.codecContext->width = cameraCfg->at(0).size.width;
+                                            videoEncode.codecContext->height = cameraCfg->at(0).size.height;
+                                            videoEncode.codecContext->time_base = W_VIDEO_STREAM_TIME_BASE_AVRATIONAL;
+                                            videoEncode.codecContext->framerate = W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL;
                                             // Make sure we get a key frame every segment, otherwise if the
                                             // HLS client has to seek backwards from the front and can't find
                                             // a key frame it may fail to play the stream
-                                            avCodecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
+                                            videoEncode.codecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_CAMERA_FRAME_RATE_HERTZ;
                                             // From the discussion here:
                                             // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
                                             // ... the intended effect of setting keyint_min to twice
@@ -3261,15 +3392,15 @@ int main(int argc, char *argv[])
                                             // at a scene-cut but they don't become the kind of key-frame
                                             // that would cause a segment to end early; this keeps the rate
                                             // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
-                                            avCodecContext->keyint_min = avCodecContext->gop_size * 2;
-                                            avCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
-                                            avCodecContext->codec_id = AV_CODEC_ID_H264;
-                                            avCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+                                            videoEncode.codecContext->keyint_min = videoEncode.codecContext->gop_size * 2;
+                                            videoEncode.codecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+                                            videoEncode.codecContext->codec_id = AV_CODEC_ID_H264;
+                                            videoEncode.codecContext->codec_type = AVMEDIA_TYPE_VIDEO;
                                             // This is needed to include the frame duration in the encoded
                                             // output, otherwise the HLS bit of av_interleaved_write_frame()
                                             // will emit a warning that frames having zero duration will mean
                                             // the HLS segment timing is orf
-                                            avCodecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
+                                            videoEncode.codecContext->flags = AV_CODEC_FLAG_FRAME_DURATION;
                                             AVDictionary *codecOptions = nullptr;
                                             // Note: have to set "tune" to "zerolatency" below for the hls.js HLS
                                             // client to work correctly: if you do not then hls.js will only work
@@ -3279,9 +3410,11 @@ int main(int argc, char *argv[])
                                             // took me a week of trial and error with a zillion settings to find
                                             // this out
                                             if ((av_dict_set(&codecOptions, "tune", "zerolatency", 0) == 0) &&
-                                                (avcodec_open2(avCodecContext, videoOutputCodec, &codecOptions) == 0) &&
-                                                (avcodec_parameters_from_context(avStream->codecpar, avCodecContext) == 0) &&
-                                                (avformat_write_header(avFormatContext, &hlsOptions) >= 0)) {
+                                                (avcodec_open2(videoEncode.codecContext,
+                                                               videoOutputCodec, &codecOptions) == 0) &&
+                                                (avcodec_parameters_from_context(avStream->codecpar,
+                                                                                 videoEncode.codecContext) == 0) &&
+                                                (avformat_write_header(videoEncode.formatContext, &hlsOptions) >= 0)) {
                                                 // avformat_write_header() and avcodec_open2() modify
                                                 // the options passed to them to be any options that weren't
                                                 // found
@@ -3299,7 +3432,7 @@ int main(int argc, char *argv[])
                                                 // AVFrame does and apparently AVStream does), but the example:
                                                 // https://ffmpeg.org/doxygen/trunk/transcode_8c-example.html
                                                 // does it and if you don't do it the output has no timing.
-                                                avStream->time_base = avCodecContext->time_base;
+                                                avStream->time_base = videoEncode.codecContext->time_base;
                                                 errorCode = 0;
                                             } else {
                                                 W_LOG_ERROR("unable to either open video codec or write AV format header!");
@@ -3343,14 +3476,11 @@ int main(int argc, char *argv[])
                                 gCamera->requestCompleted.connect(requestCompleted);
 
                                 // Kick off a thread to encode video frames
-                                videoEncodeThread = std::thread{videoEncodeLoop,
-                                                                avCodecContext,
-                                                                avFormatContext}; 
-                                pthread_setname_np(videoEncodeThread.native_handle(), "videoEncodeLoop");
+                                msgQueueThreadStart(W_MSG_QUEUE_VIDEO_ENCODE,
+                                                    &videoEncode, &videoEncodeThread);
                                 // Kick off our image processing thread
-                                imageProcessingThread = std::thread(imageProcessingLoop);
-                                // Note: name shortened below as there is a size limit
-                                pthread_setname_np(imageProcessingThread.native_handle(), "imageProcLoop");
+                                msgQueueThreadStart(W_MSG_QUEUE_IMAGE_PROCESSING,
+                                                    nullptr, &imageProcessingThread);
                                 // Remove any old files for a clean start
                                 system(std::string("rm " +
                                                    commandLineParameters.outputDirectory +
@@ -3403,33 +3533,26 @@ int main(int argc, char *argv[])
             cm->stop();
             // Make sure all threads know we have terminated
             gTerminated = true;
-            // Stop the image processing thread
-            if (imageProcessingThread.joinable()) {
-               imageProcessingThread.join();
+            // Stop the image processing thread and empty its queue
+            msgQueueThreadStop(W_MSG_QUEUE_IMAGE_PROCESSING, nullptr,
+                               &imageProcessingThread);
+            // Stop the video encode thread and empty its queue
+            msgQueueThreadStop(W_MSG_QUEUE_VIDEO_ENCODE, &videoEncode,
+                               &videoEncodeThread);
+            videoOutputFlush(videoEncode.codecContext,
+                             videoEncode.formatContext);
+            // Free all of the FFmpeg stuff
+            if (videoEncode.formatContext) {
+                av_write_trailer(videoEncode.formatContext);
             }
-            // Stop the video encode thread
-            if (videoEncodeThread.joinable()) {
-               videoEncodeThread.join();
+            avcodec_free_context(&(videoEncode.codecContext));
+            if (videoEncode.formatContext) {
+                avio_closep(&(videoEncode.formatContext->pb));
+                avformat_free_context(videoEncode.formatContext);
             }
-            videoOutputFlush(avCodecContext, avFormatContext);
-            if (avFormatContext) {
-                av_write_trailer(avFormatContext);
-            }
-            avcodec_free_context(&avCodecContext);
-            if (avFormatContext) {
-                avio_closep(&avFormatContext->pb);
-                avformat_free_context(avFormatContext);
-            }
-            // These are done last for safety as everything
-            // should already have been flushed through
-            // anyway above
-            imageProcessingQueueClear();
-            avFrameQueueClear();
-            // Stop the control thread
-            if (controlThread.joinable()) {
-               controlThread.join();
-            }
-            controlQueueClear();
+            // Stop the control thread and empty its queue
+            msgQueueThreadStop(W_MSG_QUEUE_CONTROL, nullptr, &controlThread);
+
             // Print a load of diagnostic information
             W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                        " %d encoded video frame(s)).",
