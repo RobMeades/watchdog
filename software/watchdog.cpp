@@ -160,7 +160,7 @@ extern "C" {
 
 #ifndef W_CAMERA_FRAME_RATE_HERTZ
 // Frames per second.
-# define W_CAMERA_FRAME_RATE_HERTZ 25
+# define W_CAMERA_FRAME_RATE_HERTZ 15
 #endif
 
 /* ----------------------------------------------------------------
@@ -523,6 +523,57 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: MOVEMENT RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_MOVEMENT_ROTATE_MAX_STEPS
+// A hard-coded safety limit on the range of rotational movement.
+# define W_MOVEMENT_ROTATE_MAX_STEPS 600
+#endif
+
+#ifndef W_MOVEMENT_VERTICAL_MAX_STEPS
+// A hard-coded safety limit on the range of vertical movement.
+# define W_MOVEMENT_VERTICAL_MAX_STEPS 600
+#endif
+
+#ifndef W_MOVEMENT_ROTATE_DIRECTION_SENSE
+// The direction that a "1" on the rotate motor's direction
+// pin causes the motor to move: 1 since a 1 on the rotate
+// motors direction pin causes it to move towards the maximum,
+// which is W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT (otherwise it would
+// need to be -1)..
+# define W_MOVEMENT_ROTATE_DIRECTION_SENSE 1
+#endif
+
+#ifndef W_MOVEMENT_VERTICAL_DIRECTION_SENSE
+// The direction that a "1" on the vertical motor's direction
+// pin causes the motor to move: 1 since a -1 on the vertical
+// motors direction pin causes it to move towards the maximum,
+// which is W_GPIO_PIN_INPUT_LOOK_UP_LIMIT (otherwise it would
+// need to be -1).
+# define W_MOVEMENT_VERTICAL_DIRECTION_SENSE -1
+#endif
+
+#ifndef W_MOTOR_DIRECTION_WAIT_MS
+// The pause between setting the direction that a step is to
+// take and requesting the step.
+# define W_MOTOR_DIRECTION_WAIT_MS 1
+#endif
+
+#ifndef W_MOTOR_STEP_WAIT_MS
+// The pause between setting a step pin output low and raising it
+// high again; also the pause between a pin being high and
+// letting it drop again.
+# define W_MOTOR_STEP_WAIT_MS 1
+#endif
+
+#ifndef W_MOTOR_LIMIT_MARGIN_STEPS
+// How many steps to stay clear of the limit switches in normal
+// operation.
+# define W_MOTOR_LIMIT_MARGIN_STEPS 10
+#endif
+
+/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LOGGING RELATED
  * -------------------------------------------------------------- */
 
@@ -665,7 +716,8 @@ typedef struct {
     unsigned int notLevelCount;
 } wGpioDebounce_t;
 
-// The possible bias for a GPIO input.
+// The possible bias for a GPIO input; if you change the order
+// here then you should change gGpioBiasStr[] to match.
 typedef enum {
     W_GPIO_BIAS_NONE,
     W_GPIO_BIAS_PULL_DOWN,
@@ -712,6 +764,44 @@ typedef struct {
 } wGpioPwm_t;
 
 /* ----------------------------------------------------------------
+ * TYPES: MOTOR/MOVEMENT RELATED
+ * -------------------------------------------------------------- */
+
+// The movement types; values are important as they are the index
+// to that motor in gMotor[].  The motors are calibrated in this
+// order.
+typedef enum {
+    W_MOVEMENT_TYPE_VERTICAL = 0,
+    W_MOVEMENT_TYPE_ROTATE = 1
+} wMovementType_t;
+
+// Where the motor should sit by default, e.g. after calibration;
+// if you change the order here then you should change
+// gMotorRestPositionStr[] to match.
+typedef enum {
+    W_MOTOR_REST_POSITION_CENTRE,
+    W_MOTOR_REST_POSITION_MAX,
+    W_MOTOR_REST_POSITION_MIN
+} wMotorRestPosition_t;
+
+// Track the position of a motor.
+typedef struct {
+    const char *name;
+    unsigned int safetyLimit; // Safety limit, must be at least max - min
+    int pinDisable; // The pin which when set to 1 disables the motor
+    int pinDirection; // The pin which, if set to 1, makes steps * senseDirection positive
+    int pinStep;  // The pin which causes the motor to step on a 0 to 1 transition
+    int pinMax;   // The pin which, when pulled low, indicates max has been reached
+    int pinMin;   // The pin which, when pulled low, indicates min has been reached
+    int senseDirection; // 1 if a 1 at pinDirection moves towards max, else -1
+    wMotorRestPosition_t restPosition;
+    bool calibrated; // Ignore the remaining values if this is false
+    int max;      // A calibrated limit
+    int min;      // A calibrated limit
+    int now;
+} wMotor_t;
+
+/* ----------------------------------------------------------------
  * TYPES: COMMAND-LINE RELATED
  * -------------------------------------------------------------- */
 
@@ -753,7 +843,7 @@ static wPointProtected_t gFocusPointView = {.point = {0, 0}};
 static std::list<wBuffer_t> gImageProcessingList;
 
 // Mutex to protect the linked list of image buffers.
-static std::mutex gImageProcessingListMutex;
+static std::timed_mutex gImageProcessingListMutex;
 
 // Remember the size of the image processing list, purely for
 // information.
@@ -767,7 +857,7 @@ static unsigned int gImageProcessingListSize = 0;
 static std::list<AVFrame *> gAvFrameList;
 
 // Mutex to protect the linked list of FFmpeg-format video frames.
-static std::mutex gAvFrameListMutex;
+static std::timed_mutex gAvFrameListMutex;
 
 // Count of frames passed to the video codec, purely for information.
 static unsigned int gVideoStreamFrameInputCount = 0;
@@ -794,7 +884,7 @@ volatile sig_atomic_t gTerminated = 0;
 static std::list<wMsgContainer_t> gMsgContainerList;
 
 // Mutex to protect the linked list of messages.
-static std::mutex gMsgContainerListMutex;
+static std::timed_mutex gMsgContainerListMutex;
 
 // Array of message body sizes; order should match the
 // members of wMsgType_t.
@@ -827,7 +917,7 @@ static wGpioInput_t gGpioInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
 static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
                                           .name = "rotate disable",
                                           .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 1},
+                                          .initialLevel = 1}, // Start disabled
                                          {.pin = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
                                           .name = "rotate direction",
                                           .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
@@ -839,7 +929,7 @@ static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_DISABL
                                          {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
                                           .name = "vertical disable",
                                           .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 1},
+                                          .initialLevel = 1}, // Start disabled
                                          {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
                                           .name = "vertical direction",
                                           .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
@@ -862,7 +952,7 @@ static wGpioPwm_t gGpioPwmPin[] = {{.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT},
                                    {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT}};
 
 // Array of names for the bias types, just for printing; must be in the same
-// order as wGpioBias_t;
+// order as wGpioBias_t.
 static const char *gGpioBiasStr[] = {"none", "pull down", "pull up"};
 
 // Monitor the number of times we've read GPIOs, purely for information.
@@ -875,6 +965,36 @@ static std::chrono::system_clock::time_point gGpioInputReadStop;
 // Remember the number of times the GPIO read thread has not been called
 // dead on time, purely for information.
 static uint64_t gGpioInputReadSlipCount = 0;
+
+/* ----------------------------------------------------------------
+ * VARIABLES: MOVEMENT RELATED
+ * -------------------------------------------------------------- */
+
+// Movement tracking: order must match wMovementType_t.
+static wMotor_t gMotor[] = {{.name = "vertical",
+                             .safetyLimit = W_MOVEMENT_VERTICAL_MAX_STEPS,
+                             .pinDisable = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
+                             .pinDirection = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
+                             .pinStep = W_GPIO_PIN_OUTPUT_VERTICAL_STEP,
+                             .pinMax = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT,
+                             .pinMin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
+                             .senseDirection = W_MOVEMENT_VERTICAL_DIRECTION_SENSE,
+                             .restPosition = W_MOTOR_REST_POSITION_MAX,
+                             .calibrated = false},
+                            {.name = "rotate",
+                             .safetyLimit = W_MOVEMENT_ROTATE_MAX_STEPS,
+                             .pinDisable = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
+                             .pinDirection = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
+                             .pinStep = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
+                             .pinMax = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
+                             .pinMin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
+                             .senseDirection = W_MOVEMENT_ROTATE_DIRECTION_SENSE,
+                             .restPosition = W_MOTOR_REST_POSITION_CENTRE,
+                             .calibrated = false}};
+
+// Array of names for the rest positions, just for printing; must be in the
+// same order as wMotorRestPosition_t.
+static const char *gMotorRestPositionStr[] = {"centre", "max", "min"};
 
 /* ----------------------------------------------------------------
  * VARIABLES: LOGGING RELATED
@@ -1215,7 +1335,7 @@ static int avFrameQueueTryPop(AVFrame **avFrame)
 {
     int errorCode = -EAGAIN;
 
-    if (avFrame && gAvFrameListMutex.try_lock()) {
+    if (avFrame && gAvFrameListMutex.try_lock_for(std::chrono::seconds(1))) {
         if (!gAvFrameList.empty()) {
             *avFrame = gAvFrameList.front();
             gAvFrameList.pop_front();
@@ -1326,10 +1446,9 @@ static void videoEncodeLoop(AVCodecContext *codecContext, AVFormatContext *forma
                 W_LOG_ERROR("error %d from FFmpeg!", errorCode);
             }
         }
-
-        // Let others in
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    W_LOG_DEBUG("Video encode loop has exited");
 }
 
 /* ----------------------------------------------------------------
@@ -1659,14 +1778,30 @@ static int gpioCfg(unsigned int pin, bool isOutput,
     return errorCode;
 }
 
-// Get the state of a GPIO pin.
-static int gpioGet(unsigned int pin)
+// Get the state of a GPIO pin without any debouncing.
+static int gpioGetRaw(unsigned int pin)
 {
     int levelOrErrorCode = -EINVAL;
 
     struct gpiod_line *line = gpioLineGet(pin);
     if (line) {
         levelOrErrorCode = gpiod_line_get_value(line);
+    }
+
+    return levelOrErrorCode;
+}
+
+// Get the state of a GPIO pin after debouncing.
+static int gpioGet(unsigned int pin)
+{
+    int levelOrErrorCode = -EINVAL;
+
+    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
+                             (levelOrErrorCode < 0); x++) {
+        wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
+        if (gpioInput->pin == pin) {
+            levelOrErrorCode = gpioInput->level;
+        }
     }
 
     return levelOrErrorCode;
@@ -1832,6 +1967,8 @@ static void gpioReadLoop(int timerFd)
         }
     }
     gGpioInputReadStop = std::chrono::system_clock::now();
+
+    W_LOG_DEBUG("GPIO read loop has exited");
 }
 
 // Task/thread/thing to drive the PWM output of the pins
@@ -1874,6 +2011,8 @@ static void gpioPwmLoop(int pwmFd)
             }
         }
     }
+
+    W_LOG_DEBUG("GPIO PWM loop has exited");
 }
 
 // Initialise the GPIO pins and return the file handle of a timer
@@ -1888,7 +2027,7 @@ static int gpioInit(int *fdPwm)
         wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
         fdOrErrorCode = gpioCfg(gpioInput->pin, false, gpioInput->bias);
         if (fdOrErrorCode == 0) {
-            gpioInput->level = gpioGet(gpioInput->pin);
+            gpioInput->level = gpioGetRaw(gpioInput->pin);
             gpioInput->debounce.line = gpioLineGet(gpioInput->pin);
             gpioInput->debounce.notLevelCount = 0;
         } else {
@@ -1917,7 +2056,7 @@ static int gpioInit(int *fdPwm)
 
     if (fdOrErrorCode == 0) {
         // Set up a tick to drive gpioInputLoop()
-        fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, 0);
+        fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
         if (fdOrErrorCode >= 0) {
             struct itimerspec timerSpec = {0};
             timerSpec.it_value.tv_nsec = W_GPIO_TICK_TIMER_PERIOD_US * 1000;
@@ -1937,7 +2076,7 @@ static int gpioInit(int *fdPwm)
 
     if ((fdOrErrorCode >= 0) && (fdPwm)) {
         // Set up a tick to drive PWM
-        *fdPwm = timerfd_create(CLOCK_MONOTONIC, 0);
+        *fdPwm = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
         if (*fdPwm >= 0) {
             struct itimerspec timerSpec = {0};
             timerSpec.it_value.tv_nsec = W_GPIO_PWM_TIMER_PERIOD_US * 1000;
@@ -2052,7 +2191,7 @@ static int controlQueueTryPop(wMsgContainer_t *msg)
 {
     int errorCode = -EAGAIN;
 
-    if (msg && gMsgContainerListMutex.try_lock()) {
+    if (msg && gMsgContainerListMutex.try_lock_for(std::chrono::seconds(1))) {
         if (!gMsgContainerList.empty()) {
             *msg = gMsgContainerList.front();
             gMsgContainerList.pop_front();
@@ -2102,10 +2241,9 @@ static void controlLoop()
             // Free the message body now that we're done
             free(msg.body);
         }
-
-        // Let others in
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    W_LOG_DEBUG("control loop has exited");
 }
 
 /* ----------------------------------------------------------------
@@ -2146,7 +2284,7 @@ static int imageProcessingQueueTryPop(wBuffer_t *buffer)
 {
     int errorCode = -EAGAIN;
 
-    if (buffer && gImageProcessingListMutex.try_lock()) {
+    if (buffer && gImageProcessingListMutex.try_lock_for(std::chrono::seconds(1))) {
         if (!gImageProcessingList.empty()) {
             *buffer = gImageProcessingList.front();
             gImageProcessingList.pop_front();
@@ -2227,6 +2365,7 @@ static void imageProcessingLoop()
                                                      .areaPixels = areaPixels};
                 controlQueuePush(W_MSG_TYPE_FOCUS_CHANGE, (wMsgBody_t *) &focusChange);
             }
+
 #if 1
             // Draw bounding boxes
             for (auto contour: largeContours) {
@@ -2303,10 +2442,9 @@ static void imageProcessingLoop()
                 gVideoStreamFrameListSize = queueLength;
             }
         }
-
-        // Let others in
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    W_LOG_DEBUG("image processing loop has exited");
 }
 
 /* ----------------------------------------------------------------
@@ -2319,7 +2457,6 @@ static void requestCompleted(libcamera::Request *request)
     cv::Point point;
 
     if (request->status() != libcamera::Request::RequestCancelled) {
-
        const std::map<const libcamera::Stream *, libcamera::FrameBuffer *> &buffers = request->buffers();
 
        for (auto bufferPair : buffers) {
@@ -2387,8 +2524,287 @@ static void requestCompleted(libcamera::Request *request)
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: HW SELF-TEST
+ * STATIC FUNCTIONS: HW/MOVEMENT RELATED
  * -------------------------------------------------------------- */
+
+// Enable or disable motor control; a disabled motor will also be
+// marked as uncalibrated since it may move freely when disabled.
+static int motorEnable(wMotor_t *motor, bool enableNotDisable = true)
+{
+    int errorCode = gpioSet(motor->pinDisable, !enableNotDisable);
+
+    if ((errorCode == 0) && !enableNotDisable) {
+        // If disabling the motor, it is no longer calibrated
+        motor->calibrated = false;
+    }
+
+    return errorCode;
+}
+
+// Enable or disable all motors; a disabled motor will also be
+// marked as uncalibrated since it may move freely once disabled.
+static int motorsEnable(bool enableNotDisable = true)
+{
+    int errorCode = 0;
+
+    for (unsigned int x = 0; x < W_ARRAY_COUNT(gMotor); x++) {
+        wMotor_t *motor = &(gMotor[x]);
+        int y = motorEnable(motor, enableNotDisable);
+        if (y < 0) {
+            errorCode = y;
+            W_LOG_ERROR("%s: error %sing motor.", motor->name,
+                        enableNotDisable ? "enabl" : "disabl");
+        }
+    }
+
+    return errorCode;
+}
+
+// Perform a step; will not move if at a limit; being at
+// a limit does not constitute an error: supply stepTaken
+// if you want to know the outcome.
+static int motorStep(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
+{
+    int errorCode = -EINVAL;
+
+    if (stepTaken) {
+        *stepTaken = 0;
+    }
+
+    if (motor) {
+        // Check for limits
+        errorCode = 0;
+        if (step > 0) {
+            errorCode = gpioGet(motor->pinMax);
+        } else if (step < 0) {
+            errorCode = gpioGet(motor->pinMin);
+        }
+
+        if (errorCode == 1) {
+            // A limit level of 1 means the pin remains in its default
+            // pulled-up state, we can move
+
+            // Set the correct direction
+            unsigned int levelDirection = 0;
+            if (step >= 0) {
+                levelDirection = step;
+            }
+            if (motor->senseDirection < 0) {
+                levelDirection = !levelDirection;
+            }
+            errorCode = gpioSet(motor->pinDirection, levelDirection);
+            if (errorCode == 0) {
+                // Wait a moment for the direction pin to settle
+                std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_DIRECTION_WAIT_MS));
+                // Send out a zero to one transition and wait
+                errorCode = gpioSet(motor->pinStep, 0);
+                if (errorCode == 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
+                    errorCode = gpioSet(motor->pinStep, 1);
+                    if (errorCode == 0) {
+                        // Make sure we sit at a one for long enough
+                        std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
+                    }
+                }
+            }
+            if ((errorCode == 0) && (stepTaken)) {
+                // We have taken a step
+                *stepTaken = step;
+            }
+        } else if ((errorCode == 0) && (step != 0)) {
+            W_LOG_DEBUG("%s: hit %s limit.", motor->name, step > 0 ? "max" : "min");
+        }
+
+        if (errorCode < 0) {
+            W_LOG_ERROR("%s: error %d on step.", motor->name, errorCode);
+        }
+    }
+
+    return errorCode;
+}
+
+// Try to move the given number of steps, returning
+// the number actually stepped in stepsTaken; being short
+// on steps does not constitute an error.  Will only move
+// if calibrated unless evenIfUnCalibrated is true.
+static int motorMove(wMotor_t *motor, int steps,
+                     int *stepsTaken = nullptr,
+                     bool evenIfUnCalibrated = false)
+{
+    int errorCode = -EINVAL;
+    int step = 1;
+    int stepsCompleted = 0;
+
+    if (motor && (motor->calibrated || evenIfUnCalibrated)) {
+        errorCode = 0;
+        if (steps > 0) {
+            if (motor->calibrated) {
+                // Limit the steps against the calibrated maximum
+                if (motor->now + steps > motor->max) {
+                    steps = motor->max - motor->now;
+                }
+            } else {
+                // Limit the steps against the hard-coded safety
+                if (steps > (int) motor->safetyLimit) {
+                    steps = motor->safetyLimit;
+                }
+            }
+        } else if (steps < 0) {
+            if (motor->calibrated) {
+                // Limit the steps against the calibrated minimum
+                if (motor->now + steps < motor->min) {
+                    steps = motor->min - motor->now;
+                }
+            } else {
+                // Limit the steps against the hard-coded safety
+                if (steps < -((int) motor->safetyLimit)) {
+                    steps = -motor->safetyLimit;
+                }
+            }
+            step = -1;
+        }
+
+        if (motor->calibrated) {
+            W_LOG_DEBUG("%s: moving %+d step(s).", motor->name, steps);
+        } else {
+            W_LOG_WARN("%s: uncalibrated movement of %+d step(s).",
+                       motor->name, steps);
+        }
+
+        // Actually move
+        int stepTaken = 1;
+        for (int x = 0; (x < steps * step) && (stepTaken != 0) &&
+                        (errorCode == 0); x++) {
+            stepTaken = 0;
+            errorCode = motorStep(motor, step, &stepTaken);
+            if (errorCode == 0) {
+                stepsCompleted += stepTaken;
+            }
+        }
+
+        if (motor->calibrated) {
+            motor->now += stepsCompleted;
+            W_LOG_INFO("%d: now at position %d.", motor->name, motor->now);
+        }
+
+        if (stepsCompleted < steps) {
+            W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
+                             motor->name, stepsCompleted, steps - stepsCompleted);
+            if (motor->calibrated) {
+                W_LOG_WARN_MORE(" motor now needs calibration");
+            }
+            W_LOG_WARN_MORE(".");
+            W_LOG_WARN_END;
+            motor->calibrated = false;
+        }
+
+        if (stepsTaken) {
+            *stepsTaken = stepsCompleted;
+        }
+    }
+
+    return errorCode;
+}
+
+// Send a motor to its rest position; will only do so if
+// the motor is calibrated.  Not being able to get to the
+// rest position _does_ constitute an error.
+static int motorMoveToRest(wMotor_t *motor, int *stepsTaken = nullptr)
+{
+    int errorCode = -EINVAL;
+    int steps = 0;
+    int stepsCompleted = 0;
+
+    if (motor && motor->calibrated) {
+        errorCode = 0;
+        switch (motor->restPosition) {
+            case W_MOTOR_REST_POSITION_CENTRE:
+                steps = -motor->now;
+                break;
+            case W_MOTOR_REST_POSITION_MAX:
+                steps = motor->max - motor->now;
+                break;
+            case W_MOTOR_REST_POSITION_MIN:
+                steps = motor->min - motor->now;
+                break;
+            default:
+                break;
+        }
+
+        if (steps != 0) {
+            errorCode = motorMove(motor, steps, &stepsCompleted, true);
+            if (errorCode == 0) {
+                if (stepsCompleted != steps) {
+                    errorCode = -ENXIO;
+                    W_LOG_ERROR("%s: unable to take %+d step(s) to %s"
+                                 " rest position (only %+d step(s) taken)!",
+                                 motor->name, steps,
+                                 gMotorRestPositionStr[motor->restPosition],
+                                 stepsCompleted);
+                }
+            } else {
+                W_LOG_ERROR("%s: unable to get to rest position (error %d)!",
+                            motor->name, errorCode);
+            }
+        }
+        if (stepsTaken) {
+            *stepsTaken = stepsCompleted;
+        }
+    }
+
+    return errorCode;
+}
+
+// Calibrate the movement range of a motor.
+static int motorCalibrate(wMotor_t *motor)
+{
+    int errorCode = 0;
+    int steps = 0;
+
+    motor->calibrated = false;
+    // Move the full safety distance backwards to the min limit switch
+    errorCode = motorMove(motor, -motor->safetyLimit, &steps, true);
+    if (errorCode == 0) {
+        if (steps > (int) -motor->safetyLimit) {
+            steps = 0;
+            // Do the same in the forward direction
+            errorCode = motorMove(motor, motor->safetyLimit, &steps, true);
+            if (errorCode == 0) {
+                if (steps < ((int) motor->safetyLimit)) {
+                    // steps is now the distance between the minimum
+                    // and maximum limits: set the current position
+                    // and the limits; the margin will be just inside
+                    // the limit switches so that we can move without
+                    // stressing them and we know that our movement
+                    // has become innaccurate if we hit them
+                    steps >>= 1;
+                    motor->now = steps;
+                    steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
+                    motor->max = steps;
+                    motor->min = -steps;
+                    motor->calibrated = true;
+                    W_LOG_INFO("%s: calibrated range +/- %d step(s).",
+                               motor->name, steps);
+                } else {
+                    W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
+                                " from the max limit did not reach the min"
+                                " limit switch.", motor->name,
+                                motor->safetyLimit);
+                }
+            }
+        } else {
+            W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s) did"
+                        " not reach the max limit switch.", motor->name,
+                        motor->safetyLimit);
+        }
+    }
+
+    if ((errorCode == 0) && !motor->calibrated) {
+        errorCode = -ENXIO;
+    }
+
+    return errorCode;
+}
 
 // Run a self test of all of the HW.
 static int hwTest()
@@ -2426,10 +2842,10 @@ static int hwTest()
 
     if (errorCode == 0) {
         // Have a camera, next light up the eyes
-        for (unsigned int y = 0; y < W_ARRAY_COUNT(gGpioPwmPin); y++) {
-            wGpioPwm_t *gpioPwm = &(gGpioPwmPin[y]);
+        for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
+            wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
             unsigned int target = 100;
-            for (unsigned int x = 0; x < 100 * 2; x++) {
+            for (unsigned int y = 0; y < 100 * 2; y++) {
                 if (target == 100) {
                     if (gpioPwmInc(gpioPwm->pin) >= 100) {
                         target = 0;
@@ -2445,15 +2861,24 @@ static int hwTest()
     }
 
     if (errorCode == 0) {
-        int state[20] = {0};
-        while (!gTerminated) {
-            for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
-                int y = gpioGet(gGpioInputPin[x].pin);
-                if (state[x] != y) {
-                    W_LOG_DEBUG("### %s pin changed state to %s.", gGpioInputPin[x].name, y ? "high" : "low");
-                    state[x] = y;
-                }
+        W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
+        // Now calibrate movement
+        errorCode = motorsEnable();
+        for (unsigned int x = 0; (x < W_ARRAY_COUNT(gMotor)) &&
+                                 (errorCode == 0); x++) {
+            errorCode = motorCalibrate(&(gMotor[x]));
+        }
+        if (errorCode == 0) {
+            W_LOG_INFO("calibration successful, moving to rest position.");
+            for (unsigned int x = 0; (x < W_ARRAY_COUNT(gMotor)) &&
+                                     (errorCode == 0); x++) {
+                errorCode = motorMoveToRest(&(gMotor[x]));
             }
+        }
+        if (errorCode != 0) {
+            // Disable motors again if calibration or moving
+            // to rest position failed
+            motorsEnable(false);
         }
     }
 
@@ -2661,8 +3086,10 @@ int main(int argc, char *argv[])
             timerFd = errorCode;
             // Start the PWM thread
             gpioPwmThread = std::thread(gpioPwmLoop, pwmFd);
+            pthread_setname_np(gpioPwmThread.native_handle(), "gpioPwmLoop");
             // Start the read thread
             gpioReadThread = std::thread(gpioReadLoop, timerFd);
+            pthread_setname_np(gpioReadThread.native_handle(), "gpioReadLoop");
             // Set the thread priority for GPIO reads
             // to maximum as we never want to miss one
             struct sched_param scheduling;
@@ -2684,6 +3111,7 @@ int main(int argc, char *argv[])
             errorCode = -ENOMEM;
             // Kick off a control thread
             controlThread = std::thread(controlLoop);
+            pthread_setname_np(controlThread.native_handle(), "controlLoop");
 
             // Create and start a camera manager instance
             std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
@@ -2918,8 +3346,11 @@ int main(int argc, char *argv[])
                                 videoEncodeThread = std::thread{videoEncodeLoop,
                                                                 avCodecContext,
                                                                 avFormatContext}; 
+                                pthread_setname_np(videoEncodeThread.native_handle(), "videoEncodeLoop");
                                 // Kick off our image processing thread
                                 imageProcessingThread = std::thread(imageProcessingLoop);
+                                // Note: name shortened below as there is a size limit
+                                pthread_setname_np(imageProcessingThread.native_handle(), "imageProcLoop");
                                 // Remove any old files for a clean start
                                 system(std::string("rm " +
                                                    commandLineParameters.outputDirectory +
@@ -2963,6 +3394,8 @@ int main(int argc, char *argv[])
                 delete allocator;
                 gCamera->release();
                 gCamera.reset();
+            } else {
+                W_LOG_ERROR("no cameras found!");
             }
 
             // Tidy up
@@ -2997,22 +3430,6 @@ int main(int argc, char *argv[])
                controlThread.join();
             }
             controlQueueClear();
-            // Stop the GPIO tick timer
-            if (timerFd >= 0) {
-                if (gpioReadThread.joinable()) {
-                   gpioReadThread.join();
-                }
-                close(timerFd);
-            }
-            // Stop the GPIO PWM timer
-            if (pwmFd >= 0) {
-                if (gpioPwmThread.joinable()) {
-                   gpioPwmThread.join();
-                }
-                close(pwmFd);
-            }
-            // Give back the GPIOs
-            gpioDeinit();
             // Print a load of diagnostic information
             W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                        " %d encoded video frame(s)).",
@@ -3033,8 +3450,30 @@ int main(int argc, char *argv[])
                         W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
                        gGpioInputReadSlipCount);
         } else {
-            W_LOG_ERROR("no cameras found!");
+            W_LOG_ERROR("HW self test failure!");
         }
+
+        // Disable the stepper motors
+        motorsEnable(false);
+        // Stop the GPIO tick timer
+        // Make sure all threads know we have terminated
+        gTerminated = true;
+        if (timerFd >= 0) {
+            if (gpioReadThread.joinable()) {
+               gpioReadThread.join();
+            }
+            close(timerFd);
+        }
+        // Stop the GPIO PWM timer
+        if (pwmFd >= 0) {
+            if (gpioPwmThread.joinable()) {
+               gpioPwmThread.join();
+            }
+            close(pwmFd);
+        }
+        // Give back the GPIOs
+        gpioDeinit();
+
     } else {
         // Print help about the commad line, including the defaults
         commandLinePrintHelp(&commandLineParameters);
