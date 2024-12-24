@@ -497,6 +497,47 @@ extern "C" {
 # define W_GPIO_PWM_MAX_COUNT 20
 #endif
 
+
+/* ----------------------------------------------------------------
+ * COMPILE-TIME MACROS: LED RELATED
+ * -------------------------------------------------------------- */
+
+#ifndef W_LED_MORSE_MAX_SIZE
+// The maximum length of a morse message to be flashed by an
+// LED, including room for a null terminator.
+# define W_LED_MORSE_MAX_SIZE 33
+#endif
+
+#ifndef W_LED_MORSE_DURATION_DOT_MS
+// The default duration of a dot when an LED is flashing morse,
+// in milliseconds.
+# define W_LED_MORSE_DURATION_DOT_MS 100
+#endif
+
+#ifndef W_LED_MORSE_DURATION_DASH_MS
+// The default duration of a dash when an LED is flashing morse,
+// in milliseconds.
+# define W_LED_MORSE_DURATION_DASH_MS 500
+#endif
+
+#ifndef W_LED_MORSE_DURATION_GAP_LETTER_MS
+// The default duration of a gap between each letter when an LED
+// is flashing morse, in milliseconds.
+# define W_LED_MORSE_DURATION_GAP_LETTER_MS 100
+#endif
+
+#ifndef W_LED_MORSE_DURATION_GAP_WORD_MS
+// The default duration of a gap between words when an LED is
+// flashing morse, in milliseconds.
+# define W_LED_MORSE_DURATION_GAP_WORD_MS 500
+#endif
+
+#ifndef W_LED_MORSE_DURATION_GAP_REPEAT_MS
+// The duration of a gap between repeats when an LED is
+// flashing morse repeatedly, in milliseconds.
+# define W_LED_MORSE_DURATION_GAP_REPEAT_MS 1000
+#endif
+
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: MOVEMENT RELATED
  * -------------------------------------------------------------- */
@@ -557,11 +598,16 @@ extern "C" {
 # define W_MSG_QUEUE_MAX_NUM_HANDLERS 10
 #endif
 
+#ifndef W_MSG_QUEUE_MAX_SIZE_CONTROL
+// The maximum number of message in the control message queue.
+# define W_MSG_QUEUE_MAX_SIZE_CONTROL 100
+#endif
+
 #ifndef W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING
 // The number of messages in the video processing queue: not so
 // many of these as the buffers are usually quite large, we just
 // need to keep up.
-# define W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING 10
+# define W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING 100
 #endif
 
 #ifndef W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE
@@ -569,9 +615,23 @@ extern "C" {
 # define W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE 1000
 #endif
 
-#ifndef W_MSG_QUEUE_MAX_SIZE_CONTROL
-// The maximum number of message in the control message queue.
-# define W_MSG_QUEUE_MAX_SIZE_CONTROL 100
+#ifndef W_MSG_QUEUE_MAX_SIZE_LED
+// The maximum number of message in the LED message queue.
+# define W_MSG_QUEUE_MAX_SIZE_LED 10
+#endif
+
+#ifndef W_MSG_QUEUE_TRY_LOCK_WAIT
+// How long to wait for a mutex lock when pulling a message off a
+// a queue (see also W_MSG_QUEUE_TICK_TIMER_PERIOD below).  This
+// should be relatively long, we only need the timeout to go
+// check if the loop should exit.
+# define W_MSG_QUEUE_TRY_LOCK_WAIT std::chrono::seconds(1)
+#endif
+
+#ifndef W_MSG_QUEUE_TICK_TIMER_PERIOD_US
+// The interval between polls for a lock on the mutex of a queue
+// in microseconds.
+# define W_MSG_QUEUE_TICK_TIMER_PERIOD_US 1000
 #endif
 
 /* ----------------------------------------------------------------
@@ -644,6 +704,17 @@ typedef struct {
     std::chrono::duration<double> average;
 } wMonitorTiming_t;
 
+
+/* ----------------------------------------------------------------
+ * TYPES: TIMEOUT RELATED
+ * -------------------------------------------------------------- */
+
+/* Structure to hold a start time, used in time-out calculations.
+ */
+typedef struct {
+    std::chrono::time_point<std::chrono::high_resolution_clock> time;
+} wTimeoutStart_t;
+
 /* ----------------------------------------------------------------
  * TYPES: IMAGE RELATED
  * -------------------------------------------------------------- */
@@ -676,6 +747,95 @@ typedef struct {
 } wVideoEncodeContext_t;
 
 /* ----------------------------------------------------------------
+ * TYPES: LED RELATED
+ * -------------------------------------------------------------- */
+
+// Identify the LEDs.
+typedef enum {
+    W_LED_LEFT = 0,
+    W_LED_RIGHT = 1,
+    W_LED_MAX_NUM,
+    W_LED_BOTH = -1
+} wLed_t;
+
+// Identify the LED modes.
+typedef enum {
+    W_LED_MODE_TYPE_CONSTANT,
+    W_LED_MODE_TYPE_BREATHE
+} wLedModeType_t;
+
+// LED level control.
+typedef struct {
+    unsigned int nowPercent;
+    unsigned int targetPercent;
+    unsigned int changeStartTick; // The tick at which to begin a level change
+    unsigned int changeInterval;  // The interval between ticks to make a change
+    int change;                   // The amount to change by
+} wLedLevel_t;
+
+// Control state for constant mode.
+typedef struct {
+    wLedLevel_t level;
+} wLedModeConstant_t;
+
+// Control state for breathe mode.
+typedef struct {
+    wLedLevel_t levelHigh;
+    wLedLevel_t levelLow;
+    unsigned int rateMilliHertz;
+    unsigned int offsetLeftToRightTicks;
+} wLedModeBreathe_t;
+
+// Union of LED modes.
+typedef union {
+    wLedModeConstant_t constant;
+    wLedModeBreathe_t breathe;
+} wLedMode_t;
+
+// Morse overlay.
+typedef struct {
+    char sequenceStr[W_LED_MORSE_MAX_SIZE]; // Null terminated string, use  empty string to cancel previous
+    unsigned int repeat; // Repeat the message this number of times
+    unsigned int levelPercent;  // Leave at zero to continue with the current level
+    unsigned int durationDotMs; // Leave at zero for default W_LED_MORSE_DURATION_DOT_MS
+    unsigned int durationDashMs; // Leave at zero for default W_LED_MORSE_DURATION_DASH_MS
+    unsigned int durationGapLetterMs;  // Leave at zero for default W_LED_MORSE_DURATION_GAP_LETTER_MS
+    unsigned int durationGapWordMs; // Leave at zero for default W_LED_MORSE_DURATION_GAP_WORD_MS
+    unsigned int durationGapRepeatMs; // Leave at zero for default W_LED_MORSE_DURATION_GAP_REPEAT_MS
+} wLedOverlayMorse_t;
+
+// Wink overlay.
+typedef struct {
+    unsigned int durationMs; // Leave at zero for default W_LED_WINK_DURATION_MS
+} wLedOverlayWink_t;
+
+// Random blink overlay.
+typedef struct {
+    unsigned int ratePerMinute;
+} wLedOverlayRandomBlink_t;
+
+// Control state for one or more LEDs.
+typedef struct {
+    wLed_t led;
+    wLedModeType_t modeType;
+    wLedMode_t mode;
+    wLedOverlayMorse_t *morse;
+    wLedOverlayWink_t *wink;
+    wLedOverlayRandomBlink_t *randomBlink;
+} wLedState_t;
+
+// Context that must be maintained between the LED message handlers.
+typedef struct {
+    wLedState_t ledState[W_LED_MAX_NUM];
+} wLedContext_t;
+
+// LED control sub-structure used by the W_MSG_TYPE_LED_* messages.
+typedef struct {
+    wLed_t led;
+    int offsetLeftToRightMs; // Applies if led is W_LED_BOTH
+} wLedApply_t;
+
+/* ----------------------------------------------------------------
  * TYPES: MESSAGE TYPES AND THEIR BODIES
  * -------------------------------------------------------------- */
 
@@ -686,7 +846,13 @@ typedef enum {
     W_MSG_TYPE_NONE,
     W_MSG_TYPE_IMAGE_BUFFER,              // wMsgBodyImageBuffer_t
     W_MSG_TYPE_AVFRAME_PTR_PTR,           // Pointer to an AVFrame * (i.e. an FFMpeg type)
-    W_MSG_TYPE_FOCUS_CHANGE               // wMsgBodyFocusChange_t
+    W_MSG_TYPE_FOCUS_CHANGE,              // wMsgBodyFocusChange_t
+    W_MSG_TYPE_LED_MODE_CONSTANT,         // wMsgBodyLedModeConstant_t
+    W_MSG_TYPE_LED_MODE_BREATHE,          // wMsgBodyLedModeBreathe_t
+    W_MSG_TYPE_LED_OVERLAY_MORSE,         // wMsgBodyLedOverlayMorse_t
+    W_MSG_TYPE_LED_OVERLAY_WINK,          // wMsgBodyLedOverlayWink_t
+    W_MSG_TYPE_LED_OVERLAY_RANDOM_BLINK,         // wMsgBodyLedOverlayRandomBlink_t
+    W_MSG_TYPE_LED_LEVEL_SCALE            // wMsgBodyLedLevelScale_t
 } wMsgType_t;
 
 // The message body structure corresponding to W_MSG_TYPE_IMAGE_BUFFER.
@@ -708,14 +874,60 @@ typedef struct {
     int areaPixels;
 } wMsgBodyFocusChange_t;
 
+// The message body structure corresponding to W_MSG_TYPE_LED_MODE_CONSTANT.
+typedef struct {
+    wLedApply_t apply;
+    unsigned int levelPercent;
+    unsigned int rampMs;       // The time to get to levelPercent in milliseconds
+} wMsgBodyLedModeConstant_t;
+
+// The message body structure corresponding to W_MSG_TYPE_LED_MODE_BREATHE.
+typedef struct {
+    wLedApply_t apply;
+    unsigned int rateMilliHertz;
+    unsigned int levelLowPercent;
+    unsigned int levelHighPercent;
+} wMsgBodyLedModeBreathe_t;
+
+// The message body structure corresponding to W_MSG_TYPE_LED_OVERLAY_MORSE.
+typedef struct {
+    wLedApply_t apply;
+    wLedOverlayMorse_t morse;
+} wMsgBodyLedOverlayMorse_t;
+
+// The message body structure corresponding to W_MSG_TYPE_LED_OVERLAY_WINK.
+typedef struct {
+    wLedApply_t apply;
+    wLedOverlayWink_t wink;
+} wMsgBodyLedOverlayWink_t;
+
+// The message body structure corresponding to W_MSG_TYPE_LED_OVERLAY_RANDOM_BLINK.
+typedef struct {
+    wLedApply_t apply;
+    wLedOverlayRandomBlink_t randomBlink;
+} wMsgBodyLedOverlayRandomBlink_t;
+
+// The message body structure corresponding to W_MSG_TYPE_LED_LEVEL_SCALE.
+typedef struct {
+    wLedApply_t apply;
+    unsigned int percent; // The percentage value to scale all levels by
+    unsigned int rampMs;  // The time to get to the new scale in milliseconds
+} wMsgBodyLedLevelScale_t;
+
 // Union of message bodies, used in wMsgContainer_t. If you add
 // a member here you must add a type for it in wMsgType_t and an
 // entry for it in gMsgBodySize[].
 typedef union {
-    int unused;                           // W_MSG_TYPE_NONE
-    wMsgBodyImageBuffer_t imageBuffer;    // W_MSG_QUEUE_IMAGE_PROCESSING
-    AVFrame **avFrame;                    // W_MSG_TYPE_AVFRAME_PTR_PTR
-    wMsgBodyFocusChange_t focusChange;    // W_MSG_TYPE_FOCUS_CHANGE
+    int unused;                                            // W_MSG_TYPE_NONE
+    wMsgBodyImageBuffer_t imageBuffer;                     // W_MSG_QUEUE_IMAGE_PROCESSING
+    AVFrame **avFrame;                                     // W_MSG_TYPE_AVFRAME_PTR_PTR
+    wMsgBodyFocusChange_t focusChange;                     // W_MSG_TYPE_FOCUS_CHANGE
+    wMsgBodyLedModeConstant_t ledSetConstant;              // W_MSG_TYPE_LED_MODE_CONSTANT
+    wMsgBodyLedModeBreathe_t ledSetBreathe;                // W_MSG_TYPE_LED_MODE_BREATHE
+    wMsgBodyLedOverlayMorse_t ledOverlayMorse;             // W_MSG_TYPE_LED_OVERLAY_MORSE
+    wMsgBodyLedOverlayWink_t ledOverlayWink;               // W_MSG_TYPE_LED_OVERLAY_WINK
+    wMsgBodyLedOverlayRandomBlink_t ledOverlayRandomBlink; // W_MSG_TYPE_LED_OVERLAY_RANDOM_BLINK
+    wMsgBodyLedLevelScale_t ledLevelScale;                 // W_MSG_TYPE_LED_LEVEL_SCALE
 } wMsgBody_t;
 
 // Container for a message type and body pair, the thing that is
@@ -734,7 +946,8 @@ typedef struct {
 typedef enum {
     W_MSG_QUEUE_CONTROL,
     W_MSG_QUEUE_IMAGE_PROCESSING,
-    W_MSG_QUEUE_VIDEO_ENCODE
+    W_MSG_QUEUE_VIDEO_ENCODE,
+    W_MSG_QUEUE_LED
 } wMsgQueueType_t;
 
 // Function signature of a message handler.
@@ -756,10 +969,11 @@ typedef struct {
 typedef struct {
     const char *name; // Name for queue, must not be longer than pthread_setname_np() allows (e.g. 16 characters)
     std::list<wMsgContainer_t> *containerList; // Pointer to a list of messages in containers
-    std::timed_mutex *mutex; // Pointer to a mutex to protect the list
+    std::mutex *mutex; // Pointer to a mutex to protect the list
     unsigned int maxSize; // The maximum number of elements that can put on the list
-    unsigned int previousSize; // The last recorded length of the list (for debug, used by the caller)
     wMsgHandler_t handler[W_MSG_QUEUE_MAX_NUM_HANDLERS]; // The message handlers for this queue, end with W_MSG_TYPE_NONE/nullptr/nullptr
+    unsigned int count; // The number of messages pushed
+    unsigned int previousSize; // The last recorded length of the list (for debug, used by the caller)
 } wMsgQueue_t;
 
 // Forward declarations required since a message handler may push
@@ -914,9 +1128,6 @@ static wPointProtected_t gFocusPointView = {.point = {0, 0}};
  * VARIABLES: VIDEO RELATED
  * -------------------------------------------------------------- */
 
-// Count of frames passed to the video codec, purely for information.
-static unsigned int gVideoStreamFrameInputCount = 0;
-
 // Count of frames received from the video codec, purely for
 // information.
 static unsigned int gVideoStreamFrameOutputCount = 0;
@@ -936,7 +1147,13 @@ static wMonitorTiming_t gVideoStreamMonitorTiming;
 static unsigned int gMsgBodySize[] = {0,  // Not used
                                       sizeof(wMsgBodyImageBuffer_t),
                                       sizeof(AVFrame **),
-                                      sizeof(wMsgBodyFocusChange_t)};
+                                      sizeof(wMsgBodyFocusChange_t),
+                                      sizeof(wMsgBodyLedModeConstant_t),
+                                      sizeof(wMsgBodyLedModeBreathe_t),
+                                      sizeof(wMsgBodyLedOverlayMorse_t),
+                                      sizeof(wMsgBodyLedOverlayWink_t),
+                                      sizeof(wMsgBodyLedOverlayRandomBlink_t),
+                                      sizeof(wMsgBodyLedLevelScale_t)};
 
 // Message queue for the control thread, used by gMsgQueue[],
 // which is defined below the message handlers.
@@ -944,7 +1161,7 @@ std::list<wMsgContainer_t> gMsgContainerListControl;
 
 // Mutex to protect the control thread message queue, used by
 // gMsgQueue[], which is defined below the message handlers.
-std::timed_mutex gMsgMutexContol;
+std::mutex gMsgMutexContol;
 
 // Message queue for the image processing thread, used by gMsgQueue[],
 // which is defined below the message handlers.
@@ -952,7 +1169,7 @@ std::list<wMsgContainer_t> gMsgContainerListImageProcessing;
 
 // Mutex to protect the image processing thread message queue, used
 // by gMsgQueue[], which is defined below the message handlers.
-std::timed_mutex gMsgMutexImageProcessing;
+std::mutex gMsgMutexImageProcessing;
 
 // Message queue for the video encode thread, used by gMsgQueue[],
 // which is defined below the message handlers.
@@ -960,7 +1177,15 @@ std::list<wMsgContainer_t> gMsgContainerListVideoEncode;
 
 // Mutex to protect the video encode thread message queue, used
 // by gMsgQueue[], which is defined below the message handlers.
-std::timed_mutex gMsgMutexVideoEncode;
+std::mutex gMsgMutexVideoEncode;
+
+// Message queue for the LED thread, used by gMsgQueue[], which is
+// defined below the message handlers.
+std::list<wMsgContainer_t> gMsgContainerListLed;
+
+// Mutex to protect the LED thread message queue, used by gMsgQueue[],
+// which is defined below the message handlers.
+std::mutex gMsgMutexLed;
 
 /* ----------------------------------------------------------------
  * VARIABLES: GPIO RELATED
@@ -1195,6 +1420,27 @@ static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
 
     // Store the timestamp for next time
     monitorTiming->previousTimestamp = timestamp;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: TIMEOUT RELATED
+ * -------------------------------------------------------------- */
+
+// Initialise a time-out with the current time.
+static wTimeoutStart_t timeoutStart()
+{
+    wTimeoutStart_t startTime;
+    startTime.time = std::chrono::high_resolution_clock::now();
+    return startTime;
+}
+
+// Perform a time-out check in a wrap-safe way.
+static bool timeoutExpired(wTimeoutStart_t startTime,
+                           std::chrono::nanoseconds duration)
+{
+    auto nowTime = std::chrono::high_resolution_clock::now();
+    auto elapsedTime = nowTime - startTime.time;
+    return elapsedTime > duration;
 }
 
 /* ----------------------------------------------------------------
@@ -2342,6 +2588,96 @@ static void msgHandlerFocusChange(wMsgBody_t *msgBody, void *context)
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedModeConstant_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedModeConstant_t.
+static void msgHandlerLedModeConstant(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedModeConstant_t *modeConstant = (wMsgBodyLedModeConstant_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) modeConstant;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedModeBreathe_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedModeBreathe_t.
+static void msgHandlerLedModeBreathe(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedModeBreathe_t *modeBreathe = (wMsgBodyLedModeBreathe_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) modeBreathe;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedOverlayMorse_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedOverlayMorse_t.
+static void msgHandlerLedOverlayMorse(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedOverlayMorse_t *overlayMorse = (wMsgBodyLedOverlayMorse_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) overlayMorse;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedOverlayWink_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedOverlayWink_t.
+static void msgHandlerLedOverlayWink(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedOverlayWink_t *overlayWink = (wMsgBodyLedOverlayWink_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) overlayWink;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedOverlayRandomBlink_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedOverlayRandomBlink_t.
+static void msgHandlerLedOverlayRandomBlink(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedOverlayRandomBlink_t *overlayBlink = (wMsgBodyLedOverlayRandomBlink_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) overlayBlink;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedLevelScale_t
+ * -------------------------------------------------------------- */
+
+// Message handler for wMsgBodyLedLevelScale_t.
+static void msgHandlerLedLevelScale(wMsgBody_t *msgBody, void *context)
+{
+    wMsgBodyLedLevelScale_t *levelScale = (wMsgBodyLedLevelScale_t *) msgBody;
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    // TODO
+    (void) levelScale;
+    (void) ledContext;
+}
+
+/* ----------------------------------------------------------------
  * MORE VARIABLES: THE MESSAGE QUEUES WITH THEIR MESSAGE HANDLERS
  * -------------------------------------------------------------- */
 
@@ -2351,24 +2687,35 @@ static wMsgQueue_t gMsgQueue[] = {{"control",
                                    &gMsgContainerListControl,
                                    &gMsgMutexContol,
                                    W_MSG_QUEUE_MAX_SIZE_CONTROL,
-                                   0,
                                    {{W_MSG_TYPE_FOCUS_CHANGE, msgHandlerFocusChange, nullptr},
-                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}},
+                                   0, 0},
                                   {"imageProcess",
                                    &gMsgContainerListImageProcessing,
                                    &gMsgMutexImageProcessing,
                                    W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING,
-                                   0,
                                    {{W_MSG_TYPE_IMAGE_BUFFER, msgHandlerImageBuffer, msgHandlerImageBufferFree},
-                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}},
+                                   0, 0},
                                   {"videoEncode",
                                    &gMsgContainerListVideoEncode,
                                    &gMsgMutexVideoEncode,
                                    W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE,
-                                   0,
                                    {{W_MSG_TYPE_AVFRAME_PTR_PTR, msgHandlerAvFrame, msgHandlerAvFrameFree},
-                                    {W_MSG_TYPE_NONE, nullptr, nullptr}}},
-                                  };
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}},
+                                   0, 0},
+                                  {"LED",
+                                   &gMsgContainerListLed,
+                                   &gMsgMutexLed,
+                                   W_MSG_QUEUE_MAX_SIZE_LED,
+                                   {{W_MSG_TYPE_LED_MODE_CONSTANT, msgHandlerLedModeConstant, nullptr},
+                                    {W_MSG_TYPE_LED_MODE_BREATHE, msgHandlerLedModeBreathe, nullptr},
+                                    {W_MSG_TYPE_LED_OVERLAY_MORSE, msgHandlerLedOverlayMorse, nullptr},
+                                    {W_MSG_TYPE_LED_OVERLAY_WINK, msgHandlerLedOverlayWink, nullptr},
+                                    {W_MSG_TYPE_LED_OVERLAY_RANDOM_BLINK, msgHandlerLedOverlayRandomBlink, nullptr},
+                                    {W_MSG_TYPE_LED_LEVEL_SCALE, msgHandlerLedLevelScale, nullptr},
+                                    {W_MSG_TYPE_NONE, nullptr, nullptr}},
+                                   0, 0}};
 
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS: MESSAGE QUEUES
@@ -2430,6 +2777,29 @@ static int msgQueuePush(wMsgQueueType_t queueType,
     return errorCode;
 }
 
+// Wait for a lock on a mutex for a given time; this should only be
+// used by msgQueueClear(): msgQueueLoop() should run off the messaging
+// timer to ensure that it sleeps properly.
+//
+// Note: see here:
+// https://stackoverflow.com/questions/44190865/stdtimed-mutextry-lock-for-fails-immediately
+// ...for why one can't use try_lock_for(), which would seem like
+// the more obvious approach.
+static bool msqQueueMutexTryLockFor(std::mutex *mutex, std::chrono::nanoseconds wait)
+{
+    bool gotLock = false;
+    wTimeoutStart_t startTime = timeoutStart();
+
+    while (mutex && !gotLock && !timeoutExpired(startTime, wait)) {
+        gotLock = mutex->try_lock();
+        if (!gotLock) {
+           std::this_thread::sleep_for(std::chrono::microseconds(W_MSG_QUEUE_TICK_TIMER_PERIOD_US));
+        }
+    }
+
+    return gotLock;
+}
+
 // Empty a message queue.
 static int msgQueueClear(wMsgQueueType_t queueType, void *context)
 {
@@ -2438,7 +2808,8 @@ static int msgQueueClear(wMsgQueueType_t queueType, void *context)
 
     if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
-        if (msgQueue->mutex->try_lock_for(std::chrono::seconds(1))) {
+        if (msqQueueMutexTryLockFor(msgQueue->mutex,
+                                    W_MSG_QUEUE_TRY_LOCK_WAIT)) {
             while (!msgQueue->containerList->empty()) {
                 errorCode = 0;
                 msg = msgQueue->containerList->front();
@@ -2477,12 +2848,11 @@ static int msgQueueTryPop(wMsgQueue_t *msgQueue,
 
     if (msgQueue && msg) {
         errorCode = -EAGAIN;
-        if (msgQueue->mutex->try_lock_for(std::chrono::seconds(1))) {
-            if (!msgQueue->containerList->empty()) {
-                *msg = msgQueue->containerList->front();
-                msgQueue->containerList->pop_front();
-                errorCode = 0;
-            }
+        if (msgQueue->mutex->try_lock() &&
+            !msgQueue->containerList->empty()) {
+            *msg = msgQueue->containerList->front();
+            msgQueue->containerList->pop_front();
+            errorCode = 0;
         }
         msgQueue->mutex->unlock();
     }
@@ -2491,31 +2861,59 @@ static int msgQueueTryPop(wMsgQueue_t *msgQueue,
 }
 
 // The message handler loop.
-static void msgQueueLoop(wMsgQueueType_t queueType, void *context)
+//
+// Note: I tried a few ways of doing this:
+// - the most obvious is to try_lock_for() on the mutex protecting the
+//   message queue; however, try_lock_for() keeps on exiting spontanously,
+//   wasting CPU cycles enormously.
+// - next would be to do a try_lock() and then loop with a sleep_for() as
+//   a kind of poll-interval if it fails, but that's clunky and sleep_for()
+//   also has a habit of returning spontaneously.
+// - experience with the GPIO stuff shows that running a timer that allows
+//   us to block on a file descriptor really does sleep, so FD and poll
+//   interval it is.
+static void msgQueueLoop(wMsgQueueType_t queueType, int fd, void *context)
 {
     if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+        uint64_t numExpiries;
+        struct pollfd pollFd[1] = {0};
+        struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
+        sigset_t sigMask;
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         wMsgContainer_t msg;
+        pollFd[0].fd = fd;
+        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
+        sigemptyset(&sigMask);
+        sigaddset(&sigMask, SIGINT);
+
         W_LOG_DEBUG("%s: message loop has started", msgQueue->name);
+
         while (!gTerminated) {
-            if (msgQueueTryPop(msgQueue, &msg) == 0) {
-                // Find the message handler
-                wMsgHandler_t *handler = nullptr;
-                for (unsigned int x = 0;
-                     (x < W_ARRAY_COUNT(msgQueue->handler)) &&
-                     (handler = &(msgQueue->handler[x])) &&
-                     (handler->function != nullptr) &&
-                     (handler->msgType != msg.type);
-                     x++) {}
-                if (handler && (handler->function)) {
-                    // Call the handler
-                    handler->function(msg.body, context);
-                } else {
-                    W_LOG_ERROR("%s: unhandled message type (%d)",
-                                msgQueue->name, msg.type);
+            // Block waiting for the messaging timer to go off for up to
+            // a time, or for CTRL-C to land
+            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
+                (read(fd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+                // Pop all the messages waiting for us
+                while (msgQueueTryPop(msgQueue, &msg) == 0) {
+                    // Find the message handler
+                    wMsgHandler_t *handler = nullptr;
+                    for (unsigned int x = 0;
+                         (x < W_ARRAY_COUNT(msgQueue->handler)) &&
+                         (handler = &(msgQueue->handler[x])) &&
+                         (handler->function != nullptr) &&
+                         (handler->msgType != msg.type);
+                         x++) {}
+                    if (handler && (handler->function)) {
+                        // Call the handler
+                        handler->function(msg.body, context);
+                        msgQueue->count++;
+                    } else {
+                        W_LOG_ERROR("%s: unhandled message type (%d)",
+                                    msgQueue->name, msg.type);
+                    }
+                    // Free the message body now that we're done
+                    free(msg.body);
                 }
-                // Free the message body now that we're done
-                free(msg.body);
             }
         }
         W_LOG_DEBUG("%s: message loop has ended", msgQueue->name);
@@ -2527,7 +2925,7 @@ static void msgQueueLoop(wMsgQueueType_t queueType, void *context)
 
 // Start a message queue thread.
 static int msgQueueThreadStart(wMsgQueueType_t queueType,
-                               void *context,
+                               int fd, void *context,
                                std::thread *thread)
 {
     int errorCode = -EINVAL;
@@ -2535,7 +2933,7 @@ static int msgQueueThreadStart(wMsgQueueType_t queueType,
     if (thread && (queueType < W_ARRAY_COUNT(gMsgQueue))) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         // This will go bang if the thread could not be created
-        *thread = std::thread(msgQueueLoop, queueType, context);
+        *thread = std::thread(msgQueueLoop, queueType, fd, context);
         // Best effort, add the name so that it is displayed when debugging
         pthread_setname_np(thread->native_handle(), msgQueue->name);
         errorCode = 0;
@@ -2578,6 +2976,33 @@ static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         msgQueue->previousSize = previousSize;
     }
+}
+
+// Initialise messaging; returns a timer that is employed by
+// messaging loops.
+static int msgInit()
+{
+    int fdOrErrorCode = 0;
+
+    // Set up a tick to drive msgQueueLoop()
+    fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (fdOrErrorCode >= 0) {
+        struct itimerspec timerSpec = {0};
+        timerSpec.it_value.tv_nsec = W_MSG_QUEUE_TICK_TIMER_PERIOD_US * 1000;
+        timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+        if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
+            close(fdOrErrorCode);
+            fdOrErrorCode = -errno;
+            W_LOG_ERROR("unable to set messaging tick timer, error code %d.",
+                        fdOrErrorCode);
+        }
+    } else {
+        fdOrErrorCode = -errno;
+        W_LOG_ERROR("unable to create messaging tick timer, error code %d.",
+                    fdOrErrorCode);
+    }
+
+    return fdOrErrorCode;
 }
 
 /* ----------------------------------------------------------------
@@ -2634,7 +3059,7 @@ static void requestCompleted(libcamera::Request *request)
                     if ((gCameraStreamFrameCount % W_CAMERA_FRAME_RATE_HERTZ == 0) &&
                         (queueLength != msgQueuePreviousSizeGet(W_MSG_QUEUE_IMAGE_PROCESSING))) {
                         // Print the size of the backlog once a second if it has changed
-                        W_LOG_DEBUG("backlog %d frame in image processing queue(s)",
+                        W_LOG_DEBUG("backlog %d frame(s) in image processing queue",
                                     queueLength);
                         msgQueuePreviousSizeSet(W_MSG_QUEUE_IMAGE_PROCESSING, queueLength);
                     }
@@ -3196,12 +3621,15 @@ int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
     wCommandLineParameters_t commandLineParameters;
-    wVideoEncodeContext_t videoEncode = {0};
+    wVideoEncodeContext_t videoEncode = {};
     AVStream *avStream = nullptr;
     int timerFd = -1;
     int pwmFd = -1;
+    int msgFd = -1;
     std::thread gpioPwmThread;
     std::thread gpioReadThread;
+    wLedContext_t ledContext = {};
+    std::thread ledThread;
     std::thread controlThread;
     std::thread imageProcessingThread;
     std::thread videoEncodeThread;
@@ -3242,8 +3670,19 @@ int main(int argc, char *argv[])
         }
 
         if (errorCode == 0) {
+            // Initialise messaging
+            errorCode = msgInit();
+            if (errorCode >= 0) {
+                msgFd = errorCode;
+                errorCode = 0;
+            }
+        }
+
+        if (errorCode == 0) {
+            // Kick off an LED thread
+            msgQueueThreadStart(W_MSG_QUEUE_LED, msgFd, &ledContext, &ledThread);
             // Kick off a control thread
-            msgQueueThreadStart(W_MSG_QUEUE_CONTROL, nullptr, &controlThread);
+            msgQueueThreadStart(W_MSG_QUEUE_CONTROL, msgFd, nullptr, &controlThread);
             // Create and start a camera manager instance
             std::unique_ptr<libcamera::CameraManager> cm = std::make_unique<libcamera::CameraManager>();
             cm->start();
@@ -3476,10 +3915,10 @@ int main(int argc, char *argv[])
                                 gCamera->requestCompleted.connect(requestCompleted);
 
                                 // Kick off a thread to encode video frames
-                                msgQueueThreadStart(W_MSG_QUEUE_VIDEO_ENCODE,
+                                msgQueueThreadStart(W_MSG_QUEUE_VIDEO_ENCODE, msgFd,
                                                     &videoEncode, &videoEncodeThread);
                                 // Kick off our image processing thread
-                                msgQueueThreadStart(W_MSG_QUEUE_IMAGE_PROCESSING,
+                                msgQueueThreadStart(W_MSG_QUEUE_IMAGE_PROCESSING, msgFd,
                                                     nullptr, &imageProcessingThread);
                                 // Remove any old files for a clean start
                                 system(std::string("rm " +
@@ -3552,12 +3991,18 @@ int main(int argc, char *argv[])
             }
             // Stop the control thread and empty its queue
             msgQueueThreadStop(W_MSG_QUEUE_CONTROL, nullptr, &controlThread);
+            // Stop the LED thread and empty its queue
+            msgQueueThreadStop(W_MSG_QUEUE_LED, &ledContext, &ledThread);
+            // Done with messaging now
+            if (msgFd >= 0) {
+                close(msgFd);
+            }
 
             // Print a load of diagnostic information
             W_LOG_INFO("%d video frame(s) captured by camera, %d passed to encode (%d%%),"
                        " %d encoded video frame(s)).",
-                       gCameraStreamFrameCount, gVideoStreamFrameInputCount, 
-                       gVideoStreamFrameInputCount * 100 / gCameraStreamFrameCount,
+                       gCameraStreamFrameCount, gMsgQueue[W_MSG_QUEUE_VIDEO_ENCODE].count, 
+                       gMsgQueue[W_MSG_QUEUE_VIDEO_ENCODE].count * 100 / gCameraStreamFrameCount,
                        gVideoStreamFrameOutputCount);
             W_LOG_INFO("average frame gap (at end of video output) over the last"
                        " %d frames %lld ms (a rate of %lld frames/second), largest"
