@@ -505,7 +505,7 @@ extern "C" {
 #ifndef W_LED_MORSE_MAX_SIZE
 // The maximum length of a morse message to be flashed by an
 // LED, including room for a null terminator.
-# define W_LED_MORSE_MAX_SIZE 33
+# define W_LED_MORSE_MAX_SIZE (32 + 1)
 #endif
 
 #ifndef W_LED_MORSE_DURATION_DOT_MS
@@ -536,6 +536,11 @@ extern "C" {
 // The duration of a gap between repeats when an LED is
 // flashing morse repeatedly, in milliseconds.
 # define W_LED_MORSE_DURATION_GAP_REPEAT_MS 1000
+#endif
+
+#ifndef W_LED_TICK_TIMER_PERIOD_MS
+// The LED tick timer period in milliseconds.
+# define W_LED_TICK_TIMER_PERIOD_MS 20
 #endif
 
 /* ----------------------------------------------------------------
@@ -750,12 +755,13 @@ typedef struct {
  * TYPES: LED RELATED
  * -------------------------------------------------------------- */
 
-// Identify the LEDs.
+// Identify the LEDs; order is important, must match the order of
+// the LEDs in gGpioPwmPin[].
 typedef enum {
     W_LED_LEFT = 0,
     W_LED_RIGHT = 1,
     W_LED_MAX_NUM,
-    W_LED_BOTH = -1
+    W_LED_BOTH = W_LED_MAX_NUM
 } wLed_t;
 
 // Identify the LED modes.
@@ -766,11 +772,10 @@ typedef enum {
 
 // LED level control.
 typedef struct {
-    unsigned int nowPercent;
     unsigned int targetPercent;
-    unsigned int changeStartTick; // The tick at which to begin a level change
-    unsigned int changeInterval;  // The interval between ticks to make a change
-    int change;                   // The amount to change by
+    int changePercent;        // The amount to change by
+    uint64_t changeInterval;  // The interval between ticks to make a change
+    uint64_t changeStartTick; // The tick at which to begin a level change
 } wLedLevel_t;
 
 // Control state for constant mode.
@@ -816,9 +821,10 @@ typedef struct {
 
 // Control state for one or more LEDs.
 typedef struct {
-    wLed_t led;
     wLedModeType_t modeType;
     wLedMode_t mode;
+    unsigned int levelPercent;
+    uint64_t tickLastChange;
     wLedOverlayMorse_t *morse;
     wLedOverlayWink_t *wink;
     wLedOverlayRandomBlink_t *randomBlink;
@@ -826,13 +832,17 @@ typedef struct {
 
 // Context that must be maintained between the LED message handlers.
 typedef struct {
+    int fd;
+    std::thread thread;
+    std::mutex mutex;
+    uint64_t tickNow;
     wLedState_t ledState[W_LED_MAX_NUM];
 } wLedContext_t;
 
 // LED control sub-structure used by the W_MSG_TYPE_LED_* messages.
 typedef struct {
     wLed_t led;
-    int offsetLeftToRightMs; // Applies if led is W_LED_BOTH
+    int offsetLeftToRightMs; // Used if led is W_LED_BOTH
 } wLedApply_t;
 
 /* ----------------------------------------------------------------
@@ -922,8 +932,8 @@ typedef union {
     wMsgBodyImageBuffer_t imageBuffer;                     // W_MSG_QUEUE_IMAGE_PROCESSING
     AVFrame **avFrame;                                     // W_MSG_TYPE_AVFRAME_PTR_PTR
     wMsgBodyFocusChange_t focusChange;                     // W_MSG_TYPE_FOCUS_CHANGE
-    wMsgBodyLedModeConstant_t ledSetConstant;              // W_MSG_TYPE_LED_MODE_CONSTANT
-    wMsgBodyLedModeBreathe_t ledSetBreathe;                // W_MSG_TYPE_LED_MODE_BREATHE
+    wMsgBodyLedModeConstant_t ledModeConstant;             // W_MSG_TYPE_LED_MODE_CONSTANT
+    wMsgBodyLedModeBreathe_t ledModeBreathe;               // W_MSG_TYPE_LED_MODE_BREATHE
     wMsgBodyLedOverlayMorse_t ledOverlayMorse;             // W_MSG_TYPE_LED_OVERLAY_MORSE
     wMsgBodyLedOverlayWink_t ledOverlayWink;               // W_MSG_TYPE_LED_OVERLAY_WINK
     wMsgBodyLedOverlayRandomBlink_t ledOverlayRandomBlink; // W_MSG_TYPE_LED_OVERLAY_RANDOM_BLINK
@@ -1134,6 +1144,22 @@ static unsigned int gVideoStreamFrameOutputCount = 0;
 
 // Keep track of timing on the video stream, purely for information.
 static wMonitorTiming_t gVideoStreamMonitorTiming;
+
+/* ----------------------------------------------------------------
+ * VARIABLES: LED RELATED
+ * -------------------------------------------------------------- */
+
+// A table of sine-wave magnitudess for a quarter wave, scaled by 100.
+static const int gSinePercent[] = {0,   3,   6,   9,   13,  16,  19, 22,  25,  28,
+                                   31,  34,  37,  40,  43,  45,  48, 51,  54,  56,
+                                   59,  61,  64,  66,  68,  71,  73, 75,  77,  79,
+                                   81,  83,  84,  86,  88,  89,  90, 92,  93,  94,
+                                   95,  96,  97,  98,  98,  99,  99, 100, 100, 100,
+                                   100};
+
+// Names for each of the LEDs, for debug prints only; order must
+// match wLed_t.
+static const char *gLedStr[] = {"left", "right", "both"};
 
 /* ----------------------------------------------------------------
  * VARIABLES: MESSAGING RELATED
@@ -2222,39 +2248,54 @@ static void gpioPwmLoop(int pwmFd)
     struct pollfd pollFd[1] = {0};
     struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
     sigset_t sigMask;
+    wGpioPwm_t *gpioPwmPinCopy = (wGpioPwm_t *) malloc(sizeof(gGpioPwmPin));
 
-    pollFd[0].fd = pwmFd;
-    pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-    sigemptyset(&sigMask);
-    sigaddset(&sigMask, SIGINT);
-    while (!gTerminated) {
-        // Block waiting for the PWM timer to go off for up to a time,
-        // or for CTRL-C to land
-        if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-            (read(pwmFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
-            // Progress all of the PWM pins
-            for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
-                wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
-                // If the "percentage" count has passed beyond the value
-                // for this pin, set the output low, otherwise if we're
-                // starting the count again and the percentage is non-zero,
-                // set the output pin high
-                if (pwmCount == 0) {
-                    if (gpioPwm->levelPercent > 0) {
-                        gpiod_line_set_value(gpioPwm->line, 1);
+    if (gpioPwmPinCopy) {
+        pollFd[0].fd = pwmFd;
+        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
+        sigemptyset(&sigMask);
+        sigaddset(&sigMask, SIGINT);
+        while (!gTerminated) {
+            // Block waiting for the PWM timer to go off for up to a time,
+            // or for CTRL-C to land
+            // Change the level of a PWM pin only at the end of a PWM period
+            // to avoid any chance of flicker
+            memcpy((void *) gpioPwmPinCopy, gGpioPwmPin, sizeof(gGpioPwmPin));
+            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
+                (read(pwmFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+                // Progress all of the PWM pins
+                wGpioPwm_t *gpioPwm = gpioPwmPinCopy;
+                for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
+                    // If the "percentage" count has passed beyond the value
+                    // for this pin, set the output low, otherwise if we're
+                    // starting the count again and the percentage is non-zero,
+                    // set the output pin high
+                    if (pwmCount == 0) {
+                        if (gpioPwm->levelPercent > 0) {
+                            gpiod_line_set_value(gpioPwm->line, 1);
+                        }
+                    } else if (pwmCount >= gpioPwm->levelPercent * W_GPIO_PWM_MAX_COUNT / 100) {
+                        gpiod_line_set_value(gpioPwm->line, 0);
                     }
-                } else if (pwmCount >= gpioPwm->levelPercent * W_GPIO_PWM_MAX_COUNT / 100) {
-                    gpiod_line_set_value(gpioPwm->line, 0);
+                    gpioPwm++;
+                }
+                pwmCount++;
+                if (pwmCount >= W_GPIO_PWM_MAX_COUNT) {
+                    pwmCount = 0;
+                    gpioPwm = gpioPwmPinCopy;
+                    // Take a new copy of the pin levels
+                    memcpy((void *) gpioPwmPinCopy, gGpioPwmPin, sizeof(gGpioPwmPin));
                 }
             }
-            pwmCount++;
-            if (pwmCount >= W_GPIO_PWM_MAX_COUNT) {
-                pwmCount = 0;
-            }
         }
+
+        // Free memory
+        free(gpioPwmPinCopy);
+    } else {
+        W_LOG_ERROR("unable to allocate %d byte(s) for gpioPwmPin!");
     }
 
-    W_LOG_DEBUG("GPIO PWM loop has exited");
+    W_LOG_DEBUG("GPIO PWM loop has exited.");
 }
 
 // Initialise the GPIO pins and return the file handle of a timer
@@ -2368,6 +2409,223 @@ static void gpioDeinit()
         line = gpioLineGet(x);
         if (line) {
             gpioRelease(line);
+        }
+    }
+}
+
+/* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: LED RELATED
+ * -------------------------------------------------------------- */
+
+// Move any level changes on.
+// IMPORTANT: the LED context must be locked before this is called.
+static void ledProgressLevel(wLed_t led, wLedState_t *state,
+                             uint64_t tickNow, wLedLevel_t *level)
+{
+    if (state && level && (led < W_ARRAY_COUNT(gGpioPwmPin)) &&
+        (state->levelPercent != level->targetPercent) &&
+        (tickNow > level->changeStartTick) &&
+        (tickNow - state->tickLastChange > level->changeInterval)) {
+        int newLevel = ((int) state->levelPercent) + level->changePercent; 
+        if (newLevel > 100) {
+            newLevel = 100;
+        } else if (newLevel < 0) {
+            newLevel = 0;
+        }
+        state->levelPercent = (unsigned int) newLevel;
+        gGpioPwmPin[led].levelPercent = state->levelPercent;
+        state->tickLastChange = tickNow;
+        if (state->levelPercent == level->targetPercent) {
+            // Done
+            level->changeInterval = 0;
+            level->changePercent = 0;
+        }
+    }
+}
+
+// A loop to drive the dynamic behaviours of the LEDs.
+static void ledLoop(wLedContext_t *context)
+{
+    if (context && context->fd) {
+        uint64_t numExpiries;
+        struct pollfd pollFd[1] = {0};
+        struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
+        sigset_t sigMask;
+
+        pollFd[0].fd = context->fd;
+        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
+        sigemptyset(&sigMask);
+        sigaddset(&sigMask, SIGINT);
+        while (!gTerminated) {
+            // Block waiting for our tick timer to go off or for
+            // CTRL-C to land
+            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
+                (read(context->fd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries)) &&
+                context->mutex.try_lock()) {
+
+                // Update the LED pins
+                for (unsigned int x = 0; x < W_ARRAY_COUNT(context->ledState); x++) {
+                    wLedState_t *state = &(context->ledState[x]);
+                    if (state->morse) {
+                        // If we are running a morse sequence, that
+                        // takes priority
+
+                        // TODO
+
+                    } else {
+                        switch (state->modeType) {
+                            case W_LED_MODE_TYPE_CONSTANT:
+                            {
+                                wLedModeConstant_t *mode = &(state->mode.constant);
+                                // Progress any change of level
+                                ledProgressLevel((wLed_t) x, state, context->tickNow, &(mode->level));
+                            }
+                            break;
+                            case W_LED_MODE_TYPE_BREATHE:
+                            {
+                                wLedModeBreathe_t *mode = &(state->mode.breathe);
+                                // Progress any change of level
+                                ledProgressLevel((wLed_t) x, state, context->tickNow, &(mode->level));
+                            }
+                            break;
+                            default:
+                                break;
+                        }
+                        // Random blink overlays the mode
+                        if (state->randomBlink) {
+
+                            // TODO
+
+                        }
+                        // Wink the mode overlays
+                        if (state->wink) {
+
+                            // TODO
+
+                        }
+                    }
+                }
+
+                context->tickNow++;
+                context->mutex.unlock();
+            }
+        }
+    }
+
+    W_LOG_DEBUG("LED loop has exited");
+}
+
+// Convert a time in milliseconds to the number of ticks of the
+// LED loop.
+static int64_t ledMsToTicks(int64_t milliseconds)
+{
+    return milliseconds / W_LED_TICK_TIMER_PERIOD_MS;
+}
+
+// Return the start tick for an LED change.
+static uint64_t ledLevelChangeStartSet(uint64_t tickNow,
+                                       wLedApply_t *apply,
+                                       wLed_t led)
+{
+    uint64_t changeStartTick = tickNow;
+
+    if ((apply->led == W_LED_BOTH) &&
+        (apply->offsetLeftToRightMs != 0)) {
+        // Apply an offset if the incoming message was to set
+        // both LEDs.  We don't handle the wrap here as the tick
+        // is assumed to be an unsigned int64_t...?
+        int64_t offsetTicks = ledMsToTicks(apply->offsetLeftToRightMs);
+        if ((offsetTicks > 0) && (led == W_LED_RIGHT)) {
+            changeStartTick += offsetTicks;
+        } else if ((offsetTicks < 0) && (led == W_LED_LEFT)) {
+            changeStartTick += -offsetTicks;
+        }
+    }
+
+    return changeStartTick;
+}
+
+// Return the tick-interval at which a ramped LED level should change;
+// the amount to increment at each interval is returned in the last
+// parameter.
+static uint64_t ledLevelChangeIntervalSet(unsigned int rampMs,
+                                          unsigned int targetLevelPercent,
+                                          unsigned int nowLevelPercent,
+                                          int *changePercent)
+{
+    int64_t changeInterval = INT64_MAX;
+    int levelChangePercent = targetLevelPercent - nowLevelPercent;
+
+    if (levelChangePercent != 0) {
+        changeInterval = ledMsToTicks(rampMs);
+        W_LOG_DEBUG_MORE("\n\n changeInterval %lld", changeInterval);
+        // We have rampMs to change from nowLevelPercent
+        // to targetLevelPercent.  changeInterval is currently
+        // the interval for an increment of one if targetLevelPercent
+        // was one higher than nowLevelPercent; work out the interval
+        // given the actual difference, noting that it can be negative
+        changeInterval /= levelChangePercent;
+        // Make sure we return a positive interval
+        if (changeInterval < 0) {
+            changeInterval = -changeInterval;
+        }
+        W_LOG_DEBUG_MORE(", levelChangePercent %d, changeInterval %lld\n\n", levelChangePercent, changeInterval);
+        if (changePercent) {
+            // Set the change per interval
+            *changePercent = levelChangePercent;
+            if (changeInterval > 0) {
+                *changePercent /= changeInterval;
+                if (*changePercent == 0) {
+                    // Avoid rounding errors leaving us in limbo
+                    *changePercent = 1;
+                }
+            }
+        }
+    }
+
+    return (uint64_t) changeInterval;
+}
+
+// Initialise LEDs; starts ledLoop().
+static int ledInit(wLedContext_t *context)
+{
+    int errorCode = 0;
+
+    // Set up a tick to drive ledLoop()
+    errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (errorCode >= 0) {
+        struct itimerspec timerSpec = {0};
+        timerSpec.it_value.tv_nsec = W_LED_TICK_TIMER_PERIOD_MS * 1000000;
+        timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+        if (timerfd_settime(errorCode, 0, &timerSpec, nullptr) == 0) {
+             context->fd = errorCode;
+             errorCode = 0;
+             // Start the LED loop
+             context->thread = std::thread(ledLoop, context);
+        } else {
+            close(errorCode);
+            errorCode = -errno;
+            W_LOG_ERROR("unable to set LED tick timer, error code %d.",
+                        errorCode);
+        }
+    } else {
+        errorCode = -errno;
+        W_LOG_ERROR("unable to create LED tick timer, error code %d.",
+                    errorCode);
+    }
+
+    return errorCode;
+}
+
+// Deinitialise LEDs; stops ledLoop() and free's resources.
+static void ledDeinit(wLedContext_t *context)
+{
+    if (context) {
+        if (context->thread.joinable()) {
+            context->thread.join();
+        }
+        if (context->fd) {
+            close(context->fd);
         }
     }
 }
@@ -2581,9 +2839,9 @@ static void msgHandlerFocusChange(wMsgBody_t *msgBody, void *context)
     // This handler doesn't use any context
     (void) context;
 
-    W_LOG_DEBUG("MSG_FOCUS_CHANGE: x %d, y %d, area %d.",
-                focusChange->pointView.x, focusChange->pointView.y,
-                focusChange->areaPixels);
+    //W_LOG_DEBUG("MSG_FOCUS_CHANGE: x %d, y %d, area %d.",
+    //            focusChange->pointView.x, focusChange->pointView.y,
+    //            focusChange->areaPixels);
     pointProtectedSet(&gFocusPointView, &(focusChange->pointView));
 }
 
@@ -2591,15 +2849,68 @@ static void msgHandlerFocusChange(wMsgBody_t *msgBody, void *context)
  * STATIC FUNCTIONS: MESSAGE HANDLER wMsgBodyLedModeConstant_t
  * -------------------------------------------------------------- */
 
+// Update function called only by msgHandlerLedModeConstant().
+// IMPORTANT: the LED context must be locked before this is called.
+static void msgHandlerLedModeConstantUpdate(wLed_t led,
+                                            wLedState_t *state,
+                                            uint64_t tickNow,
+                                            wMsgBodyLedModeConstant_t *modeSrc)
+{
+    state->modeType = W_LED_MODE_TYPE_CONSTANT;
+    wLedModeConstant_t *modeDst = &(state->mode.constant);
+    modeDst->level.targetPercent = modeSrc->levelPercent;
+    modeDst->level.changeStartTick = ledLevelChangeStartSet(tickNow,
+                                                            &(modeSrc->apply),
+                                                            led);
+    modeDst->level.changeInterval = ledLevelChangeIntervalSet(modeSrc->rampMs,
+                                                              modeSrc->levelPercent,
+                                                              state->levelPercent,
+                                                              &(modeDst->level.changePercent));
+    // This is W_LOG_DEBUG_MORE since it will be within a sequence
+    // of log prints in msgHandlerLedModeConstant()
+    W_LOG_DEBUG_MORE(" (so start tick %06lld, interval %lld tick(s),"
+                     " change per tick %d%%)",
+                     modeDst->level.changeStartTick,
+                     modeDst->level.changeInterval,
+                     modeDst->level.changePercent);
+}
+
 // Message handler for wMsgBodyLedModeConstant_t.
 static void msgHandlerLedModeConstant(wMsgBody_t *msgBody, void *context)
 {
-    wMsgBodyLedModeConstant_t *modeConstant = (wMsgBodyLedModeConstant_t *) msgBody;
+    wMsgBodyLedModeConstant_t *mode = (wMsgBodyLedModeConstant_t *) msgBody;
     wLedContext_t *ledContext = (wLedContext_t *) context;
 
-    // TODO
-    (void) modeConstant;
-    (void) ledContext;
+    if (ledContext) {
+        W_LOG_DEBUG_START("HANDLER [%06lld]: wMsgBodyLedModeConstant_t (LED %d,"
+                          " %d%%, ramp %d ms, offset %d ms)", ledContext->tickNow,
+                          mode->apply.led, mode->levelPercent, mode->rampMs,
+                          mode->apply.offsetLeftToRightMs);
+        // Lock the LED context
+        ledContext->mutex.lock();
+        if (mode->apply.led < W_ARRAY_COUNT(ledContext->ledState)) {
+            // We're updating one LED
+            wLedState_t *state = &(ledContext->ledState[mode->apply.led]);
+                W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
+                                 gLedStr[mode->apply.led], state->modeType,
+                                 state->levelPercent, state->tickLastChange);
+            msgHandlerLedModeConstantUpdate(mode->apply.led, state, ledContext->tickNow, mode);
+        } else {
+            // Update both LEDs
+            for (size_t x = 0; x < W_ARRAY_COUNT(ledContext->ledState); x++) {
+                wLedState_t *state = &(ledContext->ledState[x]);
+                W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
+                                 gLedStr[x], state->modeType,
+                                 state->levelPercent, state->tickLastChange);
+                msgHandlerLedModeConstantUpdate((wLed_t) x, state, ledContext->tickNow, mode);
+            }
+        }
+        W_LOG_DEBUG_MORE(".");
+        W_LOG_DEBUG_END;
+
+        // Unlock the context again
+        ledContext->mutex.unlock();
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -2690,21 +3001,21 @@ static wMsgQueue_t gMsgQueue[] = {{"control",
                                    {{W_MSG_TYPE_FOCUS_CHANGE, msgHandlerFocusChange, nullptr},
                                     {W_MSG_TYPE_NONE, nullptr, nullptr}},
                                    0, 0},
-                                  {"imageProcess",
+                                  {"image process",
                                    &gMsgContainerListImageProcessing,
                                    &gMsgMutexImageProcessing,
                                    W_MSG_QUEUE_MAX_SIZE_IMAGE_PROCESSING,
                                    {{W_MSG_TYPE_IMAGE_BUFFER, msgHandlerImageBuffer, msgHandlerImageBufferFree},
                                     {W_MSG_TYPE_NONE, nullptr, nullptr}},
                                    0, 0},
-                                  {"videoEncode",
+                                  {"video encode",
                                    &gMsgContainerListVideoEncode,
                                    &gMsgMutexVideoEncode,
                                    W_MSG_QUEUE_MAX_SIZE_VIDEO_ENCODE,
                                    {{W_MSG_TYPE_AVFRAME_PTR_PTR, msgHandlerAvFrame, msgHandlerAvFrameFree},
                                     {W_MSG_TYPE_NONE, nullptr, nullptr}},
                                    0, 0},
-                                  {"LED",
+                                  {"LED control",
                                    &gMsgContainerListLed,
                                    &gMsgMutexLed,
                                    W_MSG_QUEUE_MAX_SIZE_LED,
@@ -2720,6 +3031,33 @@ static wMsgQueue_t gMsgQueue[] = {{"control",
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS: MESSAGE QUEUES
  * -------------------------------------------------------------- */
+
+// Initialise messaging; returns a timer that is employed by
+// messaging loops.
+static int msgQueueInit()
+{
+    int fdOrErrorCode = 0;
+
+    // Set up a tick to drive msgQueueLoop()
+    fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (fdOrErrorCode >= 0) {
+        struct itimerspec timerSpec = {0};
+        timerSpec.it_value.tv_nsec = W_MSG_QUEUE_TICK_TIMER_PERIOD_US * 1000;
+        timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+        if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
+            close(fdOrErrorCode);
+            fdOrErrorCode = -errno;
+            W_LOG_ERROR("unable to set messaging tick timer, error code %d.",
+                        fdOrErrorCode);
+        }
+    } else {
+        fdOrErrorCode = -errno;
+        W_LOG_ERROR("unable to create messaging tick timer, error code %d.",
+                    fdOrErrorCode);
+    }
+
+    return fdOrErrorCode;
+}
 
 // Push a message onto a queue.  body is copied so it can be passed
 // in any which way (and it is up to the caller of msgQueueTryPop()
@@ -2948,7 +3286,7 @@ static void msgQueueThreadStop(wMsgQueueType_t queueType,
                                std::thread *thread)
 {
     if (thread && thread->joinable()) {
-       thread->join();
+        thread->join();
     }
     msgQueueClear(queueType, context);
 }
@@ -2976,33 +3314,6 @@ static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         msgQueue->previousSize = previousSize;
     }
-}
-
-// Initialise messaging; returns a timer that is employed by
-// messaging loops.
-static int msgInit()
-{
-    int fdOrErrorCode = 0;
-
-    // Set up a tick to drive msgQueueLoop()
-    fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
-    if (fdOrErrorCode >= 0) {
-        struct itimerspec timerSpec = {0};
-        timerSpec.it_value.tv_nsec = W_MSG_QUEUE_TICK_TIMER_PERIOD_US * 1000;
-        timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-        if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
-            close(fdOrErrorCode);
-            fdOrErrorCode = -errno;
-            W_LOG_ERROR("unable to set messaging tick timer, error code %d.",
-                        fdOrErrorCode);
-        }
-    } else {
-        fdOrErrorCode = -errno;
-        W_LOG_ERROR("unable to create messaging tick timer, error code %d.",
-                    fdOrErrorCode);
-    }
-
-    return fdOrErrorCode;
 }
 
 /* ----------------------------------------------------------------
@@ -3401,26 +3712,6 @@ static int hwInit()
     cm->stop();
 
     if (errorCode == 0) {
-        // Have a camera, next light up the eyes
-        for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
-            wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
-            unsigned int target = 100;
-            for (unsigned int y = 0; y < 100 * 2; y++) {
-                if (target == 100) {
-                    if (gpioPwmInc(gpioPwm->pin) >= 100) {
-                        target = 0;
-                    }
-                } else {
-                    if (gpioPwmDec(gpioPwm->pin) == 0) {
-                        target = 100;
-                    }
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-        }
-    }
-
-    if (errorCode == 0) {
         W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
         // Now calibrate movement
         errorCode = motorsEnable();
@@ -3613,6 +3904,68 @@ static void commandLinePrintHelp(wCommandLineParameters_t *defaults)
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: TESTS
+ * -------------------------------------------------------------- */
+
+// Run through a test sequence for the LEDs: everything must already
+// have been initialised before this can be called.
+static int testLeds()
+{
+    int errorCode = 0;
+    const char *prefix = "LED TEST: ";
+
+    W_LOG_INFO("%sSTART (will take a little while).", prefix);
+    wMsgBodyLedModeConstant_t constant = {};
+
+    W_LOG_INFO("%stesting constant mode.", prefix);
+    W_LOG_INFO("%sboth LEDs ramped up over one second, left ahead of right.",
+               prefix);
+    constant.apply.led = W_LED_BOTH;
+    constant.apply.offsetLeftToRightMs = 1000;
+    constant.levelPercent = 10;
+    constant.rampMs = 1000;
+    for (constant.levelPercent = 10;
+         (constant.levelPercent < 100) && !gTerminated;
+         constant.levelPercent += 10) {
+        msgQueuePush(W_MSG_QUEUE_LED,
+                     W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
+        sleep(2);
+    }
+
+    constant.apply.led = W_LED_LEFT;
+    W_LOG_INFO("%s%s LED ramped down.", prefix, gLedStr[constant.apply.led]);
+    for (constant.levelPercent = 100;
+         (constant.levelPercent > 0) && !gTerminated;
+         constant.levelPercent -= 10) {
+        msgQueuePush(W_MSG_QUEUE_LED,
+                     W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
+        sleep(1);
+    }
+    constant.levelPercent = 0;
+    msgQueuePush(W_MSG_QUEUE_LED,
+                 W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
+    sleep(1);
+
+    constant.apply.led = W_LED_RIGHT;
+    W_LOG_INFO("%s%s LED ramped down.", prefix, gLedStr[constant.apply.led]);
+    for (constant.levelPercent = 100;
+         (constant.levelPercent > 0) && !gTerminated;
+         constant.levelPercent -= 10) {
+        msgQueuePush(W_MSG_QUEUE_LED,
+                     W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
+        sleep(1);
+    }
+    constant.levelPercent = 0;
+    msgQueuePush(W_MSG_QUEUE_LED,
+                 W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
+    sleep(1);
+
+    W_LOG_INFO("%scompleted.", prefix);
+
+    return errorCode;
+}
+
+/* ----------------------------------------------------------------
  * PUBLIC FUNCTIONS
  * -------------------------------------------------------------- */
 
@@ -3629,7 +3982,7 @@ int main(int argc, char *argv[])
     std::thread gpioPwmThread;
     std::thread gpioReadThread;
     wLedContext_t ledContext = {};
-    std::thread ledThread;
+    std::thread ledControlThread;
     std::thread controlThread;
     std::thread imageProcessingThread;
     std::thread videoEncodeThread;
@@ -3671,7 +4024,7 @@ int main(int argc, char *argv[])
 
         if (errorCode == 0) {
             // Initialise messaging
-            errorCode = msgInit();
+            errorCode = msgQueueInit();
             if (errorCode >= 0) {
                 msgFd = errorCode;
                 errorCode = 0;
@@ -3679,8 +4032,13 @@ int main(int argc, char *argv[])
         }
 
         if (errorCode == 0) {
-            // Kick off an LED thread
-            msgQueueThreadStart(W_MSG_QUEUE_LED, msgFd, &ledContext, &ledThread);
+            // Kick off the LED thread
+            errorCode = ledInit(&ledContext);
+        }
+
+        if (errorCode == 0) {
+            // Kick off an LED control thread
+            msgQueueThreadStart(W_MSG_QUEUE_LED, msgFd, &ledContext, &ledControlThread);
             // Kick off a control thread
             msgQueueThreadStart(W_MSG_QUEUE_CONTROL, msgFd, nullptr, &controlThread);
             // Create and start a camera manager instance
@@ -3946,7 +4304,8 @@ int main(int argc, char *argv[])
                                 }
 
                                 while (!gTerminated) {
-                                    sleep(1);
+                                    testLeds();
+                                    //sleep(1);
                                 }
 
                                 W_LOG_INFO("CTRL-C received, stopping the camera.");
@@ -3991,8 +4350,9 @@ int main(int argc, char *argv[])
             }
             // Stop the control thread and empty its queue
             msgQueueThreadStop(W_MSG_QUEUE_CONTROL, nullptr, &controlThread);
-            // Stop the LED thread and empty its queue
-            msgQueueThreadStop(W_MSG_QUEUE_LED, &ledContext, &ledThread);
+            // Stop the LED thread, the LED control thread and empty its queue
+            msgQueueThreadStop(W_MSG_QUEUE_LED, &ledContext, &ledControlThread);
+            ledDeinit(&ledContext);
             // Done with messaging now
             if (msgFd >= 0) {
                 close(msgFd);
