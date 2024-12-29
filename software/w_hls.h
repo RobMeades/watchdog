@@ -21,7 +21,7 @@
 #include <w_util.h>
 
 /** @file
- * @brief the HLS (HTTP Live Stream) API for the watchdog application.
+ * @brief The HLS (HTTP Live Stream) API for the watchdog application.
  */
 
 /* ----------------------------------------------------------------
@@ -48,7 +48,7 @@
 #endif
 
 #ifndef W_HLS_OUTPUT_DIRECTORY_DEFAULT
-/** The default output directory; should not end in a "/".
+/** The default output directory; should NOT end in a "/".
  */
 # define W_HLS_OUTPUT_DIRECTORY_DEFAULT W_UTIL_DIR_THIS
 #endif

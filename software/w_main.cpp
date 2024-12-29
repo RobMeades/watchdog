@@ -96,6 +96,7 @@ extern "C" {
 #include <w_log.h>
 #include <w_command_line.h>
 #include <w_gpio.h>
+#include <w_motor.h>
 #include <w_hls.h>
 
 /* ----------------------------------------------------------------
@@ -366,57 +367,6 @@ extern "C" {
 #ifndef W_LED_RANDOM_BLINK_RANGE_SECONDS
 // The default range of variation on a random blink interval in seconds.
 # define W_LED_RANDOM_BLINK_RANGE_SECONDS 10
-#endif
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: MOVEMENT RELATED
- * -------------------------------------------------------------- */
-
-#ifndef W_MOVEMENT_ROTATE_MAX_STEPS
-// A hard-coded safety limit on the range of rotational movement.
-# define W_MOVEMENT_ROTATE_MAX_STEPS 600
-#endif
-
-#ifndef W_MOVEMENT_VERTICAL_MAX_STEPS
-// A hard-coded safety limit on the range of vertical movement.
-# define W_MOVEMENT_VERTICAL_MAX_STEPS 600
-#endif
-
-#ifndef W_MOVEMENT_ROTATE_DIRECTION_SENSE
-// The direction that a "1" on the rotate motor's direction
-// pin causes the motor to move: 1 since a 1 on the rotate
-// motors direction pin causes it to move towards the maximum,
-// which is W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT (otherwise it would
-// need to be -1)..
-# define W_MOVEMENT_ROTATE_DIRECTION_SENSE 1
-#endif
-
-#ifndef W_MOVEMENT_VERTICAL_DIRECTION_SENSE
-// The direction that a "1" on the vertical motor's direction
-// pin causes the motor to move: 1 since a -1 on the vertical
-// motors direction pin causes it to move towards the maximum,
-// which is W_GPIO_PIN_INPUT_LOOK_UP_LIMIT (otherwise it would
-// need to be -1).
-# define W_MOVEMENT_VERTICAL_DIRECTION_SENSE -1
-#endif
-
-#ifndef W_MOTOR_DIRECTION_WAIT_MS
-// The pause between setting the direction that a step is to
-// take and requesting the step.
-# define W_MOTOR_DIRECTION_WAIT_MS 1
-#endif
-
-#ifndef W_MOTOR_STEP_WAIT_MS
-// The pause between setting a step pin output low and raising it
-// high again; also the pause between a pin being high and
-// letting it drop again.
-# define W_MOTOR_STEP_WAIT_MS 1
-#endif
-
-#ifndef W_MOTOR_LIMIT_MARGIN_STEPS
-// How many steps to stay clear of the limit switches in normal
-// operation.
-# define W_MOTOR_LIMIT_MARGIN_STEPS 10
 #endif
 
 /* ----------------------------------------------------------------
@@ -760,44 +710,6 @@ static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
                                     unsigned int previousSize);
 
 /* ----------------------------------------------------------------
- * TYPES: MOTOR/MOVEMENT RELATED
- * -------------------------------------------------------------- */
-
-// The movement types; values are important as they are the index
-// to that motor in gMotor[].  The motors are calibrated in this
-// order.
-typedef enum {
-    W_MOVEMENT_TYPE_VERTICAL = 0,
-    W_MOVEMENT_TYPE_ROTATE = 1
-} wMovementType_t;
-
-// Where the motor should sit by default, e.g. after calibration;
-// if you change the order here then you should change
-// gMotorRestPositionStr[] to match.
-typedef enum {
-    W_MOTOR_REST_POSITION_CENTRE,
-    W_MOTOR_REST_POSITION_MAX,
-    W_MOTOR_REST_POSITION_MIN
-} wMotorRestPosition_t;
-
-// Track the position of a motor.
-typedef struct {
-    const char *name;
-    unsigned int safetyLimit; // Safety limit, must be at least max - min
-    int pinDisable; // The pin which when set to 1 disables the motor
-    int pinDirection; // The pin which, if set to 1, makes steps * senseDirection positive
-    int pinStep;  // The pin which causes the motor to step on a 0 to 1 transition
-    int pinMax;   // The pin which, when pulled low, indicates max has been reached
-    int pinMin;   // The pin which, when pulled low, indicates min has been reached
-    int senseDirection; // 1 if a 1 at pinDirection moves towards max, else -1
-    wMotorRestPosition_t restPosition;
-    bool calibrated; // Ignore the remaining values if this is false
-    int max;      // A calibrated limit
-    int min;      // A calibrated limit
-    int now;
-} wMotor_t;
-
-/* ----------------------------------------------------------------
  * VARIABLES: CAMERA RELATED
  * -------------------------------------------------------------- */
 
@@ -846,11 +758,11 @@ static const unsigned int gLedToPin[] = {W_GPIO_PIN_OUTPUT_EYE_LEFT,
 // A table of sine-wave magnitudess for a quarter wave, scaled by 100;
 // with a W_LED_TICK_TIMER_PERIOD_MS of 20, these 50 entries would
 // take 1 second, so the rate for a full wave would be 4 Hertz.
-static const int gSinePercent[] = { 0,  3,  6, 9,  13, 16,  19,  22,  25,  28,
-                                   31, 34, 37, 40, 43, 45,  48,  51,  54,  56,
-                                   59, 61, 64, 66, 68, 71,  73,  75,  77,  79,
-                                   81, 83, 84, 86, 88, 89,  90,  92,  93,  94,
-                                   95, 96, 97, 98, 99, 99, 100, 100, 100, 100};
+static const int gLedSinePercent[] = { 0,  3,  6, 9,  13, 16,  19,  22,  25,  28,
+                                      31, 34, 37, 40, 43, 45,  48,  51,  54,  56,
+                                      59, 61, 64, 66, 68, 71,  73,  75,  77,  79,
+                                      81, 83, 84, 86, 88, 89,  90,  92,  93,  94,
+                                      95, 96, 97, 98, 99, 99, 100, 100, 100, 100};
 
 // Names for each of the LEDs, for debug prints only; order must
 // match wLed_t.
@@ -907,36 +819,6 @@ std::list<wMsgContainer_t> gMsgContainerListLed;
 // Mutex to protect the LED thread message queue, used by gMsgQueue[],
 // which is defined below the message handlers.
 std::mutex gMsgMutexLed;
-
-/* ----------------------------------------------------------------
- * VARIABLES: MOTOR RELATED
- * -------------------------------------------------------------- */
-
-// Movement tracking: order must match wMovementType_t.
-static wMotor_t gMotor[] = {{.name = "vertical",
-                             .safetyLimit = W_MOVEMENT_VERTICAL_MAX_STEPS,
-                             .pinDisable = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
-                             .pinDirection = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
-                             .pinStep = W_GPIO_PIN_OUTPUT_VERTICAL_STEP,
-                             .pinMax = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT,
-                             .pinMin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
-                             .senseDirection = W_MOVEMENT_VERTICAL_DIRECTION_SENSE,
-                             .restPosition = W_MOTOR_REST_POSITION_MAX,
-                             .calibrated = false},
-                            {.name = "rotate",
-                             .safetyLimit = W_MOVEMENT_ROTATE_MAX_STEPS,
-                             .pinDisable = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
-                             .pinDirection = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
-                             .pinStep = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
-                             .pinMax = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
-                             .pinMin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
-                             .senseDirection = W_MOVEMENT_ROTATE_DIRECTION_SENSE,
-                             .restPosition = W_MOTOR_REST_POSITION_CENTRE,
-                             .calibrated = false}};
-
-// Array of names for the rest positions, just for printing; must be in the
-// same order as wMotorRestPosition_t.
-static const char *gMotorRestPositionStr[] = {"centre", "max", "min"};
 
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS: MONITORING RELATED
@@ -1536,38 +1418,38 @@ static int ledUpdateLevel(wLed_t led, wLedState_t *state,
                 index += -offsetLeftToRightTicks;
                 if (index < 0) {
                     // Prevent underrun by wrapping about the length of a sine wave
-                    index += W_UTIL_ARRAY_COUNT(gSinePercent) * 4;
+                    index += W_UTIL_ARRAY_COUNT(gLedSinePercent) * 4;
                 }
             }
             // The sine wave table (which is a quarter of a sine wave), with a
             // W_LED_TICK_TIMER_PERIOD_MS of 20 ms, is 4 Hertz
-            int rateHertz = (1000 / W_LED_TICK_TIMER_PERIOD_MS) * 4 / W_UTIL_ARRAY_COUNT(gSinePercent);
+            int rateHertz = (1000 / W_LED_TICK_TIMER_PERIOD_MS) * 4 / W_UTIL_ARRAY_COUNT(gLedSinePercent);
             // Scale by rateMilliHertz
             index *= (rateHertz * 1000) / rateMilliHertz;
             // Index is across a full wave, so four times the sine table
-            index = index % (W_UTIL_ARRAY_COUNT(gSinePercent) * 4);
+            index = index % (W_UTIL_ARRAY_COUNT(gLedSinePercent) * 4);
             // This is W_LOG_DEBUG_MORE as this function is only called
             // from ledLoop(), which will already have started a debug print
             // Now map index into the sine table quarter-wave
             int multiplier = 1;
-            if (index >= W_UTIL_ARRAY_COUNT(gSinePercent) * 2) {
+            if (index >= W_UTIL_ARRAY_COUNT(gLedSinePercent) * 2) {
                 // We're in the negative half of the sine wave
                 multiplier = -1;
-                if (index >= W_UTIL_ARRAY_COUNT(gSinePercent) * 3) {
+                if (index >= W_UTIL_ARRAY_COUNT(gLedSinePercent) * 3) {
                     // We're in the last quarter
-                    index = (W_UTIL_ARRAY_COUNT(gSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gSinePercent));
+                    index = (W_UTIL_ARRAY_COUNT(gLedSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gLedSinePercent));
                 } else {
                     // We're in the third quarter
-                    index = index % W_UTIL_ARRAY_COUNT(gSinePercent);
+                    index = index % W_UTIL_ARRAY_COUNT(gLedSinePercent);
                 }
             } else {
                 // We're in the positive half of the sine wave
-                if (index >= W_UTIL_ARRAY_COUNT(gSinePercent)) {
+                if (index >= W_UTIL_ARRAY_COUNT(gLedSinePercent)) {
                     // We're in the second quarter
-                    index = (W_UTIL_ARRAY_COUNT(gSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gSinePercent));
+                    index = (W_UTIL_ARRAY_COUNT(gLedSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gLedSinePercent));
                 }
             }
-            newLevelPercent += ((int) levelAmplitudePercent) * gSinePercent[index] * multiplier / 100;
+            newLevelPercent += ((int) levelAmplitudePercent) * gLedSinePercent[index] * multiplier / 100;
             levelPercentOrErrorCode = ledLimitLevel(newLevelPercent);
         }
     }
@@ -2635,285 +2517,6 @@ static void requestCompleted(libcamera::Request *request)
  * STATIC FUNCTIONS: HW/MOVEMENT RELATED
  * -------------------------------------------------------------- */
 
-// Enable or disable motor control; a disabled motor will also be
-// marked as uncalibrated since it may move freely when disabled.
-static int motorEnable(wMotor_t *motor, bool enableNotDisable = true)
-{
-    int errorCode = wGpioSet(motor->pinDisable, !enableNotDisable);
-
-    if ((errorCode == 0) && !enableNotDisable) {
-        // If disabling the motor, it is no longer calibrated
-        motor->calibrated = false;
-    }
-
-    return errorCode;
-}
-
-// Enable or disable all motors; a disabled motor will also be
-// marked as uncalibrated since it may move freely once disabled.
-static int motorsEnable(bool enableNotDisable = true)
-{
-    int errorCode = 0;
-
-    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gMotor); x++) {
-        wMotor_t *motor = &(gMotor[x]);
-        int y = motorEnable(motor, enableNotDisable);
-        if (y < 0) {
-            errorCode = y;
-            W_LOG_ERROR("%s: error %sing motor.", motor->name,
-                        enableNotDisable ? "enabl" : "disabl");
-        }
-    }
-
-    return errorCode;
-}
-
-// Perform a step; will not move if at a limit; being at
-// a limit does not constitute an error: supply stepTaken
-// if you want to know the outcome.
-static int motorStep(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
-{
-    int errorCode = -EINVAL;
-
-    if (stepTaken) {
-        *stepTaken = 0;
-    }
-
-    if (motor) {
-        // Check for limits
-        errorCode = 0;
-        if (step > 0) {
-            errorCode = wGpioGet(motor->pinMax);
-        } else if (step < 0) {
-            errorCode = wGpioGet(motor->pinMin);
-        }
-
-        if (errorCode == 1) {
-            // A limit level of 1 means the pin remains in its default
-            // pulled-up state, we can move
-
-            // Set the correct direction
-            unsigned int levelDirection = 0;
-            if (step >= 0) {
-                levelDirection = step;
-            }
-            if (motor->senseDirection < 0) {
-                levelDirection = !levelDirection;
-            }
-            errorCode = wGpioSet(motor->pinDirection, levelDirection);
-            if (errorCode == 0) {
-                // Wait a moment for the direction pin to settle
-                std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_DIRECTION_WAIT_MS));
-                // Send out a zero to one transition and wait
-                errorCode = wGpioSet(motor->pinStep, 0);
-                if (errorCode == 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
-                    errorCode = wGpioSet(motor->pinStep, 1);
-                    if (errorCode == 0) {
-                        // Make sure we sit at a one for long enough
-                        std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
-                    }
-                }
-            }
-            if ((errorCode == 0) && (stepTaken)) {
-                // We have taken a step
-                *stepTaken = step;
-            }
-        } else if ((errorCode == 0) && (step != 0)) {
-            W_LOG_DEBUG("%s: hit %s limit.", motor->name, step > 0 ? "max" : "min");
-        }
-
-        if (errorCode < 0) {
-            W_LOG_ERROR("%s: error %d on step.", motor->name, errorCode);
-        }
-    }
-
-    return errorCode;
-}
-
-// Try to move the given number of steps, returning
-// the number actually stepped in stepsTaken; being short
-// on steps does not constitute an error.  Will only move
-// if calibrated unless evenIfUnCalibrated is true.
-static int motorMove(wMotor_t *motor, int steps,
-                     int *stepsTaken = nullptr,
-                     bool evenIfUnCalibrated = false)
-{
-    int errorCode = -EINVAL;
-    int step = 1;
-    int stepsCompleted = 0;
-
-    if (motor && (motor->calibrated || evenIfUnCalibrated)) {
-        errorCode = 0;
-        if (steps > 0) {
-            if (motor->calibrated) {
-                // Limit the steps against the calibrated maximum
-                if (motor->now + steps > motor->max) {
-                    steps = motor->max - motor->now;
-                }
-            } else {
-                // Limit the steps against the hard-coded safety
-                if (steps > (int) motor->safetyLimit) {
-                    steps = motor->safetyLimit;
-                }
-            }
-        } else if (steps < 0) {
-            if (motor->calibrated) {
-                // Limit the steps against the calibrated minimum
-                if (motor->now + steps < motor->min) {
-                    steps = motor->min - motor->now;
-                }
-            } else {
-                // Limit the steps against the hard-coded safety
-                if (steps < -((int) motor->safetyLimit)) {
-                    steps = -motor->safetyLimit;
-                }
-            }
-            step = -1;
-        }
-
-        if (motor->calibrated) {
-            W_LOG_DEBUG("%s: moving %+d step(s).", motor->name, steps);
-        } else {
-            W_LOG_WARN("%s: uncalibrated movement of %+d step(s).",
-                       motor->name, steps);
-        }
-
-        // Actually move
-        int stepTaken = 1;
-        for (int x = 0; (x < steps * step) && (stepTaken != 0) &&
-                        (errorCode == 0); x++) {
-            stepTaken = 0;
-            errorCode = motorStep(motor, step, &stepTaken);
-            if (errorCode == 0) {
-                stepsCompleted += stepTaken;
-            }
-        }
-
-        if (motor->calibrated) {
-            motor->now += stepsCompleted;
-            W_LOG_INFO("%d: now at position %d.", motor->name, motor->now);
-        }
-
-        if (stepsCompleted < steps) {
-            W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
-                             motor->name, stepsCompleted, steps - stepsCompleted);
-            if (motor->calibrated) {
-                W_LOG_WARN_MORE(" motor now needs calibration");
-            }
-            W_LOG_WARN_MORE(".");
-            W_LOG_WARN_END;
-            motor->calibrated = false;
-        }
-
-        if (stepsTaken) {
-            *stepsTaken = stepsCompleted;
-        }
-    }
-
-    return errorCode;
-}
-
-// Send a motor to its rest position; will only do so if
-// the motor is calibrated.  Not being able to get to the
-// rest position _does_ constitute an error.
-static int motorMoveToRest(wMotor_t *motor, int *stepsTaken = nullptr)
-{
-    int errorCode = -EINVAL;
-    int steps = 0;
-    int stepsCompleted = 0;
-
-    if (motor && motor->calibrated) {
-        errorCode = 0;
-        switch (motor->restPosition) {
-            case W_MOTOR_REST_POSITION_CENTRE:
-                steps = -motor->now;
-                break;
-            case W_MOTOR_REST_POSITION_MAX:
-                steps = motor->max - motor->now;
-                break;
-            case W_MOTOR_REST_POSITION_MIN:
-                steps = motor->min - motor->now;
-                break;
-            default:
-                break;
-        }
-
-        if (steps != 0) {
-            errorCode = motorMove(motor, steps, &stepsCompleted, true);
-            if (errorCode == 0) {
-                if (stepsCompleted != steps) {
-                    errorCode = -ENXIO;
-                    W_LOG_ERROR("%s: unable to take %+d step(s) to %s"
-                                 " rest position (only %+d step(s) taken)!",
-                                 motor->name, steps,
-                                 gMotorRestPositionStr[motor->restPosition],
-                                 stepsCompleted);
-                }
-            } else {
-                W_LOG_ERROR("%s: unable to get to rest position (error %d)!",
-                            motor->name, errorCode);
-            }
-        }
-        if (stepsTaken) {
-            *stepsTaken = stepsCompleted;
-        }
-    }
-
-    return errorCode;
-}
-
-// Calibrate the movement range of a motor.
-static int motorCalibrate(wMotor_t *motor)
-{
-    int errorCode = 0;
-    int steps = 0;
-
-    motor->calibrated = false;
-    // Move the full safety distance backwards to the min limit switch
-    errorCode = motorMove(motor, -motor->safetyLimit, &steps, true);
-    if (errorCode == 0) {
-        if (steps > (int) -motor->safetyLimit) {
-            steps = 0;
-            // Do the same in the forward direction
-            errorCode = motorMove(motor, motor->safetyLimit, &steps, true);
-            if (errorCode == 0) {
-                if (steps < ((int) motor->safetyLimit)) {
-                    // steps is now the distance between the minimum
-                    // and maximum limits: set the current position
-                    // and the limits; the margin will be just inside
-                    // the limit switches so that we can move without
-                    // stressing them and we know that our movement
-                    // has become innaccurate if we hit them
-                    steps >>= 1;
-                    motor->now = steps;
-                    steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
-                    motor->max = steps;
-                    motor->min = -steps;
-                    motor->calibrated = true;
-                    W_LOG_INFO("%s: calibrated range +/- %d step(s).",
-                               motor->name, steps);
-                } else {
-                    W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
-                                " from the max limit did not reach the min"
-                                " limit switch.", motor->name,
-                                motor->safetyLimit);
-                }
-            }
-        } else {
-            W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s) did"
-                        " not reach the max limit switch.", motor->name,
-                        motor->safetyLimit);
-        }
-    }
-
-    if ((errorCode == 0) && !motor->calibrated) {
-        errorCode = -ENXIO;
-    }
-
-    return errorCode;
-}
-
 // Run a self test of all of the HW and calibrate the motors.
 static int hwInit()
 {
@@ -2949,25 +2552,7 @@ static int hwInit()
     cm->stop();
 
     if (errorCode == 0) {
-        W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
-        // Now calibrate movement
-        errorCode = motorsEnable();
-        for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
-                                 (errorCode == 0); x++) {
-            errorCode = motorCalibrate(&(gMotor[x]));
-        }
-        if (errorCode == 0) {
-            W_LOG_INFO("calibration successful, moving to rest position.");
-            for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
-                                     (errorCode == 0); x++) {
-                errorCode = motorMoveToRest(&(gMotor[x]));
-            }
-        }
-        if (errorCode != 0) {
-            // Disable motors again if calibration or moving
-            // to rest position failed
-            motorsEnable(false);
-        }
+        errorCode = wMotorInit();
     }
 
     return errorCode;
@@ -3142,6 +2727,7 @@ int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
     wCommandLineParameters_t commandLineParameters;
+
     wVideoEncodeContext_t videoEncode = {};
     AVStream *avStream = nullptr;
     int msgFd = -1;
@@ -3518,7 +3104,7 @@ int main(int argc, char *argv[])
         }
 
         // Disable the stepper motors
-        motorsEnable(false);
+        wMotorDeinit();
         // Give back the GPIOs
         wGpioDeinit();
 

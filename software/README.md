@@ -12,6 +12,9 @@ In writing the software here I was guided by:
 - the equally excellent [documentation for libcamera](https://libcamera.org/guides/application-developer.html),
 - the source code for [libcamera's cam application](https://git.libcamera.org/libcamera/libcamera.git/tree/src/apps/cam).
 
+# Implementation Note
+All of my stuff here is really in C rather than C++, despite the `.cpp` extension.  I did try moving to C++, 'cos I like the name-spacing, but you can't initialise flexible arrays (of which I use quite a few) in a C++ class and C++ contructors can't return errors, making them unsuitable for HW-oriented things that can fail, so you end up having to have `init()` methods anyway, `#define`s (which are nice 'cos you can modify them by passing values to the compiler command-line) aren't name-spaced in C++ in any case, etc.  Hence I've name-spaced the code in the usual C way (by prefixing function and variable names sensibly); that will have to do.
+
 # Installation
 For the Pi, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.
 
@@ -237,8 +240,8 @@ Otherwise, the default (log level 1) is to run with information, warning and err
 # Serve
 To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.
 
-# Wstching Service
-To start the watchdog at boot, copy the file [watchdog.service](watchdog.service] from this directory, replacing `/home/http` with whatever you have chosen as `your_document_root`, into `/etc/systemd/system/`, then do:
+# Watchdog Service
+To start the watchdog at boot, copy the file [watchdog.service](watchdog.service) from this directory, replacing `/home/http` with whatever you have chosen as `your_document_root`, into `/etc/systemd/system/`, then do:
 
 ```
 sudo systemctl start watchdog
@@ -266,4 +269,4 @@ sudo journalctl -u watchdog
 ```
 
 # A Note On Developing
-I edited the source files on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put *` the files to the Pi before compiling in an `ssh` terminal to the Pi.  You can also open files in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
+I edited the source files on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put *` the files to the Pi before compiling in an `ssh` terminal to the Pi.  You can also open files in `nano` on the Pi and `CTRL-O` to write the file, but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.

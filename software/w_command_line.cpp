@@ -15,14 +15,12 @@
  */
 
 /** @file
- * @brief Implementation of the command-line functions (parsing, printing
- * help. etc.) for the watchdog.
+ * @brief The implementation of the command-line functions (parsing,
+ * printing help. etc.) for the watchdog application.
  */
 
 // The CPP stuff.
 #include <string>
-#include <iomanip>
-#include <iostream>
 
 // The Linux/Posix stuff.
 #include <unistd.h> // For get_current_dir_name()
@@ -44,12 +42,16 @@
  * -------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------
+ * VARIABLES
+ * -------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------
  * STATIC FUNCTIONS
  * -------------------------------------------------------------- */
 
 // Given a C string that is assumed to be a path, return the directory
 // portion of that as a C++ string.
-static std::string getDirectoryPath(const char *path, bool absolute=false)
+static std::string getDirectoryPath(const char *path, bool absolute = false)
 {
     std::string directoryPath;
 

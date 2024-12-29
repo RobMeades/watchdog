@@ -180,7 +180,7 @@
 /** Initialise the GPIO pins; if the GPIO pins were already
  * initialised this function will do nothing and return success.
  *
- * @return    zero on success else negative error code.
+ * @return  zero on success else negative error code.
  */
 int wGpioInit();
 
