@@ -266,4 +266,4 @@ sudo journalctl -u watchdog
 ```
 
 # A Note On Developing
-Since this is a simple application, a single source file, I edited `watchdog.cpp` on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put` the file to the Pi before compiling in an `ssh` terminal to the Pi.  You can open the file in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
+I edited the source files on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put *` the files to the Pi before compiling in an `ssh` terminal to the Pi.  You can also open files in `nano` on the Pi and `CTRL-O` to write the file but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.

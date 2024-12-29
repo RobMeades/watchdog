@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 Rob Meades
+ * Copyright 2025 Rob Meades
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@
 #include <mutex>
 #include <list>
 #include <atomic>
+#include <chrono>
 
 // The Linux/Posix stuff.
 #include <sys/mman.h>
@@ -71,7 +72,6 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <poll.h>
-#include <gpiod.h>
 
 // The libcamera stuff.
 #include <libcamera/libcamera.h>
@@ -91,12 +91,16 @@ extern "C" {
 # include <libavutil/imgutils.h>
 }
 
+// Watchdog bits
+#include <w_util.h>
+#include <w_log.h>
+#include <w_command_line.h>
+#include <w_gpio.h>
+#include <w_hls.h>
+
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: MISC
  * -------------------------------------------------------------- */
-
-// Compute the number of elements in an array.
-#define W_ARRAY_COUNT(array) (sizeof(array) / sizeof(array[0]))
 
 // Print the duration of an operation for debug purposes.
 #define W_PRINT_DURATION(x) auto _t1 = std::chrono::high_resolution_clock::now();  \
@@ -105,29 +109,10 @@ extern "C" {
                             W_LOG_DEBUG("%d ms to do \"" #x "\".",                 \
                                         std::chrono::duration_cast<std::chrono::milliseconds>(_t2 - _t1))
 
-// The directory separator (we only run this on Linux).
-#define W_DIR_SEPARATOR "/"
-
-// The character that means "this directory".
-#define W_DIR_THIS "."
-
-// The required appendage to a system command to make it silent
-// (on Linux, obviously).
-#define W_SYSTEM_SILENT " >>/dev/null 2>>/dev/null"
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: STRINGIFY
- * -------------------------------------------------------------- */
-
-// Used only by W_STRINGIFY_QUOTED.
-#define W_STRINGIFY_LITERAL(x) #x
-
-// Stringify a macro, so if you have:
-//
-// #define foo bar
-//
-// ...W_STRINGIFY_QUOTED(foo) is "bar".
-#define W_STRINGIFY_QUOTED(x) W_STRINGIFY_LITERAL(x)
+#ifndef W_MONITOR_TIMING_LENGTH
+// The number of frames to average timing over when monitoring.
+# define W_MONITOR_TIMING_LENGTH 1000
+#endif
 
 /* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: CAMERA RELATED
@@ -329,176 +314,6 @@ extern "C" {
 #define W_VIDEO_STREAM_FRAME_RATE_AVRATIONAL {W_CAMERA_FRAME_RATE_HERTZ, 1}
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: HLS VIDEO OUTPUT SETTINGS
- * -------------------------------------------------------------- */
-
-#ifndef W_HLS_FILE_NAME_ROOT_DEFAULT
-// The default root name for our HLS video files (.m3u8 and .ts).
-# define W_HLS_FILE_NAME_ROOT_DEFAULT "watchdog"
-#endif
-
-#ifndef W_HLS_PLAYLIST_FILE_EXTENSION
-// Playlist file extension.
-# define W_HLS_PLAYLIST_FILE_EXTENSION ".m3u8"
-#endif
-
-#ifndef W_HLS_SEGMENT_FILE_EXTENSION
-// Segment file extension.
-# define W_HLS_SEGMENT_FILE_EXTENSION ".ts"
-#endif
-
-#ifndef W_HLS_OUTPUT_DIRECTORY_DEFAULT
-// The default output directory; should not end in a "/".
-# define W_HLS_OUTPUT_DIRECTORY_DEFAULT W_DIR_THIS
-#endif
-
-#ifndef W_HLS_SEGMENT_DURATION_SECONDS
-// The duration of a segment in seconds.
-# define W_HLS_SEGMENT_DURATION_SECONDS 2
-#endif
-
-#ifndef W_HLS_LIST_SIZE
-// The number of segments in the list.
-# define W_HLS_LIST_SIZE 15
-#endif
-
-#ifndef W_HLS_BASE_URL
-// The URL to serve from (must NOT end with a "/").
-# define W_HLS_BASE_URL "http://10.10.1.16"
-#endif
-
-/* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: GPIO RELATED
- * -------------------------------------------------------------- */
-
-#ifndef W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT
-// The GPIO input pin that detects the state of the "look left limit"
-// switch as one is standing behind the watchdog, looking out of
-// the watchdog's eyes, i.e. it is the limit switch on the _right_
-// side of the collar as one is standing behind the watchdog
-// looking forward.
-# define W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT 1
-#endif
-
-#ifndef W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT
-// The GPIO input pin that detects the state of the "look right limit"
-// switch as one is standing behind the watchdog, looking out of
-// the watchdog's eyes, i.e. it is the limit switch on the _left_
-// side of the collar as one is standing behind the watchdog
-// looking forward.
-# define W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT 2
-#endif
-
-#ifndef W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT
-// The GPIO input pin detecting the state of the "look down limit", i.e.
-// the switch on the front of the watchdog's body.
-# define W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT 3
-#endif
-
-#ifndef W_GPIO_PIN_INPUT_LOOK_UP_LIMIT
-// The GPIO input pin detecting the state of the "look up limit", i.e.
-// the switch on the rear of the watchdog's body.
-# define W_GPIO_PIN_INPUT_LOOK_UP_LIMIT 4
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_ROTATE_DISABLE
-// The GPIO output pin that enables the stepper motor that rotates the
-// watchdog's head.
-// NOTE: the pin on the Sparkfun board is labelled "enable" but a logic
-// 1 disables, a logic 0 enables, so it might better be called "enable bar"
-// or more clearly DISABlE
-# define W_GPIO_PIN_OUTPUT_ROTATE_DISABLE 5
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION
-// The GPIO output pin that sets the direction of rotation: 1 for clock-wise,
-// 0 for anti-clockwise.
-# define W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION 6
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_ROTATE_STEP
-// The GPIO output pin that, when pulsed, causes the rotation stepper motor
-// to move one step.
-# define W_GPIO_PIN_OUTPUT_ROTATE_STEP 7
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE
-// The GPIO output pin that enables the stepper motor that lowers and
-// raises the watchdog's head.
-// NOTE: the pin on the Sparkfun board is labelled "enable" but a logic
-// 1 disables, a logic 0 enables, so it might better be called "enable bar"
-// or more clearly DISABlE
-# define W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE 8
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION
-// The GPIO output pin that sets the direction of vertical motion: 1 for,
-// down, 0 for up.
-# define W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION 9
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_VERTICAL_STEP
-// The GPIO output pin that, when pulsed, causes the vertical stepper motor
-// to move one step.
-# define W_GPIO_PIN_OUTPUT_VERTICAL_STEP 10
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_EYE_LEFT
-// The GPIO pin driving the LED in the left eye of the watchdog.
-# define W_GPIO_PIN_OUTPUT_EYE_LEFT 12
-#endif
-
-#ifndef W_GPIO_PIN_OUTPUT_EYE_RIGHT
-// The GPIO pin driving the LED in the right eye of the watchdog.
-# define W_GPIO_PIN_OUTPUT_EYE_RIGHT 13
-#endif
-
-#ifndef W_GPIO_CHIP_NUMBER
-// The number of the GPIO chip to use: 0 for a Pi 5's header pins.
-# define W_GPIO_CHIP_NUMBER 0
-#endif
-
-#ifndef W_GPIO_CONSUMER_NAME
-// A string to identify us as a consumer of a GPIO pin.
-# define W_GPIO_CONSUMER_NAME "watchdog"
-#endif
-
-#ifndef W_GPIO_DEBOUNCE_THRESHOLD
-// The number of times an input pin must have read a consistently
-// different level to the current level for us to believe that it
-// really has changed state.  With a GPIO tick timer of 1 ms and
-// four input pins, that means that the pin must have read the same
-// level for a full 12 milliseconds before we believe it.
-# define W_GPIO_DEBOUNCE_THRESHOLD 3
-#endif
-
-#ifndef W_GPIO_TICK_TIMER_PERIOD_US
-// The GPIO tick timer period in microseconds: this is used to
-// debounce the input pins, reading one each time, so will
-// run around the four inputs once every fourth period, so using
-// 1 millisecond here would mean an input line is read every
-// 4 milliseconds and so a W_GPIO_DEBOUNCE_THRESHOLD of 3 would
-// mean that a GPIO would need to have read a consistent level
-// for 12 milliseconds.
-# define W_GPIO_TICK_TIMER_PERIOD_US 1000
-#endif
-
-#ifndef W_GPIO_PWM_TIMER_PERIOD_US
-// The GPIO PWM timer period in microseconds: used to drive PWM
-// where, since we don't have a capacitor on the LED, we drive
-// at quite a high rate.
-# define W_GPIO_PWM_TIMER_PERIOD_US 1000
-#endif
-
-#ifndef W_GPIO_PWM_MAX_COUNT
-// The number of PWM timer intervals that represents 100%.  With
-// a PWM timer period of 1 ms, using 20 here keeps the flicker rate
-// down to a non-visible 20 ms.
-# define W_GPIO_PWM_MAX_COUNT 20
-#endif
-
-
-/* ----------------------------------------------------------------
  * COMPILE-TIME MACROS: LED RELATED
  * -------------------------------------------------------------- */
 
@@ -650,63 +465,8 @@ extern "C" {
 #endif
 
 /* ----------------------------------------------------------------
- * COMPILE-TIME MACROS: LOGGING RELATED
+ * TYPES: MONITORING RELATED
  * -------------------------------------------------------------- */
-
-#ifndef W_MONITOR_TIMING_LENGTH
-// The number of frames to average timing over when monitoring.
-# define W_MONITOR_TIMING_LENGTH 1000
-#endif
-
-#define W_LOG_TAG "Watchdog"
-
-// ANSI colour codes for printing.
-#define W_ANSI_COLOUR_RESET "\u001b[0m"
-#define W_ANSI_COLOUR_BRIGHT_WHITE "\u001b[37;1m"
-#define W_ANSI_COLOUR_BRIGHT_GREEN "\u001b[32;1m"
-#define W_ANSI_COLOUR_BRIGHT_YELLOW "\u001b[33;1m"
-#define W_ANSI_COLOUR_BRIGHT_RED "\u001b[31;1m"
-#define W_ANSI_COLOUR_BRIGHT_MAGENTA "\u001b[35;1m"
-
-// Prefixes for info, warning and error strings.
-#define W_INFO W_ANSI_COLOUR_BRIGHT_GREEN "INFO  " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
-#define W_WARN W_ANSI_COLOUR_BRIGHT_YELLOW "WARN  " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
-#define W_ERROR W_ANSI_COLOUR_BRIGHT_RED "ERROR " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
-#define W_DEBUG W_ANSI_COLOUR_BRIGHT_MAGENTA "DEBUG " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
-
-// Logging macros: one-call.
-#define W_LOG_INFO(...) log(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
-#define W_LOG_WARN(...) log(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
-#define W_LOG_ERROR(...) log(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
-#define W_LOG_DEBUG(...) log(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
-
-// Logging macros: multiple calls.
-#define W_LOG_INFO_START(...) logStart(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
-#define W_LOG_WARN_START(...) logStart(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
-#define W_LOG_ERROR_START(...) logStart(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
-#define W_LOG_DEBUG_START(...) logStart(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
-#define W_LOG_INFO_MORE(...) logMore(W_LOG_TYPE_INFO, __VA_ARGS__)
-#define W_LOG_WARN_MORE(...) logMore(W_LOG_TYPE_WARN, __VA_ARGS__)
-#define W_LOG_ERROR_MORE(...) logMore(W_LOG_TYPE_ERROR, __VA_ARGS__)
-#define W_LOG_DEBUG_MORE(...) logMore(W_LOG_TYPE_DEBUG, __VA_ARGS__)
-#define W_LOG_INFO_END logEnd(W_LOG_TYPE_INFO)
-#define W_LOG_WARN_END logEnd(W_LOG_TYPE_WARN)
-#define W_LOG_ERROR_END logEnd(W_LOG_TYPE_ERROR)
-#define W_LOG_DEBUG_END logEnd(W_LOG_TYPE_DEBUG)
-
-/* ----------------------------------------------------------------
- * TYPES: LOGGING RELATED
- * -------------------------------------------------------------- */
-
-// The types of log print.  Values are important as they are
-// used as indexes into arrays.
-typedef enum {
-    W_LOG_TYPE_INFO = 0,
-    W_LOG_TYPE_WARN = 1,
-    W_LOG_TYPE_ERROR = 2,
-    W_LOG_TYPE_DEBUG = 3
-} wLogType_t;
-
 // Structure to monitor timing.
 typedef struct {
     std::chrono::time_point<std::chrono::high_resolution_clock> previousTimestamp;
@@ -718,17 +478,6 @@ typedef struct {
     std::chrono::duration<double> largest;
     std::chrono::duration<double> average;
 } wMonitorTiming_t;
-
-
-/* ----------------------------------------------------------------
- * TYPES: TIMEOUT RELATED
- * -------------------------------------------------------------- */
-
-/* Structure to hold a start time, used in time-out calculations.
- */
-typedef struct {
-    std::chrono::time_point<std::chrono::high_resolution_clock> time;
-} wTimeoutStart_t;
 
 /* ----------------------------------------------------------------
  * TYPES: IMAGE RELATED
@@ -765,8 +514,8 @@ typedef struct {
  * TYPES: LED RELATED
  * -------------------------------------------------------------- */
 
-// Identify the LEDs; order is important, must match the order of
-// the LEDs in gGpioPwmPin[].
+// Identify the LEDs; order is important, the first two must match
+// the order of the LED pins in gLedToPin[].
 typedef enum {
     W_LED_LEFT = 0,
     W_LED_RIGHT = 1,
@@ -1011,63 +760,6 @@ static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
                                     unsigned int previousSize);
 
 /* ----------------------------------------------------------------
- * TYPES: GPIO RELATED
- * -------------------------------------------------------------- */
-
-// Storage for debouncing a GPIO.
-typedef struct {
-    struct gpiod_line *line;
-    unsigned int notLevelCount;
-} wGpioDebounce_t;
-
-// The possible bias for a GPIO input; if you change the order
-// here then you should change gGpioBiasStr[] to match.
-typedef enum {
-    W_GPIO_BIAS_NONE,
-    W_GPIO_BIAS_PULL_DOWN,
-    W_GPIO_BIAS_PULL_UP
-} wGpioBias_t;
-
-// A GPIO input pin, its biasing and current state.
-typedef struct {
-    unsigned int pin;
-    const char *name;
-    wGpioBias_t bias;
-    unsigned int level;
-    wGpioDebounce_t debounce;
-} wGpioInput_t;
-
-// The possible drive strengths for a GPIO output.
-typedef enum {
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA = 0,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_4_MA = 1,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_6_MA = 2,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_8_MA = 3,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_10_MA = 4,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_12_MA = 5,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_14_MA = 6,
-    W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA = 7
-} wGpioDriveStrength_t;
-
-// A GPIO output pin with required drive strength
-// and the state the pin should be initialised to.
-typedef struct {
-    unsigned int pin;
-    const char *name;
-    wGpioDriveStrength_t driveStrength;
-    unsigned int initialLevel;
-} wGpioOutput_t;
-
-// An output pin that is a PWM pin.
-typedef struct {
-    unsigned int pin;
-    // Atomic since it is read from the PWM thread and can be
-    // written by anyone
-    std::atomic<unsigned int> levelPercent;
-    struct gpiod_line *line;
-} wGpioPwm_t;
-
-/* ----------------------------------------------------------------
  * TYPES: MOTOR/MOVEMENT RELATED
  * -------------------------------------------------------------- */
 
@@ -1104,24 +796,6 @@ typedef struct {
     int min;      // A calibrated limit
     int now;
 } wMotor_t;
-
-/* ----------------------------------------------------------------
- * TYPES: COMMAND-LINE RELATED
- * -------------------------------------------------------------- */
-
-// Parameters passed to this program.
-typedef struct {
-    std::string programName;
-    std::string outputDirectory;
-    std::string outputFileName;
-} wCommandLineParameters_t;
-
-/* ----------------------------------------------------------------
- * VARIABLES: MISC
- * -------------------------------------------------------------- */
-
-// Flag that tells us whether or not we've had a CTRL-C.
-volatile sig_atomic_t gTerminated = 0;
 
 /* ----------------------------------------------------------------
  * VARIABLES: CAMERA RELATED
@@ -1164,6 +838,10 @@ static wMonitorTiming_t gVideoStreamMonitorTiming;
 /* ----------------------------------------------------------------
  * VARIABLES: LED RELATED
  * -------------------------------------------------------------- */
+
+// Table of wLed_t to LED pin.
+static const unsigned int gLedToPin[] = {W_GPIO_PIN_OUTPUT_EYE_LEFT,
+                                         W_GPIO_PIN_OUTPUT_EYE_RIGHT};
 
 // A table of sine-wave magnitudess for a quarter wave, scaled by 100;
 // with a W_LED_TICK_TIMER_PERIOD_MS of 20, these 50 entries would
@@ -1231,81 +909,6 @@ std::list<wMsgContainer_t> gMsgContainerListLed;
 std::mutex gMsgMutexLed;
 
 /* ----------------------------------------------------------------
- * VARIABLES: GPIO RELATED
- * -------------------------------------------------------------- */
-
-// Our GPIO chip.
-static gpiod_chip *gGpioChip = nullptr;
-
-// Array of GPIO input pins.
-static wGpioInput_t gGpioInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
-                                        .name = "look left limit",
-                                        .bias = W_GPIO_BIAS_PULL_UP},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
-                                        .name = "look right limit",
-                                        .bias = W_GPIO_BIAS_PULL_UP},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
-                                        .name = "look down limit",
-                                        .bias = W_GPIO_BIAS_PULL_UP},
-                                       {.pin = W_GPIO_PIN_INPUT_LOOK_UP_LIMIT,
-                                        .name = "look up limit",
-                                        .bias = W_GPIO_BIAS_PULL_UP}};
-
-// Array of GPIO output pins with their drive strengths
-// and initial levels.
-static wGpioOutput_t gGpioOutputPin[] = {{.pin = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
-                                          .name = "rotate disable",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 1}, // Start disabled
-                                         {.pin = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
-                                          .name = "rotate direction",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
-                                          .name = "rotate step",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
-                                          .name = "vertical disable",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 1}, // Start disabled
-                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_DIRECTION,
-                                          .name = "vertical direction",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_VERTICAL_STEP,
-                                          .name = "vertical step",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA,
-                                          .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT,
-                                          .name = "left eye",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA,
-                                          .initialLevel = 0},
-                                         {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT,
-                                          .name = "right eye",
-                                          .driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_16_MA,
-                                          .initialLevel = 0}};
-
-// Array of PWM output pins (which must also be in gGpioOutputPin[]).
-static wGpioPwm_t gGpioPwmPin[] = {{.pin = W_GPIO_PIN_OUTPUT_EYE_LEFT},
-                                   {.pin = W_GPIO_PIN_OUTPUT_EYE_RIGHT}};
-
-// Array of names for the bias types, just for printing; must be in the same
-// order as wGpioBias_t.
-static const char *gGpioBiasStr[] = {"none", "pull down", "pull up"};
-
-// Monitor the number of times we've read GPIOs, purely for information.
-static uint64_t gGpioInputReadCount = 0;
-
-// Monitor the start and stop time of GPIO reading, purely for information.
-static std::chrono::system_clock::time_point gGpioInputReadStart;
-static std::chrono::system_clock::time_point gGpioInputReadStop;
-
-// Remember the number of times the GPIO read thread has not been called
-// dead on time, purely for information.
-static uint64_t gGpioInputReadSlipCount = 0;
-
-/* ----------------------------------------------------------------
  * VARIABLES: MOTOR RELATED
  * -------------------------------------------------------------- */
 
@@ -1336,87 +939,8 @@ static wMotor_t gMotor[] = {{.name = "vertical",
 static const char *gMotorRestPositionStr[] = {"centre", "max", "min"};
 
 /* ----------------------------------------------------------------
- * VARIABLES: LOGGING RELATED
+ * STATIC FUNCTIONS: MONITORING RELATED
  * -------------------------------------------------------------- */
-
-// Array of log prefixes for the different log types.
-static const char *gLogPrefix[] = {W_INFO, W_WARN, W_ERROR, W_DEBUG};
-
-// Array of log destinations for the different log types.
-static FILE *gLogDestination[] = {stdout, stdout, stderr, stdout};
-
-/* ----------------------------------------------------------------
- * STATIC FUNCTIONS: LOGGING/MONITORING RELATED
- * -------------------------------------------------------------- */
-
-// Return the right output stream for a log type.
-static FILE *logDestination(wLogType_t type)
-{
-    FILE *destination = stderr;
-
-    if (type < W_ARRAY_COUNT(gLogDestination)) {
-        destination = gLogDestination[type];
-    }
-
-    return destination;
-}
-
-// Return the prefix for a log type.
-static const char *logPrefix(wLogType_t type)
-{
-    const char *prefix = W_ERROR;
-
-    if (type < W_ARRAY_COUNT(gLogDestination)) {
-        prefix = gLogPrefix[type];
-    }
-
-    return prefix;
-}
-
-// Print the start of a logging message.
-template<typename ... Args>
-static void logStart(wLogType_t type, unsigned int line, Args ... args)
-{
-    FILE *destination = logDestination(type);
-    const char *prefix = logPrefix(type);
-    char buffer[32];
-    timeval now;
-
-    gettimeofday(&now, NULL);
-    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", gmtime(&(now.tv_sec)));
-
-    fprintf(destination, "%s.%06ldZ ", buffer, now.tv_usec);
-    fprintf(destination, "%s[%4d]: ", prefix, line);
-    fprintf(destination, args...);
-}
-
-// Print the middle of a logging message, after logStart()
-// has been called and before logEnd() is called.
-template<typename ... Args>
-static void logMore(wLogType_t type, Args ... args)
-{
-    FILE *destination = logDestination(type);
-
-    fprintf(destination, args...);
-}
-
-// Print the end of a logging message, after logStart()
-// or logMore() has been called.
-template<typename ... Args>
-static void logEnd(wLogType_t type)
-{
-    FILE *destination = logDestination(type);
-
-    fprintf(destination, "\n");
-}
-
-// Print a single-line logging message.
-template<typename ... Args>
-static void log(wLogType_t type, unsigned int line, Args ... args)
-{
-    logStart(type, line, args...);
-    logEnd(type);
-}
 
 // Update a timing monitoring buffer.
 static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
@@ -1441,7 +965,7 @@ static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
         monitorTiming->gap[monitorTiming->numGaps] = gap;
         monitorTiming->numGaps++;
         monitorTiming->total += gap;
-        if (monitorTiming->numGaps >= W_ARRAY_COUNT(monitorTiming->gap)) {
+        if (monitorTiming->numGaps >= W_UTIL_ARRAY_COUNT(monitorTiming->gap)) {
             monitorTiming->oldestGap = &(monitorTiming->gap[0]);
         }
     } else {
@@ -1450,7 +974,7 @@ static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
         *monitorTiming->oldestGap = gap;
         monitorTiming->total += gap;
         monitorTiming->oldestGap++;
-        if (monitorTiming->oldestGap >= monitorTiming->gap + W_ARRAY_COUNT(monitorTiming->gap)) {
+        if (monitorTiming->oldestGap >= monitorTiming->gap + W_UTIL_ARRAY_COUNT(monitorTiming->gap)) {
             monitorTiming->oldestGap = &(monitorTiming->gap[0]);
         }
     }
@@ -1463,27 +987,6 @@ static void monitorTimingUpdate(wMonitorTiming_t *monitorTiming)
 
     // Store the timestamp for next time
     monitorTiming->previousTimestamp = timestamp;
-}
-
-/* ----------------------------------------------------------------
- * STATIC FUNCTIONS: TIMEOUT RELATED
- * -------------------------------------------------------------- */
-
-// Initialise a time-out with the current time.
-static wTimeoutStart_t timeoutStart()
-{
-    wTimeoutStart_t startTime;
-    startTime.time = std::chrono::high_resolution_clock::now();
-    return startTime;
-}
-
-// Perform a time-out check in a wrap-safe way.
-static bool timeoutExpired(wTimeoutStart_t startTime,
-                           std::chrono::nanoseconds duration)
-{
-    auto nowTime = std::chrono::high_resolution_clock::now();
-    auto elapsedTime = nowTime - startTime.time;
-    return elapsedTime > duration;
 }
 
 /* ----------------------------------------------------------------
@@ -1953,484 +1456,6 @@ static cv::Point pointProtectedGet(wPointProtected_t *pointProtected)
 }
 
 /* ----------------------------------------------------------------
- * STATIC FUNCTIONS: GPIO RELATED
- * -------------------------------------------------------------- */
-
-// Return the line for a GPIO pin, opening the chip if necessary.
-static struct gpiod_line *gpioLineGet(unsigned int pin)
-{
-    struct gpiod_line *line = nullptr;
-
-    if (!gGpioChip) {
-        gGpioChip = gpiod_chip_open_by_number(W_GPIO_CHIP_NUMBER);
-    }
-    if (gGpioChip) {
-        line = gpiod_chip_get_line(gGpioChip, pin);
-    }
-
-    return line;
-}
-
-// Release a GPIO pin if it has been taken before.
-static void gpioRelease(struct gpiod_line *line)
-{
-    if (gpiod_line_consumer(line) != nullptr) {
-        gpiod_line_release(line);
-    }
-}
-
-// Check if a GPIO pin has already been configured as an output.
-static bool gpioIsOutput(struct gpiod_line *line)
-{
-    return ((gpiod_line_consumer(line) != nullptr) &&
-            (gpiod_line_direction(line) == GPIOD_LINE_DIRECTION_OUTPUT));
-}
-
-// Configure a GPIO pin.  level and driveStrength are ignored for
-// an input pin, bias is ignored for an output pin.
-static int gpioCfg(unsigned int pin, bool isOutput,
-                   wGpioBias_t bias = W_GPIO_BIAS_NONE,
-                   unsigned int level = 0,
-                   wGpioDriveStrength_t driveStrength = W_GPIO_OUTPUT_DRIVE_STRENGTH_2_MA)
-{
-    int errorCode = -EINVAL;
-    struct gpiod_line *line = gpioLineGet(pin);
-
-    if (line) {
-        gpioRelease(line);
-        if (isOutput) {
-            errorCode = gpiod_line_request_output(line,
-                                                  W_GPIO_CONSUMER_NAME,
-                                                  level);
-            if (errorCode == 0) {
-                // Set the drive strength; from the Raspberry Pi site:
-                // https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#gpio-addresses
-                // ...one writes 0x5a000000 OR'ed with the drive strength
-                // in bits 0, 1 and 2 to address 0x7e10002c for GPIOs 0-27,
-                // address 0x7e100030 for GPIOs 28-45 or address 0x7e100034
-                // for GPIOs 46-53.  All of the GPIO pins on the Pi header
-                // are in the first set, which makes things simple.
-                off64_t address = 0x7e10002c;
-                // Need to use mmap() to get at the memory location and that requires
-                // us to find the start of the memory page our address is within 
-                int pageSize = getpagesize();
-                // Note: getpagesize() returns a size in bytes
-                off64_t baseAddress = (address / pageSize) * pageSize;
-                off64_t offset = address - baseAddress;
-                //unsigned char *baseAddress = (unsigned char *) (((long int) (address + pageSize)) & (long int) ~(pageSize - 1));
-                //long int offset = address - baseAddress;
-                int memFd = open("/dev/mem", O_RDWR);
-                if (memFd) {
-                    unsigned char *addressMapped = static_cast<unsigned char *> (mmap(nullptr, offset + sizeof(int),
-                                                                                      PROT_READ | PROT_WRITE, MAP_SHARED,
-                                                                                      memFd, baseAddress));
-                    if (addressMapped) {
-                        // Since each address covers a range of pins, make sure
-                        // not to lower the drive strength again if a pin in the
-                        // same range is being written later
-                        int value = *(addressMapped + offset);
-                        if ((value & 0x07) < driveStrength) {
-                            // Bit positions 3 and 4 have a slew-rate and hysteresis
-                            // setting respectively; preserve those when writing
-                            // the new drive strength
-                            *(addressMapped + offset) = (value & 0x00000018) | 0x5a000000 | driveStrength;
-                        }
-                        munmap(addressMapped, offset + sizeof(int));
-                    }
-                    close(memFd);
-                } else {
-                    W_LOG_ERROR("unable to access memory: do you need sudo?");
-                }
-            }
-        } else {
-            int flags = 0;
-            switch (bias) {
-                case W_GPIO_BIAS_PULL_DOWN:
-                    flags |= GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_DOWN;
-                    break;
-                case W_GPIO_BIAS_PULL_UP:
-                    flags |= GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_UP;
-                    break;
-                default:
-                    break;
-            }
-            errorCode = gpiod_line_request_input_flags(line,
-                                                       W_GPIO_CONSUMER_NAME,
-                                                       flags);
-        }
-    }
-
-    return errorCode;
-}
-
-// Get the state of a GPIO pin without any debouncing.
-static int gpioGetRaw(unsigned int pin)
-{
-    int levelOrErrorCode = -EINVAL;
-
-    struct gpiod_line *line = gpioLineGet(pin);
-    if (line) {
-        levelOrErrorCode = gpiod_line_get_value(line);
-    }
-
-    return levelOrErrorCode;
-}
-
-// Get the state of a GPIO pin after debouncing.
-static int gpioGet(unsigned int pin)
-{
-    int levelOrErrorCode = -EINVAL;
-
-    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
-                             (levelOrErrorCode < 0); x++) {
-        wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
-        if (gpioInput->pin == pin) {
-            levelOrErrorCode = gpioInput->level;
-        }
-    }
-
-    return levelOrErrorCode;
-}
-
-// Set the state of a GPIO pin.
-static int gpioSet(unsigned int pin, unsigned int level)
-{
-    int errorCode = -EINVAL;
-    struct gpiod_line *line = gpioLineGet(pin);
-
-    if (line) {
-        if (gpioIsOutput(line)) {
-            errorCode = gpiod_line_set_value(line, level);
-        } else {
-            gpioRelease(line);
-            errorCode = gpiod_line_request_output(line,
-                                                  W_GPIO_CONSUMER_NAME,
-                                                  level);
-        }
-    }
-
-    return errorCode;
-}
-
-// Get the entry for a PWM pin in gGpioPwmPin.
-static wGpioPwm_t *gpioPwmEntry(unsigned int pin)
-{
-    wGpioPwm_t *gpioPwm = nullptr;
-
-    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioPwmPin)) &&
-                             (gpioPwm == nullptr); x++) {
-        if (gGpioPwmPin[x].pin == pin) {
-            gpioPwm = &(gGpioPwmPin[x]);
-        }
-    }
-
-    return gpioPwm;
-}
-
-// Get the level of a PWM output pin; the pin must be in
-// gGpioPwmPin[].
-static int gpioPwmGet(unsigned int pin)
-{
-    int levelOrErrorCode = -EINVAL;
-    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
-
-    if (gpioPwm) {
-        levelOrErrorCode = gpioPwm->levelPercent;
-    }
-
-    return levelOrErrorCode;
-}
-
-// Set the level of a PWM output pin; the pin must be in
-// gGpioPwmPin[].
-static int gpioPwmSet(unsigned int pin, unsigned int levelPercent)
-{
-    int errorCode = -EINVAL;
-    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
-
-    if (gpioPwm) {
-        gpioPwm->levelPercent = levelPercent;
-        errorCode = 0;
-    }
-
-    return errorCode;
-}
-
-// Increment the level of a PWM output pin, returning the new
-// level; the pin must be in gGpioPwmPin[].
-static int gpioPwmInc(unsigned int pin)
-{
-    int levelOrErrorCode = -EINVAL;
-    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
-
-    if (gpioPwm) {
-        if (gpioPwm->levelPercent < 100) {
-            gpioPwm->levelPercent++;
-        }
-        levelOrErrorCode = gpioPwm->levelPercent;
-    }
-
-    return levelOrErrorCode;
-}
-
-// Decrement the level of a PWM output pin, returning the new
-// level; the pin must be in gGpioPwmPin[].
-static int gpioPwmDec(unsigned int pin)
-{
-    int levelOrErrorCode = -EINVAL;
-    wGpioPwm_t *gpioPwm = gpioPwmEntry(pin);
-
-    if (gpioPwm) {
-        if (gpioPwm->levelPercent > 0) {
-            gpioPwm->levelPercent--;
-        }
-        levelOrErrorCode = gpioPwm->levelPercent;
-    }
-
-    return levelOrErrorCode;
-}
-
-// GPIO task/thread/thing to debounce inputs and provide a stable
-// input level in gGpioInputPin[].
-//
-// Note: it would have been nice to read the GPIOs in a signal handler
-// directly but the libgpiod functions are not async-safe (brgl,
-// author of libgpiod, confirmed this), hence we use a timer and read
-// the GPIOs in this thread, triggered from that timer.  This loop
-// should be run at max priority; any timer ticks that are missed are
-// monitored in gGpioInputReadSlipCount.
-static void gpioReadLoop(int timerFd)
-{
-    unsigned int x = 0;
-    unsigned int level;
-    uint64_t numExpiriesSaved = 0;
-    uint64_t numExpiries;
-    uint64_t numExpiriesPassed;
-    struct pollfd pollFd[1] = {0};
-    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-    sigset_t sigMask;
-
-    pollFd[0].fd = timerFd;
-    pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-    sigemptyset(&sigMask);
-    sigaddset(&sigMask, SIGINT);
-    gGpioInputReadStart = std::chrono::system_clock::now();
-    while (!gTerminated) {
-        // Block waiting for the tick timer to go off for up to a time,
-        // or for CTRL-C to land; when the timer goes off the number
-        // of times it has expired is returned in numExpiries
-        if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-            (read(timerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
-            gGpioInputReadCount++;
-            numExpiriesPassed = numExpiries - numExpiriesSaved;
-            if (numExpiriesPassed > 1) {
-                gGpioInputReadSlipCount += numExpiriesPassed - 1;
-            }
-            // Read the level from the next input pin in the array
-            wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
-            level = gpiod_line_get_value(gpioInput->debounce.line);
-            if (gpioInput->level != level) {
-                // Level is different to the last stable level, increment count
-                gpioInput->debounce.notLevelCount++;
-                if (gpioInput->debounce.notLevelCount > W_GPIO_DEBOUNCE_THRESHOLD) {
-                    // Count is big enough that we're sure, set the level and
-                    // reset the count
-                    gpioInput->level = level;
-                    gpioInput->debounce.notLevelCount = 0;
-                }
-            } else {
-                // Current level is the same as the stable level, zero the change count
-                gpioInput->debounce.notLevelCount = 0;
-            }
-
-            // Next input pin next time
-            x++;
-            if (x >= W_ARRAY_COUNT(gGpioInputPin)) {
-                x = 0;
-            }
-            numExpiriesSaved = numExpiries;
-        }
-    }
-    gGpioInputReadStop = std::chrono::system_clock::now();
-
-    W_LOG_DEBUG("GPIO read loop has exited");
-}
-
-// Task/thread/thing to drive the PWM output of the pins
-// in gGpioPwmPin[].
-static void gpioPwmLoop(int pwmFd)
-{
-    unsigned int pwmCount = 0;
-    uint64_t numExpiries;
-    struct pollfd pollFd[1] = {0};
-    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-    sigset_t sigMask;
-    wGpioPwm_t *gpioPwmPinCopy = (wGpioPwm_t *) malloc(sizeof(gGpioPwmPin));
-
-    if (gpioPwmPinCopy) {
-        pollFd[0].fd = pwmFd;
-        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-        sigemptyset(&sigMask);
-        sigaddset(&sigMask, SIGINT);
-        while (!gTerminated) {
-            // Block waiting for the PWM timer to go off for up to a time,
-            // or for CTRL-C to land
-            // Change the level of a PWM pin only at the end of a PWM period
-            // to avoid any chance of flicker
-            memcpy((void *) gpioPwmPinCopy, gGpioPwmPin, sizeof(gGpioPwmPin));
-            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-                (read(pwmFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
-                // Progress all of the PWM pins
-                wGpioPwm_t *gpioPwm = gpioPwmPinCopy;
-                for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
-                    // If the "percentage" count has passed beyond the value
-                    // for this pin, set the output low, otherwise if we're
-                    // starting the count again and the percentage is non-zero,
-                    // set the output pin high
-                    if (pwmCount == 0) {
-                        if (gpioPwm->levelPercent > 0) {
-                            gpiod_line_set_value(gpioPwm->line, 1);
-                        }
-                    } else if (pwmCount >= gpioPwm->levelPercent * W_GPIO_PWM_MAX_COUNT / 100) {
-                        gpiod_line_set_value(gpioPwm->line, 0);
-                    }
-                    gpioPwm++;
-                }
-                pwmCount++;
-                if (pwmCount >= W_GPIO_PWM_MAX_COUNT) {
-                    pwmCount = 0;
-                    gpioPwm = gpioPwmPinCopy;
-                    // Take a new copy of the pin levels
-                    memcpy((void *) gpioPwmPinCopy, gGpioPwmPin, sizeof(gGpioPwmPin));
-                }
-            }
-        }
-
-        // Free memory
-        free(gpioPwmPinCopy);
-    } else {
-        W_LOG_ERROR("unable to allocate %d byte(s) for gpioPwmPin!");
-    }
-
-    W_LOG_DEBUG("GPIO PWM loop has exited.");
-}
-
-// Initialise the GPIO pins and return the file handle of a timer
-// that can be used in gpioInputLoop() to perform debouncing.
-static int gpioInit(int *fdPwm)
-{
-    int fdOrErrorCode = 0;
-
-    // Configure all of the input pins and get their initial states
-    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioInputPin)) &&
-                             (fdOrErrorCode == 0); x++) {
-        wGpioInput_t *gpioInput = &(gGpioInputPin[x]);
-        fdOrErrorCode = gpioCfg(gpioInput->pin, false, gpioInput->bias);
-        if (fdOrErrorCode == 0) {
-            gpioInput->level = gpioGetRaw(gpioInput->pin);
-            gpioInput->debounce.line = gpioLineGet(gpioInput->pin);
-            gpioInput->debounce.notLevelCount = 0;
-        } else {
-            W_LOG_ERROR("unable to set pin %d as an input with bias %s!",
-                        gpioInput->pin,
-                        gGpioBiasStr[gpioInput->bias]);
-        }
-    }
-
-    // Configure all of the output pins to their initial states
-    for (unsigned int x = 0; (x < W_ARRAY_COUNT(gGpioOutputPin)) &&
-                             (fdOrErrorCode == 0); x++) {
-        wGpioOutput_t *gpioOutput = &(gGpioOutputPin[x]);
-        fdOrErrorCode = gpioCfg(gpioOutput->pin, true,
-                                W_GPIO_BIAS_NONE,
-                                gpioOutput->initialLevel,
-                                gpioOutput->driveStrength);
-        if (fdOrErrorCode != 0) {
-            W_LOG_ERROR("unable to set pin %d as an output,"
-                        " drive strength %d and %s!",
-                        gpioOutput->pin,
-                        gpioOutput->driveStrength,
-                        gpioOutput->initialLevel ? "high" : "low");
-        }
-    }
-
-    if (fdOrErrorCode == 0) {
-        // Set up a tick to drive gpioInputLoop()
-        fdOrErrorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
-        if (fdOrErrorCode >= 0) {
-            struct itimerspec timerSpec = {0};
-            timerSpec.it_value.tv_nsec = W_GPIO_TICK_TIMER_PERIOD_US * 1000;
-            timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-            if (timerfd_settime(fdOrErrorCode, 0, &timerSpec, nullptr) != 0) {
-                close(fdOrErrorCode);
-                fdOrErrorCode = -errno;
-                W_LOG_ERROR("unable to set GPIO tick timer, error code %d.",
-                            fdOrErrorCode);
-            }
-        } else {
-            fdOrErrorCode = -errno;
-            W_LOG_ERROR("unable to create GPIO tick timer, error code %d.",
-                        fdOrErrorCode);
-        }
-    }
-
-    if ((fdOrErrorCode >= 0) && (fdPwm)) {
-        // Set up a tick to drive PWM
-        *fdPwm = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
-        if (*fdPwm >= 0) {
-            struct itimerspec timerSpec = {0};
-            timerSpec.it_value.tv_nsec = W_GPIO_PWM_TIMER_PERIOD_US * 1000;
-            timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-            if (timerfd_settime(*fdPwm, 0, &timerSpec, nullptr) == 0) {
-                // Now that the timer is set, populate gGpioPwmPin
-                for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioPwmPin); x++) {
-                    wGpioPwm_t *gpioPwm = &(gGpioPwmPin[x]);
-                    gpioPwm->line = gpioLineGet(gpioPwm->pin);
-                    gpioPwm->levelPercent = 0;
-                    for (unsigned int y = 0; y < W_ARRAY_COUNT(gGpioOutputPin); y++) {
-                        wGpioOutput_t *gpioOutput = &(gGpioOutputPin[y]);
-                        if (gpioPwm->pin == gpioOutput->pin) {
-                            gpioPwm->levelPercent = gpioOutput->initialLevel * 100;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                close(fdOrErrorCode);
-                fdOrErrorCode = -errno;
-                W_LOG_ERROR("unable to set GPIO PWM timer, error code %d.",
-                            fdOrErrorCode);
-            }
-        } else {
-            close(fdOrErrorCode);
-            fdOrErrorCode = -errno;
-            W_LOG_ERROR("unable to create PWM timer, error code %d.", fdOrErrorCode);
-        }
-    }
-
-    return fdOrErrorCode;
-}
-
-// Deinitialise the GPIO pins.
-static void gpioDeinit()
-{
-    struct gpiod_line *line;
-
-    for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioInputPin); x++) {
-        line = gpioLineGet(x);
-        if (line) {
-            gpioRelease(line);
-        }
-    }
-    for (unsigned int x = 0; x < W_ARRAY_COUNT(gGpioOutputPin); x++) {
-        line = gpioLineGet(x);
-        if (line) {
-            gpioRelease(line);
-        }
-    }
-}
-
-/* ----------------------------------------------------------------
  * STATIC FUNCTIONS: LED RELATED
  * -------------------------------------------------------------- */
 
@@ -2482,7 +1507,7 @@ static int ledUpdateLevel(wLed_t led, wLedState_t *state,
 {
     int levelPercentOrErrorCode = -EINVAL;
 
-    if (state && levelAverage && (led < W_ARRAY_COUNT(gGpioPwmPin))) {
+    if (state && levelAverage) {
         int newLevelPercent = (int) state->levelAveragePercent;
         if ((state->levelAveragePercent != levelAverage->targetPercent) &&
             (nowTick > levelAverage->changeStartTick) &&
@@ -2511,35 +1536,35 @@ static int ledUpdateLevel(wLed_t led, wLedState_t *state,
                 index += -offsetLeftToRightTicks;
                 if (index < 0) {
                     // Prevent underrun by wrapping about the length of a sine wave
-                    index += W_ARRAY_COUNT(gSinePercent) * 4;
+                    index += W_UTIL_ARRAY_COUNT(gSinePercent) * 4;
                 }
             }
             // The sine wave table (which is a quarter of a sine wave), with a
             // W_LED_TICK_TIMER_PERIOD_MS of 20 ms, is 4 Hertz
-            int rateHertz = (1000 / W_LED_TICK_TIMER_PERIOD_MS) * 4 / W_ARRAY_COUNT(gSinePercent);
+            int rateHertz = (1000 / W_LED_TICK_TIMER_PERIOD_MS) * 4 / W_UTIL_ARRAY_COUNT(gSinePercent);
             // Scale by rateMilliHertz
             index *= (rateHertz * 1000) / rateMilliHertz;
             // Index is across a full wave, so four times the sine table
-            index = index % (W_ARRAY_COUNT(gSinePercent) * 4);
+            index = index % (W_UTIL_ARRAY_COUNT(gSinePercent) * 4);
             // This is W_LOG_DEBUG_MORE as this function is only called
             // from ledLoop(), which will already have started a debug print
             // Now map index into the sine table quarter-wave
             int multiplier = 1;
-            if (index >= W_ARRAY_COUNT(gSinePercent) * 2) {
+            if (index >= W_UTIL_ARRAY_COUNT(gSinePercent) * 2) {
                 // We're in the negative half of the sine wave
                 multiplier = -1;
-                if (index >= W_ARRAY_COUNT(gSinePercent) * 3) {
+                if (index >= W_UTIL_ARRAY_COUNT(gSinePercent) * 3) {
                     // We're in the last quarter
-                    index = (W_ARRAY_COUNT(gSinePercent) - 1) - (index % W_ARRAY_COUNT(gSinePercent));
+                    index = (W_UTIL_ARRAY_COUNT(gSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gSinePercent));
                 } else {
                     // We're in the third quarter
-                    index = index % W_ARRAY_COUNT(gSinePercent);
+                    index = index % W_UTIL_ARRAY_COUNT(gSinePercent);
                 }
             } else {
                 // We're in the positive half of the sine wave
-                if (index >= W_ARRAY_COUNT(gSinePercent)) {
+                if (index >= W_UTIL_ARRAY_COUNT(gSinePercent)) {
                     // We're in the second quarter
-                    index = (W_ARRAY_COUNT(gSinePercent) - 1) - (index % W_ARRAY_COUNT(gSinePercent));
+                    index = (W_UTIL_ARRAY_COUNT(gSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gSinePercent));
                 }
             }
             newLevelPercent += ((int) levelAmplitudePercent) * gSinePercent[index] * multiplier / 100;
@@ -2563,7 +1588,7 @@ static void ledLoop(wLedContext_t *context)
         pollFd[0].events = POLLIN | POLLERR | POLLHUP;
         sigemptyset(&sigMask);
         sigaddset(&sigMask, SIGINT);
-        while (!gTerminated) {
+        while (wUtilKeepGoing()) {
             // Block waiting for our tick timer to go off or for
             // CTRL-C to land
             if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
@@ -2573,7 +1598,7 @@ static void ledLoop(wLedContext_t *context)
                 // Set the level for a random blink, if there is one
                 int initialLevelPercent = ledRandomBlink(context->randomBlink, context->nowTick);
                 // Update the LED pins
-                for (unsigned int x = 0; x < W_ARRAY_COUNT(context->ledState); x++) {
+                for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(context->ledState); x++) {
                     wLedState_t *state = &(context->ledState[x]);
                     int levelPercent = initialLevelPercent;
                     if (state->morse) {
@@ -2620,7 +1645,7 @@ static void ledLoop(wLedContext_t *context)
                     }
                     // Apply the new level
                     if (levelPercent >= 0) {
-                        gGpioPwmPin[x].levelPercent = levelPercent;
+                        wGpioPwmSet(gLedToPin[x], levelPercent);
                     }
                 }
 
@@ -3002,7 +2027,7 @@ static void msgHandlerLedModeConstant(wMsgBody_t *msgBody, void *context)
                           mode->apply.offsetLeftToRightMs);
         // Lock the LED context
         ledContext->mutex.lock();
-        if (mode->apply.led < W_ARRAY_COUNT(ledContext->ledState)) {
+        if (mode->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
             // We're updating one LED
             wLedState_t *state = &(ledContext->ledState[mode->apply.led]);
             W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
@@ -3011,7 +2036,7 @@ static void msgHandlerLedModeConstant(wMsgBody_t *msgBody, void *context)
             msgHandlerLedModeConstantUpdate(mode->apply.led, state, ledContext->nowTick, mode);
         } else {
             // Update both LEDs
-            for (size_t x = 0; x < W_ARRAY_COUNT(ledContext->ledState); x++) {
+            for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
                 wLedState_t *state = &(ledContext->ledState[x]);
                 W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
                                  gLedStr[x], state->modeType,
@@ -3078,7 +2103,7 @@ static void msgHandlerLedModeBreathe(wMsgBody_t *msgBody, void *context)
                           mode->apply.offsetLeftToRightMs);
         // Lock the LED context
         ledContext->mutex.lock();
-        if (mode->apply.led < W_ARRAY_COUNT(ledContext->ledState)) {
+        if (mode->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
             // We're updating one LED
             wLedState_t *state = &(ledContext->ledState[mode->apply.led]);
             W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
@@ -3087,7 +2112,7 @@ static void msgHandlerLedModeBreathe(wMsgBody_t *msgBody, void *context)
             msgHandlerLedModeBreatheUpdate(mode->apply.led, state, ledContext->nowTick, mode);
         } else {
             // Update both LEDs
-            for (size_t x = 0; x < W_ARRAY_COUNT(ledContext->ledState); x++) {
+            for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
                 wLedState_t *state = &(ledContext->ledState[x]);
                 W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
                                  gLedStr[x], state->modeType,
@@ -3282,8 +2307,8 @@ static int msgQueuePush(wMsgQueueType_t queueType,
 {
     int errorCode = -EINVAL;
 
-    if ((queueType < W_ARRAY_COUNT(gMsgQueue)) &&
-        (msgType < W_ARRAY_COUNT(gMsgBodySize))) {
+    if ((queueType < W_UTIL_ARRAY_COUNT(gMsgQueue)) &&
+        (msgType < W_UTIL_ARRAY_COUNT(gMsgBodySize))) {
         errorCode = 0;
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         wMsgBody_t *bodyCopy = nullptr;
@@ -3338,9 +2363,9 @@ static int msgQueuePush(wMsgQueueType_t queueType,
 static bool msqQueueMutexTryLockFor(std::mutex *mutex, std::chrono::nanoseconds wait)
 {
     bool gotLock = false;
-    wTimeoutStart_t startTime = timeoutStart();
+    wUtilTimeoutStart_t startTime = wUtilTimeoutStart();
 
-    while (mutex && !gotLock && !timeoutExpired(startTime, wait)) {
+    while (mutex && !gotLock && !wUtilTimeoutExpired(startTime, wait)) {
         gotLock = mutex->try_lock();
         if (!gotLock) {
            std::this_thread::sleep_for(std::chrono::microseconds(W_MSG_QUEUE_TICK_TIMER_PERIOD_US));
@@ -3356,7 +2381,7 @@ static int msgQueueClear(wMsgQueueType_t queueType, void *context)
     int errorCode = 0;
     wMsgContainer_t msg;
 
-    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+    if (queueType < W_UTIL_ARRAY_COUNT(gMsgQueue)) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         if (msqQueueMutexTryLockFor(msgQueue->mutex,
                                     W_MSG_QUEUE_TRY_LOCK_WAIT)) {
@@ -3367,7 +2392,7 @@ static int msgQueueClear(wMsgQueueType_t queueType, void *context)
                 // See if there is a free() function
                 wMsgHandler_t *handler = nullptr;
                 for (unsigned int x = 0;
-                     (x < W_ARRAY_COUNT(msgQueue->handler)) &&
+                     (x < W_UTIL_ARRAY_COUNT(msgQueue->handler)) &&
                      (handler = &(msgQueue->handler[x])) &&
                      (handler->function != nullptr) &&
                      (handler->msgType != msg.type);
@@ -3424,7 +2449,7 @@ static int msgQueueTryPop(wMsgQueue_t *msgQueue,
 //   interval it is.
 static void msgQueueLoop(wMsgQueueType_t queueType, int fd, void *context)
 {
-    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+    if (queueType < W_UTIL_ARRAY_COUNT(gMsgQueue)) {
         uint64_t numExpiries;
         struct pollfd pollFd[1] = {0};
         struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
@@ -3438,7 +2463,7 @@ static void msgQueueLoop(wMsgQueueType_t queueType, int fd, void *context)
 
         W_LOG_DEBUG("%s: message loop has started", msgQueue->name);
 
-        while (!gTerminated) {
+        while (wUtilKeepGoing()) {
             // Block waiting for the messaging timer to go off for up to
             // a time, or for CTRL-C to land
             if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
@@ -3448,7 +2473,7 @@ static void msgQueueLoop(wMsgQueueType_t queueType, int fd, void *context)
                     // Find the message handler
                     wMsgHandler_t *handler = nullptr;
                     for (unsigned int x = 0;
-                         (x < W_ARRAY_COUNT(msgQueue->handler)) &&
+                         (x < W_UTIL_ARRAY_COUNT(msgQueue->handler)) &&
                          (handler = &(msgQueue->handler[x])) &&
                          (handler->function != nullptr) &&
                          (handler->msgType != msg.type);
@@ -3469,7 +2494,7 @@ static void msgQueueLoop(wMsgQueueType_t queueType, int fd, void *context)
         W_LOG_DEBUG("%s: message loop has ended", msgQueue->name);
     } else {
         W_LOG_ERROR("message queue type out of range (%d, limit %d)",
-                    queueType, W_ARRAY_COUNT(gMsgQueue));
+                    queueType, W_UTIL_ARRAY_COUNT(gMsgQueue));
     }
 }
 
@@ -3480,7 +2505,7 @@ static int msgQueueThreadStart(wMsgQueueType_t queueType,
 {
     int errorCode = -EINVAL;
 
-    if (thread && (queueType < W_ARRAY_COUNT(gMsgQueue))) {
+    if (thread && (queueType < W_UTIL_ARRAY_COUNT(gMsgQueue))) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         // This will go bang if the thread could not be created
         *thread = std::thread(msgQueueLoop, queueType, fd, context);
@@ -3509,7 +2534,7 @@ static unsigned int msgQueuePreviousSizeGet(wMsgQueueType_t queueType)
 {
     unsigned int previousSize = 0;
 
-    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+    if (queueType < W_UTIL_ARRAY_COUNT(gMsgQueue)) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         previousSize = msgQueue->previousSize;
     }
@@ -3522,7 +2547,7 @@ static unsigned int msgQueuePreviousSizeGet(wMsgQueueType_t queueType)
 static void msgQueuePreviousSizeSet(wMsgQueueType_t queueType,
                                     unsigned int previousSize)
 {
-    if (queueType < W_ARRAY_COUNT(gMsgQueue)) {
+    if (queueType < W_UTIL_ARRAY_COUNT(gMsgQueue)) {
         wMsgQueue_t *msgQueue = &(gMsgQueue[queueType]);
         msgQueue->previousSize = previousSize;
     }
@@ -3614,7 +2639,7 @@ static void requestCompleted(libcamera::Request *request)
 // marked as uncalibrated since it may move freely when disabled.
 static int motorEnable(wMotor_t *motor, bool enableNotDisable = true)
 {
-    int errorCode = gpioSet(motor->pinDisable, !enableNotDisable);
+    int errorCode = wGpioSet(motor->pinDisable, !enableNotDisable);
 
     if ((errorCode == 0) && !enableNotDisable) {
         // If disabling the motor, it is no longer calibrated
@@ -3630,7 +2655,7 @@ static int motorsEnable(bool enableNotDisable = true)
 {
     int errorCode = 0;
 
-    for (unsigned int x = 0; x < W_ARRAY_COUNT(gMotor); x++) {
+    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gMotor); x++) {
         wMotor_t *motor = &(gMotor[x]);
         int y = motorEnable(motor, enableNotDisable);
         if (y < 0) {
@@ -3658,9 +2683,9 @@ static int motorStep(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
         // Check for limits
         errorCode = 0;
         if (step > 0) {
-            errorCode = gpioGet(motor->pinMax);
+            errorCode = wGpioGet(motor->pinMax);
         } else if (step < 0) {
-            errorCode = gpioGet(motor->pinMin);
+            errorCode = wGpioGet(motor->pinMin);
         }
 
         if (errorCode == 1) {
@@ -3675,15 +2700,15 @@ static int motorStep(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
             if (motor->senseDirection < 0) {
                 levelDirection = !levelDirection;
             }
-            errorCode = gpioSet(motor->pinDirection, levelDirection);
+            errorCode = wGpioSet(motor->pinDirection, levelDirection);
             if (errorCode == 0) {
                 // Wait a moment for the direction pin to settle
                 std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_DIRECTION_WAIT_MS));
                 // Send out a zero to one transition and wait
-                errorCode = gpioSet(motor->pinStep, 0);
+                errorCode = wGpioSet(motor->pinStep, 0);
                 if (errorCode == 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
-                    errorCode = gpioSet(motor->pinStep, 1);
+                    errorCode = wGpioSet(motor->pinStep, 1);
                     if (errorCode == 0) {
                         // Make sure we sit at a one for long enough
                         std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_STEP_WAIT_MS));
@@ -3927,13 +2952,13 @@ static int hwInit()
         W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
         // Now calibrate movement
         errorCode = motorsEnable();
-        for (unsigned int x = 0; (x < W_ARRAY_COUNT(gMotor)) &&
+        for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
                                  (errorCode == 0); x++) {
             errorCode = motorCalibrate(&(gMotor[x]));
         }
         if (errorCode == 0) {
             W_LOG_INFO("calibration successful, moving to rest position.");
-            for (unsigned int x = 0; (x < W_ARRAY_COUNT(gMotor)) &&
+            for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
                                      (errorCode == 0); x++) {
                 errorCode = motorMoveToRest(&(gMotor[x]));
             }
@@ -3946,173 +2971,6 @@ static int hwInit()
     }
 
     return errorCode;
-}
-
-/* ----------------------------------------------------------------
- * STATIC FUNCTIONS: COMMAND LINE STUFF
- * -------------------------------------------------------------- */
-
-// Catch a termination signal.
-static void terminateSignalHandler(int signal)
-{
-    gTerminated = 1;
-}
-
-// Given a C string that is assumed to be a path, return the directory
-// portion of that as a C++ string.
-static std::string getDirectoryPath(const char *path, bool absolute=false)
-{
-    std::string directoryPath;
-
-    if (path) {
-        directoryPath = std::string(path);
-        if (absolute && !(directoryPath.find_first_of(W_DIR_SEPARATOR) == 0)) {
-            // If we haven't already got an absolute path, make it absolute
-            char *currentDirName = get_current_dir_name();
-            if (currentDirName) {
-                directoryPath = std::string(currentDirName) + W_DIR_SEPARATOR + directoryPath;
-                free(currentDirName);
-            } else {
-                W_LOG_ERROR("unable to get the current directory name");
-            }
-        }
-        // Remove any slash off the end to avoid double-slashing when
-        // we concatenate this with something else
-        unsigned int length = directoryPath.length();
-        if ((length > 0) && (directoryPath.find_last_of(W_DIR_SEPARATOR) == length)) {
-            directoryPath = directoryPath.substr(0, length - 1);
-        }
-    }
-
-    return directoryPath;
-}
-
-// Given a C string that is assumed to be a path, return the file name
-// portion of that string.
-static std::string getFileName(const char *path)
-{
-    std::string fileName;
-
-    if (path) {
-        fileName = std::string(path);
-        // Skip past any directory separators
-        unsigned int pos = fileName.find_last_of(W_DIR_SEPARATOR);
-        unsigned int length = fileName.length();
-        if (pos != std::string::npos) {
-            if (pos < length) {
-                fileName = fileName.substr(pos + 1, length);
-            } else {
-                // Directory separator at the end, therefore no file name
-                fileName.clear();
-            }
-        }
-    }
-
-    return fileName;
-}
-
-// Process the command-line parameters.  If this function returns
-// an error and parameters is not nullptr, it will populate
-// parameters with the defaults.
-static int commandLineParse(int argc, char *argv[],
-                            wCommandLineParameters_t *parameters)
-{
-    int errorCode = -EINVAL;
-    int x = 0;
-
-    if (parameters) {
-        parameters->programName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
-        parameters->outputDirectory = std::string(W_HLS_OUTPUT_DIRECTORY_DEFAULT);
-        parameters->outputFileName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
-        if ((argc > 0) && (argv)) {
-            // Find the program name in the first argument
-            parameters->programName = getFileName(argv[x]);
-            x++;
-            // Look for all the command line parameters
-            errorCode = 0;
-            while (x < argc) {
-                errorCode = -EINVAL;
-                // Test for output directory option
-                if (std::string(argv[x]) == "-d") {
-                    x++;
-                    if (x < argc) {
-                        errorCode = 0;
-                        std::string str = getDirectoryPath(argv[x]);
-                        if (!str.empty()) {
-                            parameters->outputDirectory = str;
-                        }
-                    }
-                // Test for output file name option
-                } else if (std::string(argv[x]) == "-f") {
-                    x++;
-                    if (x < argc) {
-                        errorCode = 0;
-                        std::string str = std::string(argv[x]);
-                        if (!str.empty()) {
-                            parameters->outputFileName = str;
-                        }
-                    }
-                }
-                x++;
-            }
-        }
-    }
-
-    return errorCode;
-}
-
-// Print command-line choices.
-static void commandLinePrintChoices(wCommandLineParameters_t *parameters)
-{
-    std::string programName = W_HLS_FILE_NAME_ROOT_DEFAULT;
-
-    if (parameters && !parameters->programName.empty()) {
-        programName = parameters->programName;
-    }
-    std::cout << programName;
-    if (parameters) {
-        std::cout << ", putting output files ("
-                  << W_HLS_PLAYLIST_FILE_EXTENSION << " and "
-                  << W_HLS_SEGMENT_FILE_EXTENSION << ") in ";
-        if (parameters->outputDirectory != std::string(W_DIR_THIS)) {
-            std::cout << parameters->outputDirectory;
-        } else {
-            std::cout << "this directory";
-        }
-        std::cout << ", output files will be named "
-                  << parameters->outputFileName;
-    }
-    std::cout << "." << std::endl;
-}
-
-// Print command-line help.
-static void commandLinePrintHelp(wCommandLineParameters_t *defaults)
-{
-    std::string programName = W_HLS_FILE_NAME_ROOT_DEFAULT;
-
-    if (defaults && !defaults->programName.empty()) {
-        programName = defaults->programName;
-    }
-    std::cout << programName << ", options are:" << std::endl;
-
-    std::cout << "  -d <directory path> set directory for streaming output"
-              << " (default ";
-    if (defaults && (defaults->outputDirectory != std::string(W_DIR_THIS))) {
-        std::cout << defaults->outputDirectory;
-    } else {
-        std::cout << "this directory";
-    }
-    std::cout << ")." << std::endl;
-
-    std::cout << "  -f <file name> set file name for streaming output ("
-              <<  W_HLS_PLAYLIST_FILE_EXTENSION << " and "
-              <<  W_HLS_SEGMENT_FILE_EXTENSION << " files)";
-    if (defaults && !defaults->outputFileName.empty()) {
-        std::cout << " (default " << defaults->outputFileName << ")";
-    }
-    std::cout << "." << std::endl;
-    std::cout << "Note that this program needs to be able to change scheduling";
-    std::cout << " priority which requires elevated privileges." << std::endl;
 }
 
 /* ----------------------------------------------------------------
@@ -4166,13 +3024,13 @@ static int testLeds()
     breathe.rateMilliHertz = 1000;
     breathe.rampMs = 1000;
     for (breathe.levelAveragePercent = 30;
-         (breathe.levelAveragePercent < 70) && !gTerminated;
+         (breathe.levelAveragePercent < 70) && wUtilKeepGoing();
          breathe.levelAveragePercent += 10) {
         msgQueuePush(W_MSG_QUEUE_LED,
                      W_MSG_TYPE_LED_MODE_BREATHE, (wMsgBody_t *) &breathe);
         sleep(1);
     }
-    if (!gTerminated) {
+    if (wUtilKeepGoing()) {
         W_LOG_INFO("%sboth LEDs ramped to mid-level and left to breathe"
                    " at maximum amplitude for 5 seconds.",
                    prefix);
@@ -4190,14 +3048,14 @@ static int testLeds()
         breathe.levelAmplitudePercent = 15;
         breathe.rateMilliHertz = 500;
         for (breathe.levelAveragePercent = 70;
-             (breathe.levelAveragePercent > 15) && !gTerminated;
+             (breathe.levelAveragePercent > 15) && wUtilKeepGoing();
              breathe.levelAveragePercent -= 10) {
             msgQueuePush(W_MSG_QUEUE_LED,
                          W_MSG_TYPE_LED_MODE_BREATHE, (wMsgBody_t *) &breathe);
             sleep(1);
         }
     }
-    if (!gTerminated) {
+    if (wUtilKeepGoing()) {
         breathe.levelAmplitudePercent = 0;
         breathe.levelAveragePercent = 0;
         msgQueuePush(W_MSG_QUEUE_LED,
@@ -4210,7 +3068,7 @@ static int testLeds()
         breathe.levelAmplitudePercent = 30;
         breathe.rateMilliHertz = 2000;
         for (breathe.levelAveragePercent = 70;
-             (breathe.levelAveragePercent > 0) && !gTerminated;
+             (breathe.levelAveragePercent > 0) && wUtilKeepGoing();
              breathe.levelAveragePercent -= 10) {
             msgQueuePush(W_MSG_QUEUE_LED,
                          W_MSG_TYPE_LED_MODE_BREATHE, (wMsgBody_t *) &breathe);
@@ -4225,7 +3083,7 @@ static int testLeds()
         sleep(2);
     }
 
-    if (!gTerminated) {
+    if (wUtilKeepGoing()) {
         W_LOG_INFO("%stesting constant mode.", prefix);
         W_LOG_INFO("%sboth LEDs ramped up over one second, left ahead of right.",
                    prefix);
@@ -4233,7 +3091,7 @@ static int testLeds()
         constant.apply.offsetLeftToRightMs = 1000;
         constant.rampMs = 1000;
         for (constant.levelPercent = 10;
-             (constant.levelPercent < 100) && !gTerminated;
+             (constant.levelPercent < 100) && wUtilKeepGoing();
              constant.levelPercent += 10) {
             msgQueuePush(W_MSG_QUEUE_LED,
                          W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
@@ -4242,14 +3100,14 @@ static int testLeds()
         constant.apply.led = W_LED_LEFT;
         W_LOG_INFO("%s%s LED ramped down.", prefix, gLedStr[constant.apply.led]);
         for (constant.levelPercent = 100;
-             (constant.levelPercent > 0) && !gTerminated;
+             (constant.levelPercent > 0) && wUtilKeepGoing();
              constant.levelPercent -= 10) {
             msgQueuePush(W_MSG_QUEUE_LED,
                          W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
             sleep(1);
         }
     }
-    if (!gTerminated) {
+    if (wUtilKeepGoing()) {
         constant.levelPercent = 0;
         msgQueuePush(W_MSG_QUEUE_LED,
                      W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
@@ -4258,7 +3116,7 @@ static int testLeds()
         constant.apply.led = W_LED_RIGHT;
         W_LOG_INFO("%s%s LED ramped down.", prefix, gLedStr[constant.apply.led]);
         for (constant.levelPercent = 100;
-             (constant.levelPercent > 0) && !gTerminated;
+             (constant.levelPercent > 0) && wUtilKeepGoing();
              constant.levelPercent -= 10) {
             msgQueuePush(W_MSG_QUEUE_LED,
                          W_MSG_TYPE_LED_MODE_CONSTANT, (wMsgBody_t *) &constant);
@@ -4286,11 +3144,7 @@ int main(int argc, char *argv[])
     wCommandLineParameters_t commandLineParameters;
     wVideoEncodeContext_t videoEncode = {};
     AVStream *avStream = nullptr;
-    int timerFd = -1;
-    int pwmFd = -1;
     int msgFd = -1;
-    std::thread gpioPwmThread;
-    std::thread gpioReadThread;
     wLedContext_t ledContext = {};
     std::thread ledControlThread;
     std::thread controlThread;
@@ -4298,38 +3152,16 @@ int main(int argc, char *argv[])
     std::thread videoEncodeThread;
 
     // Process the command-line parameters
-    if (commandLineParse(argc, argv, &commandLineParameters) == 0) {
-        commandLinePrintChoices(&commandLineParameters);
+    if (wCommandLineParse(argc, argv, &commandLineParameters) == 0) {
+        wCommandLinePrintChoices(&commandLineParameters);
         // Capture CTRL-C so that we can exit in an organised fashion
-        signal(SIGINT, terminateSignalHandler);
+        wUtilTerminationCaptureSet();
 
-        // Initialise GPIOs, a thread driven by a timer to
-        // monitor them, and a PWM timer to drive PWM
-        // operation
-        errorCode = gpioInit(&pwmFd);
-        if (errorCode >= 0) {
-            timerFd = errorCode;
-            // Start the PWM thread
-            gpioPwmThread = std::thread(gpioPwmLoop, pwmFd);
-            pthread_setname_np(gpioPwmThread.native_handle(), "gpioPwmLoop");
-            // Start the read thread
-            gpioReadThread = std::thread(gpioReadLoop, timerFd);
-            pthread_setname_np(gpioReadThread.native_handle(), "gpioReadLoop");
-            // Set the thread priority for GPIO reads
-            // to maximum as we never want to miss one
-            struct sched_param scheduling;
-            scheduling.sched_priority = sched_get_priority_max(SCHED_FIFO);
-            errorCode = pthread_setschedparam(gpioReadThread.native_handle(),
-                                              SCHED_FIFO, &scheduling);
-            if (errorCode == 0) {
-                // We should now be able to initialise the HW
-                errorCode = hwInit();
-            } else {
-                W_LOG_ERROR("unable to set thread priority for GPIO reads"
-                            " (error %d), maybe need sudo?", errorCode);
-            }
-        } else {
-            W_LOG_ERROR("error %d initialising GPIOs!", errorCode);
+        // Initialise GPIOs
+        errorCode = wGpioInit();
+        if (errorCode == 0) {
+            // We should now be able to initialise the HW
+            errorCode = hwInit();
         }
 
         if (errorCode == 0) {
@@ -4440,7 +3272,7 @@ int main(int argc, char *argv[])
                         avformat_alloc_output_context2(&(videoEncode.formatContext), avOutputFormat,
                                                        nullptr,
                                                        (commandLineParameters.outputDirectory + 
-                                                        std::string(W_DIR_SEPARATOR) +
+                                                        std::string(W_UTIL_DIR_SEPARATOR) +
                                                         commandLineParameters.outputFileName +
                                                         std::string(W_HLS_PLAYLIST_FILE_EXTENSION)).c_str());
                         if (videoEncode.formatContext) {
@@ -4466,9 +3298,9 @@ int main(int argc, char *argv[])
                             // as the segment size, which is much better, since it ensures a key-frame at the
                             // start of every segment.
                             if ((av_dict_set(&hlsOptions, "hls_base_url",
-                                             std::string(W_HLS_BASE_URL W_DIR_SEPARATOR +
+                                             std::string(W_HLS_BASE_URL W_UTIL_DIR_SEPARATOR +
                                                          commandLineParameters.outputDirectory +
-                                                         W_DIR_SEPARATOR).c_str(), 0) == 0) &&
+                                                         W_UTIL_DIR_SEPARATOR).c_str(), 0) == 0) &&
                                 (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
                                 (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
                                 (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
@@ -4591,16 +3423,16 @@ int main(int argc, char *argv[])
                                 // Remove any old files for a clean start
                                 system(std::string("rm " +
                                                    commandLineParameters.outputDirectory +
-                                                   W_DIR_SEPARATOR +
+                                                   W_UTIL_DIR_SEPARATOR +
                                                    commandLineParameters.outputFileName +
                                                    W_HLS_PLAYLIST_FILE_EXTENSION +
-                                                   W_SYSTEM_SILENT).c_str() );
+                                                   W_UTIL_SYSTEM_SILENT).c_str() );
                                 system(std::string("rm " +
                                                    commandLineParameters.outputDirectory +
-                                                   W_DIR_SEPARATOR +
+                                                   W_UTIL_DIR_SEPARATOR +
                                                    commandLineParameters.outputFileName +
                                                    "*" W_HLS_SEGMENT_FILE_EXTENSION +
-                                                   W_SYSTEM_SILENT).c_str());
+                                                   W_UTIL_SYSTEM_SILENT).c_str());
 
                                 // Make sure the output directory exists
                                 system(std::string("mkdir -p " +
@@ -4613,7 +3445,7 @@ int main(int argc, char *argv[])
                                     gCamera->queueRequest(request.get());
                                 }
 
-                                while (!gTerminated) {
+                                while (wUtilKeepGoing()) {
                                     testLeds();
                                     //sleep(1);
                                 }
@@ -4640,7 +3472,7 @@ int main(int argc, char *argv[])
             W_LOG_DEBUG("tidying up.");
             cm->stop();
             // Make sure all threads know we have terminated
-            gTerminated = true;
+            wUtilTerminationSet();
             // Stop the image processing thread and empty its queue
             msgQueueThreadStop(W_MSG_QUEUE_IMAGE_PROCESSING, nullptr,
                                &imageProcessingThread);
@@ -4677,44 +3509,22 @@ int main(int argc, char *argv[])
             W_LOG_INFO("average frame gap (at end of video output) over the last"
                        " %d frames %lld ms (a rate of %lld frames/second), largest"
                        " gap %lld ms.",
-                       W_ARRAY_COUNT(gVideoStreamMonitorTiming.gap),
+                       W_UTIL_ARRAY_COUNT(gVideoStreamMonitorTiming.gap),
                        std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.average).count(),
                        1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.average).count(),
                        std::chrono::duration_cast<std::chrono::milliseconds>(gVideoStreamMonitorTiming.largest).count());
-            uint64_t gpioReadsPerInput = gGpioInputReadCount / W_ARRAY_COUNT(gGpioInputPin);
-            W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
-                       " GPIO input read thread wasn't called on schedule %lld time(s).",
-                       (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gGpioInputReadStop - gGpioInputReadStart).count() *
-                        W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
-                       gGpioInputReadSlipCount);
         } else {
             W_LOG_ERROR("HW self test failure!");
         }
 
         // Disable the stepper motors
         motorsEnable(false);
-        // Stop the GPIO tick timer
-        // Make sure all threads know we have terminated
-        gTerminated = true;
-        if (timerFd >= 0) {
-            if (gpioReadThread.joinable()) {
-               gpioReadThread.join();
-            }
-            close(timerFd);
-        }
-        // Stop the GPIO PWM timer
-        if (pwmFd >= 0) {
-            if (gpioPwmThread.joinable()) {
-               gpioPwmThread.join();
-            }
-            close(pwmFd);
-        }
         // Give back the GPIOs
-        gpioDeinit();
+        wGpioDeinit();
 
     } else {
         // Print help about the commad line, including the defaults
-        commandLinePrintHelp(&commandLineParameters);
+        wCommandLinePrintHelp(&commandLineParameters);
     }
 
     return errorCode;
