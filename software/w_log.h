@@ -28,7 +28,9 @@
 
 /** @file
  * @brief The logging API for the watchdog application; this stuff has to
- * be in header file because of the template stuff: what a mess!
+ * be in header file because of the template stuff.  This API is
+ * thread-safe, though note that there is no locking on prints and
+ * hence debug logging from different threads may run into each other.
  */
 
 /* ----------------------------------------------------------------
@@ -52,16 +54,16 @@
 #define W_DEBUG W_ANSI_COLOUR_BRIGHT_MAGENTA "DEBUG " W_ANSI_COLOUR_BRIGHT_WHITE W_LOG_TAG W_ANSI_COLOUR_RESET
 
 // Logging macros: one-call.
-#define W_LOG_INFO(...) wLog(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
-#define W_LOG_WARN(...) wLog(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
-#define W_LOG_ERROR(...) wLog(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
-#define W_LOG_DEBUG(...) wLog(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
+#define W_LOG_INFO(...) wLog(W_LOG_TYPE_INFO, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_WARN(...) wLog(W_LOG_TYPE_WARN, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_ERROR(...) wLog(W_LOG_TYPE_ERROR, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_DEBUG(...) wLog(W_LOG_TYPE_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 
 // Logging macros: multiple calls.
-#define W_LOG_INFO_START(...) wLogStart(W_LOG_TYPE_INFO, __LINE__, __VA_ARGS__)
-#define W_LOG_WARN_START(...) wLogStart(W_LOG_TYPE_WARN, __LINE__, __VA_ARGS__)
-#define W_LOG_ERROR_START(...) wLogStart(W_LOG_TYPE_ERROR, __LINE__, __VA_ARGS__)
-#define W_LOG_DEBUG_START(...) wLogStart(W_LOG_TYPE_DEBUG, __LINE__, __VA_ARGS__)
+#define W_LOG_INFO_START(...) wLogStart(W_LOG_TYPE_INFO, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_WARN_START(...) wLogStart(W_LOG_TYPE_WARN, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_ERROR_START(...) wLogStart(W_LOG_TYPE_ERROR, __FILE__, __LINE__, __VA_ARGS__)
+#define W_LOG_DEBUG_START(...) wLogStart(W_LOG_TYPE_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 #define W_LOG_INFO_MORE(...) wLogMore(W_LOG_TYPE_INFO, __VA_ARGS__)
 #define W_LOG_WARN_MORE(...) wLogMore(W_LOG_TYPE_WARN, __VA_ARGS__)
 #define W_LOG_ERROR_MORE(...) wLogMore(W_LOG_TYPE_ERROR, __VA_ARGS__)
@@ -103,7 +105,7 @@ static FILE *gLogDestination[] = {stdout, stdout, stderr, stdout};
 
 // Print the start of a logging message.
 template<typename ... Args>
-void wLogStart(wLogType_t type, unsigned int line, Args ... args)
+void wLogStart(wLogType_t type, const char *file, unsigned int line, Args ... args)
 {
     FILE *destination = gLogDestination[type];
     const char *prefix = gLogPrefixStr[type];
@@ -114,7 +116,7 @@ void wLogStart(wLogType_t type, unsigned int line, Args ... args)
     strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", gmtime(&(now.tv_sec)));
 
     fprintf(destination, "%s.%06ldZ ", buffer, now.tv_usec);
-    fprintf(destination, "%s[%4d]: ", prefix, line);
+    fprintf(destination, "%s:%s[%4d]: ", prefix, file, line);
     fprintf(destination, args...);
 }
 
@@ -140,9 +142,9 @@ void wLogEnd(wLogType_t type)
 
 // Print a single-line logging message.
 template<typename ... Args>
-void wLog(wLogType_t type, unsigned int line, Args ... args)
+void wLog(wLogType_t type, const char *file, unsigned int line, Args ... args)
 {
-    wLogStart(type, line, args...);
+    wLogStart(type, file, line, args...);
     wLogEnd(type);
 }
 

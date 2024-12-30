@@ -21,7 +21,8 @@
 #include <string>
 
 /** @file
- * @brief The command-line API for the watchdog application.
+ * @brief The command-line API for the watchdog application;
+ * this API is thread-safe.
  */
 
 /* ----------------------------------------------------------------

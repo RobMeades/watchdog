@@ -664,7 +664,7 @@ int wGpioSet(unsigned int pin, unsigned int level)
     return errorCode;
 }
 
-// Set the state of a GPIO pin.
+// Set the state of a GPIO PWM pin.
 int wGpioPwmSet(unsigned int pin, unsigned int levelPercent)
 {
     int errorCode = -EINVAL;

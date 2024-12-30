@@ -18,7 +18,9 @@
 #define _W_MOTOR_H_
 
 /** @file
- * @brief The motor API for the watchdog application.
+ * @brief The motor API for the watchdog application; this API is
+ * thread-safe aside from wMotorInit()/wMotorDeinit(), which should
+ * not be called at the same time as any other API or each other..
  */
 
 /* ----------------------------------------------------------------
@@ -34,7 +36,7 @@
 #ifndef W_MOTOR_VERTICAL_MAX_STEPS
 /** A hard-coded safety limit on the range of vertical movement.
  */
-# define W_MOTOR_VERTICAL_MAX_STEPS 600
+# define W_MOTOR_VERTICAL_MAX_STEPS 650
 #endif
 
 #ifndef W_MOTOR_ROTATE_DIRECTION_SENSE

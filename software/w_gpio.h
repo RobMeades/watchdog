@@ -18,7 +18,10 @@
 #define _W_GPIO_H_
 
 /** @file
- * @brief The API to the GPIO portion of the watchdog application.
+ * @brief The API to the GPIO portion of the watchdog application;
+ * this API is thread-safe aside from wGpioInit()/wGpioDeinit(),
+ * which should not be called at the same time as any other API or
+ * each other.
  */
 
 /* ----------------------------------------------------------------
@@ -135,8 +138,9 @@
 /** The number of times an input pin must have read a consistently
  * different level to the current level for us to believe that it
  * really has changed state.  With a GPIO tick timer of 1 ms and
- * four input pins, that means that the pin must have read the same
- * level for a full 12 milliseconds before we believe it.
+ * four input pins, a value of 3 here means that the pin must have
+ * read the same level for a full 12 milliseconds before we believe
+ * it.
  */
 # define W_GPIO_DEBOUNCE_THRESHOLD 3
 #endif
@@ -203,7 +207,7 @@ int wGpioGet(unsigned int pin);
  */
 int wGpioSet(unsigned int pin, unsigned int level);
 
-/** Set the state of a GPIO pin.
+/** Set the state of a GPIO PWN pin.
  *
  * @param pin          the GPIO pin number to set the state of.
  * @param levelPercent the level to set, as a percentage.

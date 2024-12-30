@@ -21,7 +21,7 @@
 // The CPP stuff.
 #include <thread>
 
-// Watchdog bits
+// Other parts of watchdog.
 #include <w_util.h>
 #include <w_log.h>
 #include <w_gpio.h>
@@ -107,20 +107,20 @@ static int enableAll(bool enableNotDisable = true)
 // Perform a step; will not move if at a limit; being at
 // a limit does not constitute an error: supply stepTaken
 // if you want to know the outcome.
-static int step(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
+static int step(wMotor_t *motor, int steps = 1, int *stepsTaken = nullptr)
 {
     int errorCode = -EINVAL;
 
-    if (stepTaken) {
-        *stepTaken = 0;
+    if (stepsTaken) {
+        *stepsTaken = 0;
     }
 
     if (motor) {
         // Check for limits
         errorCode = 0;
-        if (step > 0) {
+        if (steps > 0) {
             errorCode = wGpioGet(motor->pinMax);
-        } else if (step < 0) {
+        } else if (steps < 0) {
             errorCode = wGpioGet(motor->pinMin);
         }
 
@@ -130,8 +130,8 @@ static int step(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
 
             // Set the correct direction
             unsigned int levelDirection = 0;
-            if (step >= 0) {
-                levelDirection = step;
+            if (steps >= 0) {
+                levelDirection = steps;
             }
             if (motor->senseDirection < 0) {
                 levelDirection = !levelDirection;
@@ -151,12 +151,12 @@ static int step(wMotor_t *motor, int step = 1, int *stepTaken = nullptr)
                     }
                 }
             }
-            if ((errorCode == 0) && (stepTaken)) {
+            if ((errorCode == 0) && (stepsTaken)) {
                 // We have taken a step
-                *stepTaken = step;
+                *stepsTaken = steps;
             }
-        } else if ((errorCode == 0) && (step != 0)) {
-            W_LOG_DEBUG("%s: hit %s limit.", motor->name, step > 0 ? "max" : "min");
+        } else if ((errorCode == 0) && (steps != 0)) {
+            W_LOG_DEBUG("%s: hit %s limit.", motor->name, steps > 0 ? "max" : "min");
         }
 
         if (errorCode < 0) {
@@ -216,7 +216,7 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
                bool evenIfUnCalibrated)
 {
     int errorCode = -EINVAL;
-    int step = 1;
+    int stepUnit = 1;
     int stepsCompleted = 0;
 
     if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
@@ -247,7 +247,7 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
                         steps = -motor->safetyLimit;
                     }
                 }
-                step = -1;
+                stepUnit = -1;
             }
 
             if (motor->calibrated) {
@@ -259,10 +259,10 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
 
             // Actually move
             int stepTaken = 1;
-            for (int x = 0; (x < steps * step) && (stepTaken != 0) &&
+            for (int x = 0; (x < steps * stepUnit) && (stepTaken != 0) &&
                             (errorCode == 0); x++) {
                 stepTaken = 0;
-                errorCode = step(motor, step, &stepTaken);
+                errorCode = step(motor, stepUnit, &stepTaken);
                 if (errorCode == 0) {
                     stepsCompleted += stepTaken;
                 }
@@ -270,7 +270,7 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
 
             if (motor->calibrated) {
                 motor->now += stepsCompleted;
-                W_LOG_INFO("%d: now at position %d.", motor->name, motor->now);
+                W_LOG_INFO("%s: now at position %d.", motor->name, motor->now);
             }
 
             if (stepsCompleted < steps) {

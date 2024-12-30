@@ -21,7 +21,8 @@
 #include <chrono>
 
 /** @file
- * @brief the utilities API for the watchdog application.
+ * @brief The utilities API for the watchdog application; this API is
+ * thread-safe.
  */
 
 /* ----------------------------------------------------------------
