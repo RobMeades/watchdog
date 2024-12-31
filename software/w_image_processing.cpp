@@ -226,7 +226,7 @@ typedef struct {
     std::shared_ptr<cv::BackgroundSubtractor> backgroundSubtractor;
     cv::Mat maskForeground;
     wPointProtected_t focusPointView;
-    wFrameFunction_t *outputCallback;
+    wCommonFrameFunction_t *outputCallback;
     wImageProcessingFocusFunction_t *focusCallback;
 } wImageProcessingContext_t;
 
@@ -649,11 +649,10 @@ static void msgHandlerImageProcessingImageBuffer(void *msgBody,
                                                                  msg->width,
                                                                  msg->height,
                                                                  msg->stride);
-        if ((wCameraFrameCountGet() % W_FRAME_RATE_HERTZ == 0) &&
+        if ((wCameraFrameCountGet() % W_COMMON_FRAME_RATE_HERTZ == 0) &&
             (queueLength != wMsgQueuePreviousSizeGet(gMsgQueueId))) {
             // Print the size of the backlog once a second if it has changed
-            W_LOG_DEBUG("backlog %d frame(s) on video streaming input queue",
-                        queueLength);
+            W_LOG_DEBUG("video backlog %d frame(s).", queueLength);
             wMsgQueuePreviousSizeSet(gMsgQueueId, queueLength);
         }
     } else {
@@ -705,10 +704,10 @@ static int imageProcessingCallback(uint8_t *data, unsigned int length,
         queueLengthOrErrorCode = wMsgPush(gMsgQueueId,
                                           W_IMAGE_PROCESSING_MSG_TYPE_IMAGE_BUFFER,
                                           &msg, sizeof(msg));
-        if ((wCameraFrameCountGet() % W_FRAME_RATE_HERTZ == 0) &&
+        if ((wCameraFrameCountGet() % W_COMMON_FRAME_RATE_HERTZ == 0) &&
             (queueLengthOrErrorCode != wMsgQueuePreviousSizeGet(gMsgQueueId))) {
             // Print the size of the backlog once a second if it has changed
-            W_LOG_DEBUG("backlog %d frame(s) on image processing input queue",
+            W_LOG_DEBUG("image processing backlog %d frame(s).",
                         queueLengthOrErrorCode);
             wMsgQueuePreviousSizeSet(gMsgQueueId, queueLengthOrErrorCode);
         }
@@ -733,7 +732,7 @@ int wImageProcessingInit()
         gContext->backgroundSubtractor = cv::createBackgroundSubtractorMOG2();
         if (gContext->backgroundSubtractor) {
             // Create our message queue
-            errorCode = wMsgQueueStart(gContext, W_IMAGE_PROCESSING_MSG_QUEUE_MAX_SIZE, "image proc.");
+            errorCode = wMsgQueueStart(gContext, W_IMAGE_PROCESSING_MSG_QUEUE_MAX_SIZE, "image process");
             if (errorCode >= 0) {
                 gMsgQueueId = errorCode;
                 errorCode = 0;
@@ -769,7 +768,7 @@ int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback)
 }
 
 // Start image processing.
-int wImageProcessingStart(wFrameFunction_t *outputCallback)
+int wImageProcessingStart(wCommonFrameFunction_t *outputCallback)
 {
     int errorCode = -EBADF;
 

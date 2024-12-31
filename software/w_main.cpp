@@ -152,7 +152,7 @@ int main(int argc, char *argv[])
                 errorCode = wLedTest();
             }
         } else {
-            W_LOG_ERROR("Initialisation failure!");
+            W_LOG_ERROR("initialisation failure!");
         }
 
         wVideoEncodeDeinit();
@@ -163,12 +163,17 @@ int main(int argc, char *argv[])
         wMotorDeinit();
         wGpioDeinit();
 
+        W_LOG_INFO_START("exiting");
+        if (errorCode != 0) {
+            W_LOG_INFO(" with error code %d", errorCode);
+        }
+        W_LOG_INFO_MORE(".");
+        W_LOG_INFO_END;
+
     } else {
         // Print help about the commad line, including the defaults
         wCommandLinePrintHelp(&commandLineParameters);
     }
-
-    W_LOG_INFO("Exiting with error code %d.", errorCode);
 
     return errorCode;
 }

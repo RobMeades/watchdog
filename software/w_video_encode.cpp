@@ -53,10 +53,10 @@ extern "C" {
 
 // The stream time-base as an AVRational (integer pair, numerator
 // then denominator) that FFmpeg understands.
-#define W_VIDEO_ENCODE_TIME_BASE_AVRATIONAL {1, W_FRAME_RATE_HERTZ}
+#define W_VIDEO_ENCODE_TIME_BASE_AVRATIONAL {1, W_COMMON_FRAME_RATE_HERTZ}
 
 // The video stream frame rate in units of the video stream time-base.
-#define W_VIDEO_ENCODE_FRAME_RATE_AVRATIONAL {W_FRAME_RATE_HERTZ, 1}
+#define W_VIDEO_ENCODE_FRAME_RATE_AVRATIONAL {W_COMMON_FRAME_RATE_HERTZ, 1}
 
 /* ----------------------------------------------------------------
  * TYPES
@@ -411,14 +411,14 @@ int wVideoEncodeInit(std::string outputDirectory, std::string outputFileName)
                         if (codecContext) {
                             gContext->codecContext = codecContext;
                             W_LOG_DEBUG("video codec capabilities 0x%08x.", videoOutputCodec->capabilities);
-                            codecContext->width = W_WIDTH_PIXELS;
-                            codecContext->height = W_HEIGHT_PIXELS;
+                            codecContext->width = W_COMMON_WIDTH_PIXELS;
+                            codecContext->height = W_COMMON_HEIGHT_PIXELS;
                             codecContext->time_base = W_VIDEO_ENCODE_TIME_BASE_AVRATIONAL;
                             codecContext->framerate = W_VIDEO_ENCODE_FRAME_RATE_AVRATIONAL;
                             // Make sure we get a key frame every segment, otherwise if the
                             // HLS client has to seek backwards from the front and can't find
                             // a key frame it may fail to play the stream
-                            codecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_FRAME_RATE_HERTZ;
+                            codecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_COMMON_FRAME_RATE_HERTZ;
                             // From the discussion here:
                             // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
                             // ... the intended effect of setting keyint_min to twice

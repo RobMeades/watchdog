@@ -27,22 +27,22 @@
  * COMPILE-TIME MACROS
  * -------------------------------------------------------------- */
 
-#ifndef W_WIDTH_PIXELS
+#ifndef W_COMMON_WIDTH_PIXELS
 /** Horizontal size of video stream in pixels.
  */
-# define W_WIDTH_PIXELS 950
+# define W_COMMON_WIDTH_PIXELS 950
 #endif
 
-#ifndef W_HEIGHT_PIXELS
+#ifndef W_COMMON_HEIGHT_PIXELS
 /** Vertical size of the video stream in pixels.
  */
-# define W_HEIGHT_PIXELS 540
+# define W_COMMON_HEIGHT_PIXELS 540
 #endif
 
-#ifndef W_FRAME_RATE_HERTZ
+#ifndef W_COMMON_FRAME_RATE_HERTZ
 /** Frames per second.
  */
-# define W_FRAME_RATE_HERTZ 15
+# define W_COMMON_FRAME_RATE_HERTZ 15
 #endif
 
 /* ----------------------------------------------------------------
@@ -64,12 +64,12 @@
  * @return             the number of frames now in the queue for
  *                     processing (i.e. the backlog).
  */
-typedef int (wFrameFunction_t)(uint8_t *data,
-                               unsigned int length,
-                               unsigned int sequence,
-                               unsigned int width,
-                               unsigned int height,
-                               unsigned int stride);
+typedef int (wCommonFrameFunction_t)(uint8_t *data,
+                                     unsigned int length,
+                                     unsigned int sequence,
+                                     unsigned int width,
+                                     unsigned int height,
+                                     unsigned int stride);
 
 #endif // _W_COMMON_TYPES_H_
 

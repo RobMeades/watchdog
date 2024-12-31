@@ -72,7 +72,7 @@ typedef struct {
     libcamera::FrameBufferAllocator *allocator;
     std::vector<std::unique_ptr<libcamera::Request>> requests;
     libcamera::ControlList cameraControls;
-    wFrameFunction_t *outputCallback;
+    wCommonFrameFunction_t *outputCallback;
     uint64_t frameCount;
 } wCameraContext_t;
 
@@ -422,7 +422,7 @@ int wCameraInit()
 }
 
 // Start the camera.
-int wCameraStart(wFrameFunction_t *outputCallback)
+int wCameraStart(wCommonFrameFunction_t *outputCallback)
 {
     int errorCode = -EBADF;
 

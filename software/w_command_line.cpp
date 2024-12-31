@@ -206,8 +206,8 @@ void wCommandLinePrintHelp(wCommandLineParameters_t *defaults)
         std::cout << " (default " << defaults->outputFileName << ")";
     }
     std::cout << "." << std::endl;
-    std::cout << "Note that this program needs to be able to change scheduling";
-    std::cout << " priority which requires elevated privileges." << std::endl;
+    std::cout << "Note that this program needs to be able to access HW and";
+    std::cout << " change scheduling priority, which requires elevated privileges." << std::endl;
 }
 
 // End of file

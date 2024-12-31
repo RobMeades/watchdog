@@ -17,8 +17,8 @@
 #ifndef _W_CAMERA_H_
 #define _W_CAMERA_H_
 
-// This API is dependent on w_common.h (for wFrameFunction_t,
-// W_FRAME_RATE_HERTZ, W_WIDTH_PIXELS and W_HEIGHT_PIXELS).
+// This API is dependent on w_common.h (for wCommonFrameFunction_t,
+// W_COMMON_FRAME_RATE_HERTZ, W_COMMON_WIDTH_PIXELS and W_COMMON_HEIGHT_PIXELS).
 #include <w_common.h>
 
 /** @file
@@ -40,13 +40,13 @@
 #ifndef W_CAMERA_WIDTH_PIXELS
 /** Horizontal size of video stream in pixels.
  */
-# define W_CAMERA_WIDTH_PIXELS W_WIDTH_PIXELS
+# define W_CAMERA_WIDTH_PIXELS W_COMMON_WIDTH_PIXELS
 #endif
 
 #ifndef W_CAMERA_HEIGHT_PIXELS
 /** Vertical size of the video stream in pixels.
  */
-# define W_CAMERA_HEIGHT_PIXELS W_HEIGHT_PIXELS
+# define W_CAMERA_HEIGHT_PIXELS W_COMMON_HEIGHT_PIXELS
 #endif
 
 /** The area of the video stream.
@@ -57,7 +57,7 @@
 #ifndef W_CAMERA_FRAME_RATE_HERTZ
 /** Frames per second.
  */
-# define W_CAMERA_FRAME_RATE_HERTZ W_FRAME_RATE_HERTZ
+# define W_CAMERA_FRAME_RATE_HERTZ W_COMMON_FRAME_RATE_HERTZ
 #endif
 
 /* ----------------------------------------------------------------
@@ -84,7 +84,7 @@ int wCameraInit();
  *                        quickly as possible.
  * @return                zero on success else negative error code.
  */
-int wCameraStart(wFrameFunction_t *outputCallback);
+int wCameraStart(wCommonFrameFunction_t *outputCallback);
 
 /** Get the current frame count of the camera.
  *

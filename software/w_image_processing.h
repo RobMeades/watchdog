@@ -17,7 +17,7 @@
 #ifndef _W_IMAGE_PROCESSING_H_
 #define _W_IMAGE_PROCESSING_H_
 
-// This API is dependent on cv::Point and w_common.h (for wFrameFunction_t).
+// This API is dependent on cv::Point and w_common.h (for wCommonFrameFunction_t).
 #include <opencv2/core/types.hpp>
 #include <w_common.h>
 
@@ -88,7 +88,7 @@ int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback)
  *                        as possible.
  * @return                zero on success else negative error code.
  */
-int wImageProcessingStart(wFrameFunction_t *outputCallback);
+int wImageProcessingStart(wCommonFrameFunction_t *outputCallback);
 
 /** Stop image processing; you don't have to call this function
  * on exit, wImageProcessingDeinit() will tidy up appropriately.
