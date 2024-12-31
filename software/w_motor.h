@@ -135,12 +135,6 @@ typedef struct {
  */
 int wMotorInit();
 
-/** Deinitialise the motors: this will disable the motors and no
- * movement will be possible until motorInit() is called once
- * more.
- */
-void wMotorDeinit();
-
 /** Try to move the given number of steps, returning the number
  * actually stepped in stepsTaken; being short on steps does not
  * constitute an error.  Will only move if calibrated unless
@@ -177,6 +171,12 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken = nullptr);
  * @return     zero on success else negative error code.
  */
 int wMotorCalibrate(wMotorType_t type);
+
+/** Deinitialise the motors: this will disable the motors and no
+ * movement will be possible until motorInit() is called once
+ * more.
+ */
+void wMotorDeinit();
 
 #endif // _W_MOTOR_H_
 

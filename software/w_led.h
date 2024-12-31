@@ -133,12 +133,6 @@ typedef enum {
  */
 int wLedInit();
 
-/** Deinitialise LEDs and free resources.
- *
- * @return zero on success else negative error code.
- */
-void wLedDeinit();
-
 /** Set LED mode to a constant brightness.
  *
  * @param led                  the LED or LEDs to set to constant mode.
@@ -244,6 +238,12 @@ int wLedModeOverlayRandomBlinkSet(unsigned int ratePerMinute = W_LED_RANDOM_BLIN
  */
 int wLedModeLevelScaleSet(wLed_t led = W_LED_BOTH, unsigned int percent = 100,
                           unsigned int rampMs = 0);
+
+/** Deinitialise LEDs and free resources.
+ *
+ * @return zero on success else negative error code.
+ */
+void wLedDeinit();
 
 /** Run through a test sequence for the LEDs: everything must already
  * have been initialised before this can be called.

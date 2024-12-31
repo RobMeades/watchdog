@@ -89,10 +89,6 @@ typedef void (wMsgHandlerFunctionFree_t)(void *body, void *context);
  */
 int wMsgInit();
 
-/** Deinitialise messaging, freeing all resources.
- */
-void wMsgDeinit();
-
 /** Start a message queue/thread.  The queue will do nothing useful
  * until one or more message handlers are added.
  *
@@ -156,6 +152,10 @@ void wMsgQueueStop(unsigned int queueId);
 int wMsgPush(unsigned int queueId, unsigned int msgType,
              void *body, unsigned int bodySize);
 
+/** Get the count of messages pushed to a message queue.
+ */
+int64_t wMsgPushCountGet(unsigned int queueId);
+
 /** Set the previousSize record for the given message queue, may
  * be useful for debugging queue build-ups.
  *
@@ -174,6 +174,10 @@ void wMsgQueuePreviousSizeSet(unsigned int queueId,
  *                    error code.
  */
 int wMsgQueuePreviousSizeGet(unsigned int queueId);
+
+/** Deinitialise messaging, freeing all resources.
+ */
+void wMsgDeinit();
 
 #endif // _W_MSG_H_
 

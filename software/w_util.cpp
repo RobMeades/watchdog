@@ -88,4 +88,51 @@ bool wUtilTimeoutExpired(wUtilTimeoutStart_t startTime,
     return elapsedTime > duration;
 }
 
+// Update a timing monitoring buffer.
+void wUtilMonitorTimingUpdate(wUtilMonitorTiming_t *monitorTiming)
+{
+    std::chrono::time_point<std::chrono::high_resolution_clock> timestamp;
+    std::chrono::duration<double> gap = std::chrono::high_resolution_clock::duration::zero();
+
+    // Get the current timestamp, if possible work out the gap
+    // from the last and update the largestGap based on that
+    timestamp = std::chrono::high_resolution_clock::now();
+    if (monitorTiming->numGaps > 0) {
+        gap = timestamp - monitorTiming->previousTimestamp;
+        if (gap > monitorTiming->largest) {
+            monitorTiming->largest = gap;
+        }
+    }
+
+    // Now deal with the total, and hence the average
+    if (monitorTiming->oldestGap == NULL) {
+        // Haven't yet filled the monitoring buffer up, just add the
+        // new gap and update the total
+        monitorTiming->gap[monitorTiming->numGaps] = gap;
+        monitorTiming->numGaps++;
+        monitorTiming->total += gap;
+        if (monitorTiming->numGaps >= W_UTIL_ARRAY_COUNT(monitorTiming->gap)) {
+            monitorTiming->oldestGap = &(monitorTiming->gap[0]);
+        }
+    } else {
+        // The monitoring buffer is full, need to rotate it
+        monitorTiming->total -= *monitorTiming->oldestGap;
+        *monitorTiming->oldestGap = gap;
+        monitorTiming->total += gap;
+        monitorTiming->oldestGap++;
+        if (monitorTiming->oldestGap >= monitorTiming->gap + W_UTIL_ARRAY_COUNT(monitorTiming->gap)) {
+            monitorTiming->oldestGap = &(monitorTiming->gap[0]);
+        }
+    }
+
+    if (monitorTiming->numGaps > 0) {
+        // Note: the average becomes an unsigned value unless the
+        // denominator is cast to an integer
+        monitorTiming->average = monitorTiming->total / (int) monitorTiming->numGaps;
+    }
+
+    // Store the timestamp for next time
+    monitorTiming->previousTimestamp = timestamp;
+}
+
 // End of file

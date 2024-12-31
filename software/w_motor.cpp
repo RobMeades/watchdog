@@ -202,12 +202,6 @@ int wMotorInit()
     return errorCode;
 }
 
-// Deinitialise the motors.
-void wMotorDeinit()
-{
-    enableAll(false);
-}
-
 // Try to move the given number of steps, returning
 // the number actually stepped in stepsTaken; being short
 // on steps does not constitute an error.  Will only move
@@ -398,6 +392,12 @@ int wMotorCalibrate(wMotorType_t type)
     }
 
     return errorCode;
+}
+
+// Deinitialise the motors.
+void wMotorDeinit()
+{
+    enableAll(false);
 }
 
 // End of file

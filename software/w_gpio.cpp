@@ -579,55 +579,6 @@ int wGpioInit()
     return errorCode;
 }
 
-// Deinitialise the GPIO pins.
-void wGpioDeinit()
-{
-    struct gpiod_line *line;
-
-    if (gKeepGoing) {
-        // If we have run, print some diagnostic info
-        uint64_t gpioReadsPerInput = gInputReadCount / W_UTIL_ARRAY_COUNT(gInputPin);
-        W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
-                   " GPIO input read thread wasn't called on schedule %lld time(s).",
-                   (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gInputReadStop - gInputReadStart).count() *
-                    W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
-                   gInputReadSlipCount);
-    }
-
-    // No longer running
-    gKeepGoing = false;
-
-    // Stop the GPIO read timer
-    if (gTimerFd >= 0) {
-        if (gReadThread.joinable()) {
-           gReadThread.join();
-        }
-        close(gTimerFd);
-        gTimerFd = -1;
-    }
-    // Stop the GPIO PWM timer
-    if (gPwmFd >= 0) {
-        if (gPwmThread.joinable()) {
-           gPwmThread.join();
-        }
-        close(gPwmFd);
-        gPwmFd = -1;
-    }
-
-    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gInputPin); x++) {
-        line = lineGet(x);
-        if (line) {
-            release(line);
-        }
-    }
-    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gOutputPin); x++) {
-        line = lineGet(x);
-        if (line) {
-            release(line);
-        }
-    }
-}
-
 // Get the state of a GPIO pin after debouncing.
 int wGpioGet(unsigned int pin)
 {
@@ -679,6 +630,55 @@ int wGpioPwmSet(unsigned int pin, unsigned int levelPercent)
     }
 
     return errorCode;
+}
+
+// Deinitialise the GPIO pins.
+void wGpioDeinit()
+{
+    struct gpiod_line *line;
+
+    if (gKeepGoing) {
+        // If we have run, print some diagnostic info
+        uint64_t gpioReadsPerInput = gInputReadCount / W_UTIL_ARRAY_COUNT(gInputPin);
+        W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
+                   " GPIO input read thread wasn't called on schedule %lld time(s).",
+                   (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gInputReadStop - gInputReadStart).count() *
+                    W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
+                   gInputReadSlipCount);
+    }
+
+    // No longer running
+    gKeepGoing = false;
+
+    // Stop the GPIO read timer
+    if (gTimerFd >= 0) {
+        if (gReadThread.joinable()) {
+           gReadThread.join();
+        }
+        close(gTimerFd);
+        gTimerFd = -1;
+    }
+    // Stop the GPIO PWM timer
+    if (gPwmFd >= 0) {
+        if (gPwmThread.joinable()) {
+           gPwmThread.join();
+        }
+        close(gPwmFd);
+        gPwmFd = -1;
+    }
+
+    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gInputPin); x++) {
+        line = lineGet(x);
+        if (line) {
+            release(line);
+        }
+    }
+    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gOutputPin); x++) {
+        line = lineGet(x);
+        if (line) {
+            release(line);
+        }
+    }
 }
 
 // End of file

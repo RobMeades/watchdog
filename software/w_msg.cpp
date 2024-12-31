@@ -83,7 +83,7 @@ typedef struct {
     std::mutex mutex; // A mutex to protect the list
     unsigned int sizeMax; // The maximum number of elements that one can put in containerList
     std::list<wMsgHandler_t *> handlerList; // The list of pointers to message handlers for this queue
-    unsigned int count; // The number of messages pushed, ever
+    uint64_t count; // The number of messages pushed, ever
     unsigned int previousSize; // The last recorded length of the list (for debug, used by the caller)
 } wMsgQueue_t;
 
@@ -329,33 +329,6 @@ int wMsgInit()
     return errorCode;
 }
 
-// Deinitialise messaging.
-void wMsgDeinit()
-{
-    if (gTimerFd >= 0) {
-        // Close all of the message queues and their threads
-        gKeepGoing = false;
-        while (!gQueueList.empty()) {
-            wMsgQueue_t *queue = gQueueList.front();
-            // Take the queue out of the list this time
-            gQueueList.pop_front();
-            queueStop(queue);
-            // Empty the handler list as well
-            while (!queue->handlerList.empty()) {
-                wMsgHandler_t *handler = queue->handlerList.front();
-                queue->handlerList.pop_front();
-                // Free the previously new()ed handler entry
-                delete handler;
-            }
-            // Free the previously new()ed queue
-            delete queue;
-        }
-        // Stop the timer
-        close(gTimerFd);
-        gTimerFd = -1;
-    }
-}
-
 // Start a message queue/thread.
 int wMsgQueueStart(void *context, unsigned int sizeMax, const char *name)
 {
@@ -530,6 +503,20 @@ int wMsgPush(unsigned int queueId, unsigned int msgType,
     return queueLengthOrErrorCode;
 }
 
+// Get the count of messages pushed to a message queue.
+int64_t wMsgPushCountGet(unsigned int queueId)
+{
+    int64_t countOrErrorCode = -EINVAL;
+
+    // Find the queue
+    wMsgQueue_t *queue = queueGet(queueId);
+    if (queue) {
+        countOrErrorCode = (int64_t) queue->count;
+    }
+
+    return countOrErrorCode;
+}
+
 // Get the previousSize record for the given message queue, used
 // by the caller for debugging queue build-ups.
 int wMsgQueuePreviousSizeGet(unsigned int queueId)
@@ -554,6 +541,33 @@ void wMsgQueuePreviousSizeSet(unsigned int queueId,
     wMsgQueue_t *queue = queueGet(queueId);
     if (queue) {
         queue->previousSize = previousSize;
+    }
+}
+
+// Deinitialise messaging.
+void wMsgDeinit()
+{
+    if (gTimerFd >= 0) {
+        // Close all of the message queues and their threads
+        gKeepGoing = false;
+        while (!gQueueList.empty()) {
+            wMsgQueue_t *queue = gQueueList.front();
+            // Take the queue out of the list this time
+            gQueueList.pop_front();
+            queueStop(queue);
+            // Empty the handler list as well
+            while (!queue->handlerList.empty()) {
+                wMsgHandler_t *handler = queue->handlerList.front();
+                queue->handlerList.pop_front();
+                // Free the previously new()ed handler entry
+                delete handler;
+            }
+            // Free the previously new()ed queue
+            delete queue;
+        }
+        // Stop the timer
+        close(gTimerFd);
+        gTimerFd = -1;
     }
 }
 

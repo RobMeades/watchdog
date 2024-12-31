@@ -58,6 +58,12 @@
  */
 #define W_UTIL_SYSTEM_SILENT " >>/dev/null 2>>/dev/null"
 
+#ifndef W_UTIL_MONITOR_TIMING_LENGTH
+/** The number of ticks to average timing over when monitoring.
+ */
+# define W_UTIL_MONITOR_TIMING_LENGTH 1000
+#endif
+
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
@@ -67,6 +73,22 @@
 typedef struct {
     std::chrono::time_point<std::chrono::high_resolution_clock> time;
 } wUtilTimeoutStart_t;
+
+/** Structure to monitor timing; should be provided initialised to
+ * zero and then wUtilMonitorTimingUpdate() should be called to
+ * update it at every tick.  The interesting fields is then likely
+ * the "largest" gap field, being the largest gap between updates.
+ */
+typedef struct {
+    std::chrono::time_point<std::chrono::high_resolution_clock> previousTimestamp;
+    std::chrono::duration<double> gap[W_UTIL_MONITOR_TIMING_LENGTH];
+    unsigned int numGaps;
+    // This is  non-NULL only when duration = W_MONITOR_TIMING_LENGTH
+    std::chrono::duration<double> *oldestGap;
+    std::chrono::duration<double> total;
+    std::chrono::duration<double> largest;
+    std::chrono::duration<double> average;
+} wUtilMonitorTiming_t;
 
 /* ----------------------------------------------------------------
  * FUNCTIONS
@@ -101,6 +123,13 @@ wUtilTimeoutStart_t wUtilTimeoutStart();
  */
 bool wUtilTimeoutExpired(wUtilTimeoutStart_t startTime,
                          std::chrono::nanoseconds duration);
+
+/** Update a timing monitoring buffer; see the definition of
+ * wUtilMonitorTiming_t for more information.
+ *
+ * @param monitorTiming a poinner to the monitoring buffer.
+ */
+void wUtilMonitorTimingUpdate(wUtilMonitorTiming_t *monitorTiming);
 
 #endif // _W_UTIL_H_
 

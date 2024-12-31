@@ -73,6 +73,13 @@
 #define W_LOG_ERROR_END wLogEnd(W_LOG_TYPE_ERROR)
 #define W_LOG_DEBUG_END wLogEnd(W_LOG_TYPE_DEBUG)
 
+// Print the duration of an operation for debug purposes.
+#define W_LOG_DEBUG_DURATION(x) auto _t1 = std::chrono::high_resolution_clock::now();  \
+                                x;                                                     \
+                                auto _t2 = std::chrono::high_resolution_clock::now();  \
+                                W_LOG_DEBUG("%d ms to do \"" #x "\".",                 \
+                                            std::chrono::duration_cast<std::chrono::milliseconds>(_t2 - _t1))
+
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */

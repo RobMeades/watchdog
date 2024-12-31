@@ -188,10 +188,6 @@
  */
 int wGpioInit();
 
-/** Deinitialise the GPIO pins.
- */
-void wGpioDeinit();
-
 /** Get the state of a GPIO pin after debouncing.
  *
  * @param pin the GPIO pin number to get the state of.
@@ -214,6 +210,10 @@ int wGpioSet(unsigned int pin, unsigned int level);
  * @return             zero on success else negative error code.
  */
 int wGpioPwmSet(unsigned int pin, unsigned int levelPercent);
+
+/** Deinitialise the GPIO pins.
+ */
+void wGpioDeinit();
 
 #endif  // _W_GPIO_H_
 

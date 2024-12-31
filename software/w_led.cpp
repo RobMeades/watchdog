@@ -264,6 +264,9 @@ static const int gSinePercent[] = {  0,  3,  6, 9,  13, 16,  19,  22,  25,  28,
 // match wLed_t.
 static const char *gLedStr[] = {"left", "right", "both"};
 
+// NOTE: there are more messaging-related variables below
+// the definition of the message handling functions.
+
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS
  * -------------------------------------------------------------- */
@@ -576,6 +579,7 @@ static void msgHandlerLedModeConstant(void *msgBody, unsigned int bodySize,
 {
     wLedMsgBodyModeConstant_t *msg = &(((wLedMsgBody_t *) msgBody)->modeConstant);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyModeConstant_t (LED %d,"
@@ -649,6 +653,7 @@ static void msgHandlerLedModeBreathe(void *msgBody, unsigned int bodySize,
 {
     wLedMsgBodyModeBreathe_t *msg = &(((wLedMsgBody_t *) msgBody)->modeBreathe);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyModeBreathe_t (LED %d,"
@@ -698,6 +703,7 @@ static void msgHandlerLedOverlayMorse(void *msgBody, unsigned int bodySize,
 {
     wLedMsgBodyOverlayMorse_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayMorse);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     // TODO
@@ -714,6 +720,7 @@ static void msgHandlerLedOverlayWink(void *msgBody, unsigned int bodySize,
 {
     wLedMsgBodyOverlayWink_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayWink);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     // TODO
@@ -732,6 +739,7 @@ static void msgHandlerLedOverlayRandomBlink(void *msgBody,
     wLedMsgBodyOverlayRandomBlink_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayRandomBlink);
     wLedOverlayRandomBlink_t *overlay = &(msg->overlay);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     if (overlay->intervalTicks > 0) {
@@ -782,6 +790,7 @@ static void msgHandlerLedLevelScale(void *msgBody, unsigned int bodySize,
 {
     wLedMsgBodyLevelScale_t *msg = &(((wLedMsgBody_t *) msgBody)->levelScale);
     wLedContext_t *ledContext = (wLedContext_t *) context;
+
     assert(bodySize == sizeof(*msg));
 
     // TODO
@@ -882,26 +891,6 @@ int wLedInit()
     }
 
     return errorCode;
-}
-
-// Deinitialise LEDs; stops ledLoop() and free's resources.
-void wLedDeinit()
-{
-    if (gTimerFd >= 0) {
-        if (gMsgQueueId >= 0) {
-             wMsgQueueStop(gMsgQueueId);
-             gMsgQueueId = -1;
-        }
-        gKeepGoing = false;
-        if (gContext.thread.joinable()) {
-            gContext.thread.join();
-        }
-        close(gTimerFd);
-        gTimerFd = -1;
-        if (gContext.randomBlink) {
-            free(gContext.randomBlink);
-        }
-    }
 }
 
 // Set LED mode constant.
@@ -1064,6 +1053,26 @@ int wLedModeLevelScaleSet(wLed_t led, unsigned int percent,
     }
 
     return errorCode;
+}
+
+// Deinitialise LEDs; stops ledLoop() and free's resources.
+void wLedDeinit()
+{
+    if (gTimerFd >= 0) {
+        if (gMsgQueueId >= 0) {
+             wMsgQueueStop(gMsgQueueId);
+             gMsgQueueId = -1;
+        }
+        gKeepGoing = false;
+        if (gContext.thread.joinable()) {
+            gContext.thread.join();
+        }
+        close(gTimerFd);
+        gTimerFd = -1;
+        if (gContext.randomBlink) {
+            free(gContext.randomBlink);
+        }
+    }
 }
 
 // Run through a test sequence for the LEDs: everything must already
