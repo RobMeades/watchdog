@@ -89,7 +89,7 @@ typedef union {
 } wVideoEncodeMsgBody_t;
 
 /** A structure containing the message handling/freeing function
- * and the message type the handle, for use in gMsgHandler[].
+ * and the message type they handle, for use in gMsgHandler[].
  */
 typedef struct {
     wVideoEncodeMsgType_t msgType;
@@ -104,8 +104,8 @@ typedef struct {
 // NOTE: there are more messaging-related variables below
 // the definition of the message handling functions.
 
-// The ID of the image processing message queue
-static unsigned int gMsgQueueId = -1;
+// The ID of the video encode message queue
+static int gMsgQueueId = -1;
 
 // Context for video encoding.
 static wVideoEncodeContext_t *gContext = nullptr;
@@ -118,7 +118,7 @@ static AVStream *gAvStream = nullptr;
 static unsigned int gFrameOutputCount = 0;
 
 // Keep track of timing on the video stream, purely for information.
-static wUtilMonitorTiming_t gMonitorTiming;
+static wUtilMonitorTiming_t gMonitorTiming = {};
 
 // NOTE: there are more messaging-related variables below
 // the definition of the message handling functions.
@@ -525,7 +525,7 @@ int wVideoEncodeStart()
     return errorCode;
 }
 
-//
+// Stop video encoding.
 int wVideoEncodeStop()
 {
     int errorCode = -EBADF;
@@ -543,6 +543,15 @@ void wVideoEncodeDeinit()
     if (gContext) {
         wImageProcessingStop();
         cleanUp();
+
+        // Print some useful diagnostic information
+        W_LOG_INFO("average frame gap (at end of video output) over the last"
+                   " %d frames %lld ms (a rate of %lld frames/second), largest"
+                   " gap %lld ms.",
+                   W_UTIL_ARRAY_COUNT(gMonitorTiming.gap),
+                   std::chrono::duration_cast<std::chrono::milliseconds>(gMonitorTiming.average).count(),
+                   1000 / std::chrono::duration_cast<std::chrono::milliseconds>(gMonitorTiming.average).count(),
+                   std::chrono::duration_cast<std::chrono::milliseconds>(gMonitorTiming.largest).count());
     }
 }
 

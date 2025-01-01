@@ -20,12 +20,12 @@ The files, and structure, are as follows:
 - each API is formed by a pair of `.h`/.`cpp` files: so for instance the `wCamera` API is contained in the [w_camera.h](w_camera.h)/[w_camera.cpp](w_camera.cpp) file pair,
 - an API may include a pair of `wXxxInit()`/`wXxxDeinit()` functions that should be called at start/end of day by `main()`,
 - the important APIs are [wCamera](w_camera.h), [wImageProcessing](w_image_processing.h) and [wVideoEncode](w_video_encode.h): [wVideoEncode](w_video_encode.h) is the start, so calling `wVideoEncodeStart()` will in turn call `wImageProcessingStart()`, which will in turn call `wCameraStart()` and image frames will be taken from the camera, processed and written to HLS format video files (see also [w_hls.h](w_hls.h)) in a directory of your choice,
-- the [wMsg](w_msg.h) API forms a key piece of infrastucture, allowing data and commands to be queued (by the APIs under a function-calling shim) so as to accommodate a flexible/flowing stream.
+- the [wMsg](w_msg.h) API forms a key piece of infrastucture, allowing data and commands to be queued \[by the APIs themselves under a function-calling shim\], providing asynchronous behaviour.
 - the [wMotor](w_motor.h) API controls the stepper motors and the [wLed](w_led.h) API controls the LEDs that form the watchdog's eyes,
 - the [wGpio](w_gpio.h) API provides access to the Raspberry Pi's GPIO pins for [wMotor](w_motor.h) and [wLed](w_led.h),
 - miscellaneous utils can be found in [wUtil](w_util.h), debug logging in [wLog](w_log.h) and a small number of common definitions in [wCommon](w_common.h),
 - to make the program more usable, [wCommandLine](w_command_line.h) provides command-line parsing and help,
-- [w_main.cpp](w_main.cpp) brings it all together.
+- [wControl](w_control.h) coordinates it all and [w_main.cpp](w_main.cpp) brings it all together.
 
 # Installation
 For the Pi, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.

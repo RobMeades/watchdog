@@ -128,6 +128,8 @@ typedef enum {
 /** Initialise LEDs; note that wMsgInit() must have already been
  * called for this to return successfully.  If the LEDs have already
  * been initialised this function will do nothing and return success.
+ * wGpioInit() and wMsgInit() must have returned successfully before
+ * this is called.
  *
  * @return zero on success else negative error code.
  */

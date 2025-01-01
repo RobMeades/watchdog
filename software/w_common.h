@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-#ifndef _W_COMMON_TYPES_H_
-#define _W_COMMON_TYPES_H_
+#ifndef _W_COMMON_H_
+#define _W_COMMON_H_
 
-/** NO #inclusions allowed in here, since they would spread everywhere. */
+/** NO #inclusions allowed in here, since they would spread everywhere.
+ */
 
 /** @file
  * @brief Types shared amongst all of the APIs in the watchdog application.
@@ -71,6 +72,6 @@ typedef int (wCommonFrameFunction_t)(uint8_t *data,
                                      unsigned int height,
                                      unsigned int stride);
 
-#endif // _W_COMMON_TYPES_H_
+#endif // _W_COMMON_H_
 
 // End of file

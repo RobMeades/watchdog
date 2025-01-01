@@ -31,9 +31,9 @@
  * -------------------------------------------------------------- */
 
 #ifndef W_IMAGE_PROCESSING_MSG_QUEUE_MAX_SIZE
-/** The number of messages in the video processing queue: not so
- * many of these as the buffers are usually quite large, we just
- * need to keep up.
+/** The maximum number of messages allowed in the video processing
+ * queue: not so many of these as the buffers are usually quite large,
+ * we just need to keep up.
  */
 # define W_IMAGE_PROCESSING_MSG_QUEUE_MAX_SIZE 100
 #endif
@@ -58,14 +58,18 @@ typedef int (wImageProcessingFocusFunction_t)(cv::Point pointView,
 
 /** Initialise image processing; if image processing is already
  * initialised this function will do nothing and return success.
+ * wMsgInit() must have returned successfully before this is called.
  *
  * @return zero on success else negative error code.
  */
 int wImageProcessingInit();
 
 /** Become a consumer of the focus point that the image processing
- * code maintains.  There can only be one consumer, a new call to
- * this function will replace any previous callback.
+ * code determines.  There can only be one consumer, a new call to
+ * this function will replace any previous callback.  This focus
+ * point is only a _potential_ focus point, it may be smoothed,
+ * ignored, whatever by the consumer before it is fed back into
+ * the image with a call to wImageProcessingFocusSet().
  *
  * @param focusCallback  the function that will be called when
  *                       the focus changes; the function should
@@ -76,10 +80,21 @@ int wImageProcessingInit();
  */
 int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback);
 
+/** Set the focus point to be drawn on the processed image.
+ *
+ * @param pointView   a pointer to the focus point in view
+ *                    coordinates, use nullptr to set the focus
+ *                    point as invalid (in which case it will
+ *                    not appear on the image).
+ * @return            zero on success else negative error code.
+ */
+int wImageProcessingFocusSet(const cv::Point *pointView);
+
 /** Start image processing; this will call wCameraStart(),
  * providing it with a callback to obtain a flow of images,
  * and provide the processed frames to the callback function
- * given here.
+ * given here.  wCameraInit() must have been called and returned
+ * success for this function to succeed.
  *
  * @param outputCallback  the (e.g. video encode) function that will
  *                        be called when an image has been processed.

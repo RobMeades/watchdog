@@ -30,8 +30,8 @@
  * -------------------------------------------------------------- */
 
 #ifndef W_VIDEO_ENCODE_MSG_QUEUE_MAX_SIZE
-/** The number of frames in the video processing queue; lots of room
- * needed.
+/** The maximum number of frames allowed in the video processing
+ * queue; lots of room needed.
  */
 # define W_VIDEO_ENCODE_MSG_QUEUE_MAX_SIZE 1000
 #endif
@@ -46,6 +46,7 @@
 
 /** Initialise video encoding; if video encoding is already
  * initialised this function will do nothing and return success.
+ * wMsgInit() must have returned successfully before this is called.
  *
  * @param outputDirectory    the output directory (with no trailing
  *                           slash).
@@ -57,7 +58,8 @@ int wVideoEncodeInit(std::string outputDirectory, std::string outputFileName);
 
 /** Start video encoding; this will call wImageProcessingStart(),
  * providing it with a callback to obtain a flow of processed
- * images.
+ * images.  wImageProcessingInit() must have been called and returned
+ * success for this function to succeed.
  *
  * @return zero on success else negative error code.
  */

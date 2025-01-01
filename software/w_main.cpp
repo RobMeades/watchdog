@@ -58,6 +58,7 @@
 #include <w_command_line.h>
 #include <w_gpio.h>
 #include <w_msg.h>
+#include <w_control.h>
 #include <w_led.h>
 #include <w_motor.h>
 #include <w_hls.h>
@@ -104,6 +105,10 @@ int main(int argc, char *argv[])
             errorCode = wMsgInit();
         }
         if (errorCode == 0) {
+            // Initialise control
+            errorCode = wControlInit();
+        }
+        if (errorCode == 0) {
             // Intialise the LEDs
             errorCode = wLedInit();
         }
@@ -141,24 +146,28 @@ int main(int argc, char *argv[])
         }
 
         if (errorCode == 0) {
-            // Everything is now initialised, ready to go, so kick things off
-            // by requesting the video to start encoding, which will in turn
-            // start the image processing code, which will in turn start
-            // the camera code
-            errorCode = wVideoEncodeStart();
+            // Everything is now initialised, ready to go; kick things off
+            // by starting control operations, which will requesting the
+            // video to start encoding, which will in turn start the image
+            // processing code, which will in turn start the camera code
+            errorCode = wControlStart();
 
             // Cycle through the LED test while we're waiting to finish
             while ((errorCode == 0) && wUtilKeepGoing()) {
                 errorCode = wLedTest();
             }
+
+            // Done
+            wControlStop();
         } else {
-            W_LOG_ERROR("initialisation failure!");
+            W_LOG_ERROR("initialisation failure (%d)!", errorCode);
         }
 
         wVideoEncodeDeinit();
         wImageProcessingDeinit();
         wCameraDeinit();
         wLedDeinit();
+        wControlDeinit();
         wMsgDeinit();
         wMotorDeinit();
         wGpioDeinit();

@@ -256,7 +256,7 @@ typedef union {
 } wImageProcessingMsgBody_t;
 
 /** A structure containing the message handling/freeing function
- * and the message type the handle, for use in gMsgHandler[].
+ * and the message type they handle, for use in gMsgHandler[].
  */
 typedef struct {
     wImageProcessingMsgType_t msgType;
@@ -272,7 +272,7 @@ typedef struct {
 // the definition of the message handling functions.
 
 // The ID of the image processing message queue
-static unsigned int gMsgQueueId = -1;
+static int gMsgQueueId = -1;
 
 // Image processing context.
 static wImageProcessingContext_t *gContext = nullptr;
@@ -468,13 +468,16 @@ static int findFocusFrame(const std::vector<std::vector<cv::Point>> contours,
 
 // Set a variable of type wPointProtected_t.
 static int pointProtectedSet(wPointProtected_t *pointProtected,
-                             cv::Point *point)
+                             const cv::Point *point)
 {
     int errorCode = -EINVAL;
     
-    if (pointProtected && point) {
+    if (pointProtected) {
         pointProtected->mutex.lock();
-        pointProtected->point = *point;
+        pointProtected->point = W_POINT_INVALID;
+        if (point) {
+            pointProtected->point = *point;
+        }
         errorCode = 0;
         pointProtected->mutex.unlock();
     }
@@ -727,6 +730,9 @@ int wImageProcessingInit()
 
     if (!gContext) {
         gContext = new wImageProcessingContext_t;
+        // Set the initial focus point to be invalid so that we don't
+        // end up with a zero'd focus point on the image
+        gContext->focusPointView.point = W_POINT_INVALID;
         errorCode = -ENOMEM;
         // Set up the OpenCV background subtractor object
         gContext->backgroundSubtractor = cv::createBackgroundSubtractorMOG2();
@@ -762,6 +768,20 @@ int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback)
 
     if (gContext) {
         gContext->focusCallback = focusCallback;
+        errorCode = 0;
+    }
+
+    return errorCode;
+}
+
+// Set the focus point to be drawn on the processed image.
+int wImageProcessingFocusSet(const cv::Point *pointView)
+{
+    int errorCode = -EBADF;
+
+    if (gContext) {
+        // Set the focus point on the image
+        errorCode = pointProtectedSet(&(gContext->focusPointView), pointView);
     }
 
     return errorCode;

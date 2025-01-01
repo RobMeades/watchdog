@@ -8,7 +8,7 @@ project(
 add_global_arguments('-Wno-unused-function', language : 'cpp')
 
 watchdog = executable('watchdog',
-                      'w_util.cpp', 'w_gpio.cpp', 'w_motor.cpp', 'w_msg.cpp', 'w_led.cpp', 'w_camera.cpp', 'w_image_processing.cpp', 'w_video_encode.cpp', 'w_command_line.cpp', 'w_main.cpp',
+                      'w_util.cpp', 'w_gpio.cpp', 'w_motor.cpp', 'w_msg.cpp', 'w_led.cpp', 'w_camera.cpp', 'w_image_processing.cpp', 'w_video_encode.cpp', 'w_control.cpp', 'w_command_line.cpp', 'w_main.cpp',
                       dependencies: [dependency('libcamera', required: true),
                                      # All of the libav* things are FFMPEG
                                      dependency('libavformat', required: true),

@@ -640,11 +640,15 @@ void wGpioDeinit()
     if (gKeepGoing) {
         // If we have run, print some diagnostic info
         uint64_t gpioReadsPerInput = gInputReadCount / W_UTIL_ARRAY_COUNT(gInputPin);
-        W_LOG_INFO("each GPIO input read (and debounced) every %lld ms,"
-                   " GPIO input read thread wasn't called on schedule %lld time(s).",
-                   (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gInputReadStop - gInputReadStart).count() *
-                    W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput,
-                   gInputReadSlipCount);
+        W_LOG_INFO_START("each GPIO input read (and debounced) every %lld ms",
+                         (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gInputReadStop - gInputReadStart).count() *
+                         W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput);
+        if (gInputReadSlipCount > 0) {
+            W_LOG_INFO_MORE(", GPIO input read thread was not called on schedule %lld time(s).",
+                            gInputReadSlipCount);
+        }
+        W_LOG_INFO_MORE(".");
+        W_LOG_INFO_END;
     }
 
     // No longer running

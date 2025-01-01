@@ -18,13 +18,8 @@
 #define _W_MSG_H_
 
 /** @file
- * @brief The messaging API for the watchdog application;
- * this API is thread-safe aside from wMsgInit(), wMsgDeinit(),
- * which should not be called at the same time as any other API or
- * each other, wMsgQueueStart() which should not be called
- * from more than one thread at the same time, and
- * wMsgQueueHandlerAdd(), which should not be called again for
- * a given queue once wMsgPush() has been called on that queue.
+ * @brief The messaging API for the watchdog application; this API
+ * is NOT thread-safe.
  */
 
 /* ----------------------------------------------------------------

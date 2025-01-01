@@ -129,7 +129,8 @@ typedef struct {
 /** Initialise the motors: THIS WILL CAUSE MOVEMENT, calibrating
  * the movement range of the motors and, if successful, the motors
  * will be enabled on return so that wMotorMove() and wMotorMoveToRest()
- * will both function.
+ * will both function.  wGpioInit() must have returned successfully
+ * before this is called.
  *
  * @return  zero on success else negative error code.
  */
