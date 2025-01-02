@@ -240,8 +240,8 @@ int wLedOverlayMorseSet(wLed_t led = W_LED_BOTH,
  * @param durationMs            the duration of the blink in milliseconds.
  * @return                      zero on success else negative error code.
  */
-int wLedModeOverlayWinkSet(wLed_t led,
-                           unsigned int durationMs = W_LED_WINK_DURATION_MS);
+int wLedOverlayWinkSet(wLed_t led,
+                       unsigned int durationMs = W_LED_WINK_DURATION_MS);
 
 /** Add a random blink overlay (i.e. both LEDs switching off for a brief period)
  * as an overlay to the current mode.
@@ -251,7 +251,7 @@ int wLedModeOverlayWinkSet(wLed_t led,
  * @param durationMs     the duration of the wink in milliseconds.
  * @return               zero on success else negative error code.
  */
-int wLedModeOverlayRandomBlinkSet(unsigned int ratePerMinute = W_LED_RANDOM_BLINK_RATE_PER_MINUTE,
+int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute = W_LED_RANDOM_BLINK_RATE_PER_MINUTE,
                                   int rangeSeconds = W_LED_RANDOM_BLINK_RANGE_SECONDS,
                                   unsigned int durationMs = W_LED_RANDOM_BLINK_DURATION_MS);
 

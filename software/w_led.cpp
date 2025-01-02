@@ -84,7 +84,7 @@ typedef struct {
     wLedLevel_t levelAverage;
     unsigned int levelAmplitudePercent;
     unsigned int rateMilliHertz;
-    uint64_t offsetLeftToRightTicks;
+    int64_t offsetLeftToRightTicks;
 } wLedModeBreathe_t;
 
 /** Union of LED modes.
@@ -113,7 +113,8 @@ typedef struct {
 /** Wink overlay.
  */
 typedef struct {
-    unsigned int durationTicks;
+    int64_t remainingTicks;
+    uint64_t lastTick;
 } wLedOverlayWink_t;
 
 /** Random blink overlay.
@@ -284,43 +285,43 @@ static const int gSinePercent[] = {  0,  3,  6, 9,  13, 16,  19,  22,  25,  28,
 
 // The alpha part of the morse alphabet.
 static const wLedMorseLetter_t gMorseAlpha[] = {{2, W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                                     // A
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},   // B
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DASH, W_LED_MORSE_DOT},   // C
-                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT},                     // D
-                                                       {1, W_LED_MORSE_DOT},                                                        // E
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // F
-                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // G
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // H
-                                                       {2, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                                      // I
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // J
-                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // K
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // L
-                                                       {2, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                                     // M
-                                                       {2, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                                      // N
-                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // O
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // P
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // Q
-                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // R
-                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                    // S
-                                                       {1, W_LED_MORSE_DASH},                                                       // T
-                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // U
-                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // V
-                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // W
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // X
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // Y
-                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT}}; // Z
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},   // B
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DASH, W_LED_MORSE_DOT},   // C
+                                                {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT},                     // D
+                                                {1, W_LED_MORSE_DOT},                                                        // E
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // F
+                                                {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // G
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // H
+                                                {2, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                                      // I
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // J
+                                                {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // K
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // L
+                                                {2, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                                     // M
+                                                {2, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                                      // N
+                                                {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // O
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // P
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // Q
+                                                {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // R
+                                                {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                    // S
+                                                {1, W_LED_MORSE_DASH},                                                       // T
+                                                {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // U
+                                                {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // V
+                                                {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // W
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // X
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // Y
+                                                {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT}}; // Z
 
 // The numeric part of the morse alphabet.
 static const wLedMorseLetter_t gMorseNumber[] = {{5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 0
-                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 1
-                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 2
-                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 3
-                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // 4
-                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 5
-                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 6
-                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 7
-                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 8
-                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT}}; // 9
+                                                 {5, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 1
+                                                 {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 2
+                                                 {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 3
+                                                 {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // 4
+                                                 {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 5
+                                                 {5, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 6
+                                                 {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 7
+                                                 {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 8
+                                                 {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT}}; // 9
 
 // Names for each of the LEDs, for debug prints only; order must
 // match wLed_t.
@@ -560,27 +561,27 @@ static int updateLevelMorse(unsigned int levelPercent,
 
 // Move a Morse sequence on.
 // IMPORTANT: the LED context must be locked before this is called.
-static int updateMorse(wLed_t led,  wLedOverlayMorse_t **morse,
+static int updateMorse(wLed_t led, wLedOverlayMorse_t **morse,
                        uint64_t nowTick)
 {
-    int levelPercent = -EINVAL;
+    int levelPercentOrErrorCode = -EINVAL;
 
     if (morse && *morse) {
         if ((*morse)->ticksWithinElement <= 0) {
             // Do the next thing, advancing elementIndex and
             // potentially letter, setting ticksWithinElement
             // and returning the new level
-            levelPercent = updateLevelMorse((*morse)->levelPercent,
-                                            (*morse)->lastLevelPercent,
-                                            (*morse)->durationUnitTicks,
-                                            (*morse)->durationGapRepeatTicks,
-                                            &((*morse)->letter),
-                                            &((*morse)->elementIndex),
-                                            &((*morse)->ticksWithinElement));
+            levelPercentOrErrorCode = updateLevelMorse((*morse)->levelPercent,
+                                                       (*morse)->lastLevelPercent,
+                                                       (*morse)->durationUnitTicks,
+                                                       (*morse)->durationGapRepeatTicks,
+                                                       &((*morse)->letter),
+                                                       &((*morse)->elementIndex),
+                                                       &((*morse)->ticksWithinElement));
             if ((*morse)->letter - (*morse)->sequenceStr >= (*morse)->sequenceLength) {
                 if ((*morse)->repeat > 0) {
                     // At the end of the sequence, do repeat
-                    levelPercent = 0;
+                    levelPercentOrErrorCode = 0;
                     (*morse)->letter = (*morse)->sequenceStr;
                     (*morse)->repeat--;
                 } else {
@@ -593,17 +594,43 @@ static int updateMorse(wLed_t led,  wLedOverlayMorse_t **morse,
             }
         } else {
             // Keep the same level and reduce the tick within the element
-            levelPercent = (*morse)->lastLevelPercent;
-            (*morse)->ticksWithinElement -= ((int64_t) nowTick) - ((int64_t) (*morse)->lastTick);
+            levelPercentOrErrorCode = (*morse)->lastLevelPercent;
+            (*morse)->ticksWithinElement -= nowTick - (*morse)->lastTick;
         }
 
         if (*morse) {
             (*morse)->lastTick = nowTick;
-            (*morse)->lastLevelPercent = levelPercent;
+            if (levelPercentOrErrorCode >= 0) {
+                (*morse)->lastLevelPercent = levelPercentOrErrorCode;
+            }
         }
     }
 
-    return levelPercent;
+    return levelPercentOrErrorCode;
+}
+
+// Wink.
+// IMPORTANT: the LED context must be locked before this is called.
+static int updateWink(wLed_t led, wLedOverlayWink_t **wink,
+                      uint64_t nowTick, int currentLevelPercent)
+{
+    int levelPercentOrErrorCode = -EINVAL;
+
+    if (wink && *wink) {
+        levelPercentOrErrorCode = 0;
+        if ((*wink)->remainingTicks > 0) {
+            // Blinky-blink
+            (*wink)->remainingTicks -= nowTick - (*wink)->lastTick;
+            (*wink)->lastTick = nowTick;
+        } else {
+            // Done, leave the level as it is
+            free(*wink);
+            *wink = nullptr;
+            levelPercentOrErrorCode = currentLevelPercent;
+        }
+    }
+
+    return levelPercentOrErrorCode;
 }
 
 // A loop to drive the dynamic behaviours of the LEDs.
@@ -673,9 +700,9 @@ static void ledLoop()
                         }
                         // Wink overlays the mode
                         if (state->wink) {
-
-                            // TODO
-
+                            levelPercent = updateWink((wLed_t) x, &(state->wink),
+                                                      gContext.nowTick,
+                                                      levelPercent);
                         }
                     }
                     // Apply the new level
@@ -918,12 +945,12 @@ static void msgHandlerLedModeBreathe(void *msgBody, unsigned int bodySize,
  * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyOverlayMorse_t
  * -------------------------------------------------------------- */
 
-// Update function called only by wLedMsgBodyOverlayMorse_t().
+// Update function called only by msgHandlerLedOverlayMorse().
 // IMPORTANT: the LED context must be locked before this is called.
-static void msgHandlerLedModeMorseUpdate(wLed_t led,
-                                         wLedState_t *state,
-                                         uint64_t nowTick,
-                                         wLedOverlayMorse_t *overlaySrc)
+static void msgHandlerLedOverlayMorseUpdate(wLed_t led,
+                                            wLedState_t *state,
+                                            uint64_t nowTick,
+                                            wLedOverlayMorse_t *overlaySrc)
 {
     wLedOverlayMorse_t **overlayDst = &(state->morse);
 
@@ -983,12 +1010,12 @@ static void msgHandlerLedOverlayMorse(void *msgBody, unsigned int bodySize,
     if (msg->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
         // We're updating one LED
         wLedState_t *state = &(ledContext->ledState[msg->apply.led]);
-        msgHandlerLedModeMorseUpdate(msg->apply.led, state, ledContext->nowTick, overlay);
+        msgHandlerLedOverlayMorseUpdate(msg->apply.led, state, ledContext->nowTick, overlay);
     } else {
         // Update both LEDs
         for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
             wLedState_t *state = &(ledContext->ledState[x]);
-            msgHandlerLedModeMorseUpdate((wLed_t) x, state, ledContext->nowTick, overlay);
+            msgHandlerLedOverlayMorseUpdate((wLed_t) x, state, ledContext->nowTick, overlay);
         }
     }
     W_LOG_DEBUG_MORE(".");
@@ -1002,17 +1029,64 @@ static void msgHandlerLedOverlayMorse(void *msgBody, unsigned int bodySize,
  * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyOverlayWink_t
  * -------------------------------------------------------------- */
 
+// Update function called only by msgHandlerLedOverlayWink().
+// IMPORTANT: the LED context must be locked before this is called.
+static void msgHandlerLedOverlayWinkUpdate(wLed_t led,
+                                           wLedState_t *state,
+                                           uint64_t nowTick,
+                                           wLedOverlayWink_t *overlaySrc)
+{
+    wLedOverlayWink_t **overlayDst = &(state->wink);
+
+    // Make sure there's memory; this will be free()ed by updateWink()
+    if (!*overlayDst) {
+        *overlayDst = (wLedOverlayWink_t *) malloc(sizeof(**overlayDst));
+    }
+    if (*overlayDst) {
+        memset(*overlayDst, 0, sizeof(**overlayDst));
+        (*overlayDst)->remainingTicks = overlaySrc->remainingTicks;
+        (*overlayDst)->lastTick = nowTick;
+        // This is W_LOG_DEBUG_MORE since it will be within a sequence
+        // of log prints in msgHandlerLedOverlayWink()
+        W_LOG_DEBUG_MORE("; %s, duration %lld ms",
+                         gLedStr[led],
+                         ticksToMs((*overlayDst)->remainingTicks));
+    }
+}
+
 // Message handler for wLedMsgBodyOverlayWink_t.
 static void msgHandlerLedOverlayWink(void *msgBody, unsigned int bodySize,
                                      void *context)
 {
     wLedMsgBodyOverlayWink_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayWink);
+    wLedOverlayWink_t *overlay = &(msg->overlay);
     wLedContext_t *ledContext = (wLedContext_t *) context;
 
     assert(bodySize == sizeof(*msg));
 
-    // TODO
-    (void) ledContext;
+    W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyOverlayWink_t (LED %d),"
+                      " %lld ms", ledContext->nowTick, msg->apply.led,
+                      ticksToMs(overlay->remainingTicks));
+
+    // Lock the LED context
+    ledContext->mutex.lock();
+
+    if (msg->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
+        // We're updating one LED
+        wLedState_t *state = &(ledContext->ledState[msg->apply.led]);
+        msgHandlerLedOverlayWinkUpdate(msg->apply.led, state, ledContext->nowTick, overlay);
+    } else {
+        // Update both LEDs
+        for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
+            wLedState_t *state = &(ledContext->ledState[x]);
+            msgHandlerLedOverlayWinkUpdate((wLed_t) x, state, ledContext->nowTick, overlay);
+        }
+    }
+    W_LOG_DEBUG_MORE(".");
+    W_LOG_DEBUG_END;
+
+    // Unlock the context again
+    ledContext->mutex.unlock();
 }
 
 /* ----------------------------------------------------------------
@@ -1279,7 +1353,7 @@ int wLedOverlayMorseSet(wLed_t led, const char *sequenceStr,
 }
 
 // Set a wink overlay.
-int wLedModeOverlayWinkSet(wLed_t led, unsigned int durationMs)
+int wLedOverlayWinkSet(wLed_t led, unsigned int durationMs)
 {
     int errorCode = -EBADF;
     wLedMsgBodyOverlayWink_t msg = {};
@@ -1287,7 +1361,7 @@ int wLedModeOverlayWinkSet(wLed_t led, unsigned int durationMs)
 
     if (gMsgQueueId >= 0) {
         msg.apply.led = led;
-        overlay->durationTicks = msToTicks(durationMs);
+        overlay->remainingTicks = msToTicks(durationMs);
         errorCode = wMsgPush(gMsgQueueId,
                              W_LED_MSG_TYPE_OVERLAY_WINK,
                              &msg, sizeof(msg));
@@ -1300,9 +1374,9 @@ int wLedModeOverlayWinkSet(wLed_t led, unsigned int durationMs)
 }
 
 // Set a random blink overlay.
-int wLedModeOverlayRandomBlinkSet(unsigned int ratePerMinute,
-                                  int rangeSeconds,
-                                  unsigned int durationMs)
+int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute,
+                              int rangeSeconds,
+                              unsigned int durationMs)
 {
     int errorCode = -EBADF;
     wLedMsgBodyOverlayRandomBlink_t msg = {};
@@ -1387,12 +1461,12 @@ int wLedTest()
 
     if ((errorCode == 0) && wUtilKeepGoing()) {
         W_LOG_INFO("%stesting blinking for 15 seconds.", prefix);
-        errorCode = wLedModeOverlayRandomBlinkSet(10, 2);
+        errorCode = wLedOverlayRandomBlinkSet(10, 2);
         if (errorCode == 0) {
             sleep(15);
         }
         // Switch blinking off again
-        errorCode = wLedModeOverlayRandomBlinkSet(0);
+        errorCode = wLedOverlayRandomBlinkSet(0);
     }
 
     if ((errorCode == 0) && wUtilKeepGoing()) {
@@ -1447,6 +1521,27 @@ int wLedTest()
         }
         if (errorCode == 0) {
             sleep(10);
+        }
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        W_LOG_INFO("%sshould be back to breathe soon.", prefix);
+        sleep(15);
+        W_LOG_INFO("%stesting wink.", prefix);
+        W_LOG_INFO("%s%s wink, default duration.", prefix, gLedStr[W_LED_LEFT]);
+        errorCode = wLedOverlayWinkSet(W_LED_LEFT);
+        if (errorCode == 0) {
+            sleep(1);
+            W_LOG_INFO("%s%s wink, default duration.", prefix, gLedStr[W_LED_RIGHT]);
+            errorCode = wLedOverlayWinkSet(W_LED_RIGHT);
+        }
+        if (errorCode == 0) {
+            sleep(1);
+            W_LOG_INFO("%s%s wink, longer.", prefix, gLedStr[W_LED_LEFT]);
+            errorCode = wLedOverlayWinkSet(W_LED_LEFT, 1000);
+        }
+        if (errorCode == 0) {
+            sleep(2);
         }
     }
 
