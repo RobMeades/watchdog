@@ -105,7 +105,7 @@ int wImageProcessingFocusSet(const cv::Point *pointView);
  */
 int wImageProcessingStart(wCommonFrameFunction_t *outputCallback);
 
-/** Stop image processing; you don't have to call this function
+/** Stop image processing; you do not have to call this function
  * on exit, wImageProcessingDeinit() will tidy up appropriately.
  *
  * @return zero on success else negative error code.

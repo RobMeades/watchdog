@@ -57,7 +57,7 @@ int wControlInit();
  */
 int wControlStart();
 
-/** Stop control operations; you don't have to call this function
+/** Stop control operations; you do not have to call this function
  * on exit, wControlDeinit() will tidy up appropriately.
  *
  * @return zero on success else negative error code.

@@ -47,6 +47,11 @@
  * COMPILE-TIME MACROS
  * -------------------------------------------------------------- */
 
+/** The maximum number of dot/dash elements required to form a morse
+ * letter.
+  */
+#define W_LED_OVERLAY_MORSE_ELEMENTS_PER_LETTER_MAX 5
+
 /* ----------------------------------------------------------------
  * TYPES: MISC
  * -------------------------------------------------------------- */
@@ -93,13 +98,16 @@ typedef union {
  */
 typedef struct {
     char sequenceStr[W_LED_MORSE_MAX_SIZE]; // Null terminated string
+    unsigned int sequenceLength; // Length _including_ null terminator
     unsigned int repeat;
     unsigned int levelPercent;
-    unsigned int durationDotTicks;
-    unsigned int durationDashTicks;
-    unsigned int durationGapLetterTicks;
-    unsigned int durationGapWordTicks;
+    unsigned int durationUnitTicks;
     unsigned int durationGapRepeatTicks;
+    char *letter;
+    unsigned int elementIndex;
+    int64_t ticksWithinElement;
+    uint64_t lastTick;
+    unsigned int lastLevelPercent;
 } wLedOverlayMorse_t;
 
 /** Wink overlay.
@@ -116,6 +124,20 @@ typedef struct {
     uint64_t durationTicks;
     uint64_t lastBlinkTicks;
 } wLedOverlayRandomBlink_t;
+
+/** The Morse elements (clearer than just using true and false).
+ */
+typedef enum {
+    W_LED_MORSE_DOT,
+    W_LED_MORSE_DASH
+} wLedMorseElement_t;
+
+/** A Morse letter.
+ */
+typedef struct {
+    unsigned int length;
+    wLedMorseElement_t element[W_LED_OVERLAY_MORSE_ELEMENTS_PER_LETTER_MAX];
+} wLedMorseLetter_t;
 
 /** Control state for one or more LEDs.
  */
@@ -260,6 +282,46 @@ static const int gSinePercent[] = {  0,  3,  6, 9,  13, 16,  19,  22,  25,  28,
                                     81, 83, 84, 86, 88, 89,  90,  92,  93,  94,
                                     95, 96, 97, 98, 99, 99, 100, 100, 100, 100};
 
+// The alpha part of the morse alphabet.
+static const wLedMorseLetter_t gMorseAlpha[] = {{2, W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                                     // A
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},   // B
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DASH, W_LED_MORSE_DOT},   // C
+                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT, W_LED_MORSE_DOT},                     // D
+                                                       {1, W_LED_MORSE_DOT},                                                        // E
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // F
+                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // G
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // H
+                                                       {2, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                                      // I
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // J
+                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // K
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // L
+                                                       {2, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                                     // M
+                                                       {2, W_LED_MORSE_DASH, W_LED_MORSE_DOT},                                      // N
+                                                       {3, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // O
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT},  // P
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // Q
+                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DOT},                    // R
+                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},                    // S
+                                                       {1, W_LED_MORSE_DASH},                                                       // T
+                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH},                   // U
+                                                       {4, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // V
+                                                       {3, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH},                   // W
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // X
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // Y
+                                                       {4, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT}}; // Z
+
+// The numeric part of the morse alphabet.
+static const wLedMorseLetter_t gMorseNumber[] = {{5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 0
+                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 1
+                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 2
+                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH, W_LED_MORSE_DASH}, // 3
+                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DASH}, // 4
+                                                        {5, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 5
+                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 6
+                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 7
+                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT,  W_LED_MORSE_DOT},  // 8
+                                                        {5, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DASH, W_LED_MORSE_DOT}}; // 9
+
 // Names for each of the LEDs, for debug prints only; order must
 // match wLed_t.
 static const char *gLedStr[] = {"left", "right", "both"};
@@ -283,7 +345,6 @@ static unsigned int limitLevel(int levelPercent)
 
     return (unsigned int) levelPercent;
 }
-
 // Set a random blink, if required
 static int randomBlink(wLedOverlayRandomBlink_t *randomBlink,
                        uint64_t nowTick)
@@ -387,6 +448,164 @@ static int updateLevel(wLed_t led, wLedState_t *state,
     return levelPercentOrErrorCode;
 }
 
+
+// Check if the given character is an allowed Morse character
+// and, if it is a lower case one, convert it to upper case.
+static bool morseValid(char in, char *out)
+{
+    bool valid = false;
+
+    if (out) {
+        if ((in >= '0') && (in <= '9')) {
+            // It's 0 to 9, that's OK
+            valid = true;
+        } else if ((in >= 'A') && (in <= 'Z')) {
+            // It's A to Z, that's OK
+            valid = true;
+        } else if ((in >= 'a') && (in <= 'z')) {
+            // It's a to z; convert to upper and that's OK
+            in &= ~0x20;
+            valid = true;
+        } else if (in == ' ') {
+            // Word gap
+            valid = true;
+        }
+        if (valid) {
+            *out = in;
+        }
+    }
+
+    return valid;
+}
+
+// Get whether the LED should be on or not (as a percentage) for a new
+// morse element and how many ticks to do that for; letter and elementIndex
+// are advanced as appropriate, ticksWithinElement is set.
+static int updateLevelMorse(unsigned int levelPercent,
+                            unsigned int lastLevelPercent,
+                            unsigned int durationUnitTicks,
+                            unsigned int durationGapRepeatTicks,
+                            char **letter,
+                            unsigned int *elementIndex,
+                            int64_t *ticksWithinElement)
+{
+    int levelPercentOrErrorCode = -EINVAL;
+
+    if (letter && ticksWithinElement) {
+        // LED is by default off, for a gap of some form
+        levelPercentOrErrorCode = 0;
+        if (**letter == ' ') {
+            // Word gap
+            *ticksWithinElement = (int) durationUnitTicks * W_LED_MORSE_DURATION_MULTIPLIER_GAP_WORD;
+            // New letter next time
+            (*letter)++;
+        } else if (**letter == 0) {
+            // End of sequence gap
+            *ticksWithinElement = (int) durationGapRepeatTicks;
+            // Advance letter; the calling function will check
+            // that we have advanced beyond the end of the array
+            (*letter)++;
+        } else {
+            // Must be alphanumeric
+            if (elementIndex) {
+                const wLedMorseLetter_t *alphaNumeric = nullptr;
+                if ((**letter >= 'A') && (**letter <= 'Z')) {
+                    // Alpha
+                    unsigned int x = **letter - 'A';
+                    if (*elementIndex < gMorseAlpha[x].length) {
+                        alphaNumeric = &(gMorseAlpha[x]);
+                    }
+                } else if ((**letter >= '0') && (**letter <= '9')) {
+                    // Number
+                    unsigned int x = **letter - '0';
+                    if (*elementIndex < gMorseNumber[x].length) {
+                        alphaNumeric = &(gMorseNumber[x]);
+                    }
+                }
+                if (alphaNumeric) {
+                    if (lastLevelPercent > 0) {
+                        // If we were previously on then we need
+                        // a gap between the elements here
+                        *ticksWithinElement = (int) durationUnitTicks * W_LED_MORSE_DURATION_MULTIPLIER_GAP;
+                        // New element for next time
+                        (*elementIndex)++;
+                    } else {
+                        // Return the duration of the element we are on
+                        switch (alphaNumeric->element[*elementIndex]) {
+                            case W_LED_MORSE_DASH:
+                                *ticksWithinElement = (int) durationUnitTicks * W_LED_MORSE_DURATION_MULTIPLIER_DASH;
+                                break;
+                            case W_LED_MORSE_DOT:
+                                *ticksWithinElement = (int) durationUnitTicks * W_LED_MORSE_DURATION_MULTIPLIER_DOT;
+                                break;
+                            default:
+                                break;
+                        }
+                        // LED is on for a dot or a dash
+                        levelPercentOrErrorCode = levelPercent;
+                    }
+                } else {
+                    // letter gap
+                    *ticksWithinElement = (int) durationUnitTicks * W_LED_MORSE_DURATION_MULTIPLIER_GAP_LETTER;
+                    // New letter next time
+                    *elementIndex = 0;
+                    (*letter)++;
+                }
+            }
+        }
+    }
+
+    return levelPercentOrErrorCode;
+}
+
+// Move a Morse sequence on.
+// IMPORTANT: the LED context must be locked before this is called.
+static int updateMorse(wLed_t led,  wLedOverlayMorse_t **morse,
+                       uint64_t nowTick)
+{
+    int levelPercent = -EINVAL;
+
+    if (morse && *morse) {
+        if ((*morse)->ticksWithinElement <= 0) {
+            // Do the next thing, advancing elementIndex and
+            // potentially letter, setting ticksWithinElement
+            // and returning the new level
+            levelPercent = updateLevelMorse((*morse)->levelPercent,
+                                            (*morse)->lastLevelPercent,
+                                            (*morse)->durationUnitTicks,
+                                            (*morse)->durationGapRepeatTicks,
+                                            &((*morse)->letter),
+                                            &((*morse)->elementIndex),
+                                            &((*morse)->ticksWithinElement));
+            if ((*morse)->letter - (*morse)->sequenceStr >= (*morse)->sequenceLength) {
+                if ((*morse)->repeat > 0) {
+                    // At the end of the sequence, do repeat
+                    levelPercent = 0;
+                    (*morse)->letter = (*morse)->sequenceStr;
+                    (*morse)->repeat--;
+                } else {
+                    // Done repeating, free the morse overlay,
+                    // Leaving level as invalid so that the
+                    // underlying mode takes over again immediately
+                    free(*morse);
+                    *morse = nullptr;
+                }
+            }
+        } else {
+            // Keep the same level and reduce the tick within the element
+            levelPercent = (*morse)->lastLevelPercent;
+            (*morse)->ticksWithinElement -= ((int64_t) nowTick) - ((int64_t) (*morse)->lastTick);
+        }
+
+        if (*morse) {
+            (*morse)->lastTick = nowTick;
+            (*morse)->lastLevelPercent = levelPercent;
+        }
+    }
+
+    return levelPercent;
+}
+
 // A loop to drive the dynamic behaviours of the LEDs.
 static void ledLoop()
 {
@@ -420,9 +639,9 @@ static void ledLoop()
                     if (state->morse) {
                         // If we are running a morse sequence, that
                         // takes priority, including over the blink
-
-                        // TODO
-
+                        levelPercent = updateMorse((wLed_t) x,
+                                                   &(state->morse),
+                                                   gContext.nowTick);
                     }
                     if (levelPercent < 0) {
                         // Do the modes etc. if the level hasn't been
@@ -481,7 +700,9 @@ static int64_t msToTicks(int64_t milliseconds)
     return milliseconds / W_LED_TICK_TIMER_PERIOD_MS;
 }
 
-// Convert a time in ticks of the LED loop into milliseconds.
+// Convert a time in ticks of the LED loop into milliseconds;
+// this is generally only used for debug prints: don't forget
+// to print it as a %lld since it is an int64_t.
 static int64_t ticksToMs(int64_t ticks)
 {
     return ticks * W_LED_TICK_TIMER_PERIOD_MS;
@@ -697,17 +918,84 @@ static void msgHandlerLedModeBreathe(void *msgBody, unsigned int bodySize,
  * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyOverlayMorse_t
  * -------------------------------------------------------------- */
 
+// Update function called only by wLedMsgBodyOverlayMorse_t().
+// IMPORTANT: the LED context must be locked before this is called.
+static void msgHandlerLedModeMorseUpdate(wLed_t led,
+                                         wLedState_t *state,
+                                         uint64_t nowTick,
+                                         wLedOverlayMorse_t *overlaySrc)
+{
+    wLedOverlayMorse_t **overlayDst = &(state->morse);
+
+    if (*overlaySrc->sequenceStr) {
+        // Make sure there's memory
+        if (!*overlayDst) {
+            *overlayDst = (wLedOverlayMorse_t *) malloc(sizeof(**overlayDst));
+        }
+        if (*overlayDst) {
+            memset(*overlayDst, 0, sizeof(**overlayDst));
+            memcpy((*overlayDst)->sequenceStr, overlaySrc->sequenceStr, overlaySrc->sequenceLength);
+            (*overlayDst)->sequenceLength = overlaySrc->sequenceLength;
+            (*overlayDst)->levelPercent = overlaySrc->levelPercent;
+            (*overlayDst)->repeat = overlaySrc->repeat;
+            (*overlayDst)->levelPercent = overlaySrc->levelPercent;
+            (*overlayDst)->durationUnitTicks = overlaySrc->durationUnitTicks;
+            (*overlayDst)->durationGapRepeatTicks = overlaySrc->durationGapRepeatTicks;
+            (*overlayDst)->letter = (*overlayDst)->sequenceStr;
+            // This is W_LOG_DEBUG_MORE since it will be within a sequence
+            // of log prints in msgHandlerLedOverlayMorse()
+            W_LOG_DEBUG_MORE("; %s \"%s\", unit duration %lld ms",
+                             gLedStr[led], (*overlayDst)->sequenceStr,
+                             ticksToMs((*overlayDst)->durationUnitTicks));
+            if ((*overlayDst)->repeat > 0) {
+                W_LOG_DEBUG_MORE(" repeated %d time(s) with a gap of %lld ms",
+                                 (*overlayDst)->repeat,
+                                 ticksToMs((*overlayDst)->durationGapRepeatTicks));
+            }
+        }
+    } else {
+        // Empty string, which means stop, so just free memory
+        if (*overlayDst) {
+            free(*overlayDst);
+            *overlayDst = nullptr;
+        }
+        W_LOG_DEBUG_MORE(" Morse off");
+    }
+}
+
 // Message handler for wLedMsgBodyOverlayMorse_t.
 static void msgHandlerLedOverlayMorse(void *msgBody, unsigned int bodySize,
                                       void *context)
 {
     wLedMsgBodyOverlayMorse_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayMorse);
+    wLedOverlayMorse_t *overlay = &(msg->overlay);
     wLedContext_t *ledContext = (wLedContext_t *) context;
 
     assert(bodySize == sizeof(*msg));
 
-    // TODO
-    (void) ledContext;
+    W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyOverlayMorse_t (LED %d,"
+                      " %d%%)", ledContext->nowTick, msg->apply.led,
+                      overlay->levelPercent);
+
+    // Lock the LED context
+    ledContext->mutex.lock();
+
+    if (msg->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
+        // We're updating one LED
+        wLedState_t *state = &(ledContext->ledState[msg->apply.led]);
+        msgHandlerLedModeMorseUpdate(msg->apply.led, state, ledContext->nowTick, overlay);
+    } else {
+        // Update both LEDs
+        for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
+            wLedState_t *state = &(ledContext->ledState[x]);
+            msgHandlerLedModeMorseUpdate((wLed_t) x, state, ledContext->nowTick, overlay);
+        }
+    }
+    W_LOG_DEBUG_MORE(".");
+    W_LOG_DEBUG_END;
+
+    // Unlock the context again
+    ledContext->mutex.unlock();
 }
 
 /* ----------------------------------------------------------------
@@ -946,14 +1234,10 @@ int wLedModeBreatheSet(wLed_t led, int offsetLeftToRightMs,
 }
 
 // Set a Morse overlay.
-int wLedOverlayMorseSet(wLed_t led, int offsetLeftToRightMs,
-                        const char *sequenceStr,
+int wLedOverlayMorseSet(wLed_t led, const char *sequenceStr,
                         unsigned int repeat,
                         unsigned int levelPercent,
-                        unsigned int durationDotMs,
-                        unsigned int durationDashMs,
-                        unsigned int durationGapLetterMs,
-                        unsigned int durationGapWordMs,
+                        unsigned int durationUnitMs,
                         unsigned int durationGapRepeatMs)
 {
     int errorCode = -EBADF;
@@ -962,23 +1246,32 @@ int wLedOverlayMorseSet(wLed_t led, int offsetLeftToRightMs,
 
     if (gMsgQueueId >= 0) {
         errorCode = -EINVAL;
-        if (strlen(sequenceStr) < sizeof(overlay->sequenceStr)) {
-            msg.apply.led = led;
-            msg.apply.offsetLeftToRightMs = offsetLeftToRightMs;
-            strcpy(overlay->sequenceStr, sequenceStr);
-            overlay->repeat = repeat;
-            overlay->levelPercent = levelPercent;
-            overlay->durationDotTicks = msToTicks(durationDotMs);
-            overlay->durationDashTicks = msToTicks(durationDashMs);
-            overlay->durationGapLetterTicks = msToTicks(durationGapLetterMs);
-            overlay->durationGapWordTicks = msToTicks(durationGapWordMs);
-            overlay->durationGapRepeatTicks = msToTicks(durationGapRepeatMs);
-            errorCode = wMsgPush(gMsgQueueId,
-                                 W_LED_MSG_TYPE_OVERLAY_MORSE,
-                                 &msg, sizeof(msg));
-            if (errorCode >= 0) {
-                errorCode = 0;
+        msg.apply.led = led;
+        char *out = overlay->sequenceStr;
+        // -1 to leave room for the null terminator
+        if (sequenceStr &&
+            (strlen(sequenceStr) < sizeof(overlay->sequenceStr) - 1)) {
+            for (unsigned int x = 0; (x < sizeof(overlay->sequenceStr) - 1) &&
+                                     (*(sequenceStr + x) != 0); x++) {
+                if (morseValid(*(sequenceStr + x), out)) {
+                    out++;
+                    overlay->sequenceLength++;
+                }
             }
+        }
+        // Terminate the string
+        *out = 0;
+        // The sequence length includes the null terminator
+        overlay->sequenceLength++;
+        overlay->repeat = repeat;
+        overlay->levelPercent = levelPercent;
+        overlay->durationUnitTicks = msToTicks(durationUnitMs);
+        overlay->durationGapRepeatTicks = msToTicks(durationGapRepeatMs);
+        errorCode = wMsgPush(gMsgQueueId,
+                             W_LED_MSG_TYPE_OVERLAY_MORSE,
+                             &msg, sizeof(msg));
+        if (errorCode >= 0) {
+            errorCode = 0;
         }
     }
 
@@ -1085,7 +1378,7 @@ int wLedTest()
     W_LOG_INFO("%sSTART (will take a little while).", prefix);
 
     if (wUtilKeepGoing()) {
-        W_LOG_INFO("%sboth LEDs on at 100%.", prefix);
+        W_LOG_INFO("%sboth LEDs ramped to on at 100%%.", prefix);
         errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 100, 3000);
         if (errorCode == 0) {
             sleep(5);
@@ -1127,6 +1420,39 @@ int wLedTest()
     }
 
     if ((errorCode == 0) && wUtilKeepGoing()) {
+        const char *morseStr = "Hi!";
+        W_LOG_INFO("%stesting morse overlay: \"%s\".", prefix, morseStr);
+        errorCode = wLedOverlayMorseSet(W_LED_BOTH, morseStr);
+        if (errorCode == 0) {
+            sleep(5);
+            morseStr = "sos";
+            W_LOG_INFO("%stesting morse overlay: \"%s\", repeated once, right only.", prefix, morseStr);
+            errorCode = wLedOverlayMorseSet(W_LED_RIGHT, morseStr, 1);
+        }
+        if (errorCode == 0) {
+            sleep(10);
+            morseStr = "this is quite a long string";
+            W_LOG_INFO("%stesting morse overlay: \"%s\", cut short, left only.", prefix, morseStr);
+            errorCode = wLedOverlayMorseSet(W_LED_LEFT, morseStr);
+        }
+        if (errorCode == 0) {
+            sleep(2);
+            // Cut that short
+            errorCode = wLedOverlayMorseSet();
+        }
+        if (errorCode == 0) {
+            morseStr = "OK";
+            W_LOG_INFO("%stesting morse overlay: \"%s\", repeated twice.", prefix, morseStr);
+            errorCode = wLedOverlayMorseSet(W_LED_BOTH, morseStr, 2);
+        }
+        if (errorCode == 0) {
+            sleep(10);
+        }
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        W_LOG_INFO("%sshould now be back to breathe.", prefix);
+        sleep(10);
         W_LOG_INFO("%s%s LED ramped down, but with smaller amplitude and faster.",
                    prefix, gLedStr[W_LED_LEFT]);
         errorCode = wLedModeBreatheSet(W_LED_LEFT, 0, 2000, 0, 15, 5000);

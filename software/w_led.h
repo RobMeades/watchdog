@@ -35,7 +35,9 @@
 #endif
 
 #ifndef W_LED_TICK_TIMER_PERIOD_MS
-/** The LED tick timer period in milliseconds.
+/** The LED tick timer period in milliseconds.  If you change
+ * this you may also need to change W_LED_MORSE_DURATION_UNIT_MS
+ * below.
  */
 # define W_LED_TICK_TIMER_PERIOD_MS 20
 #endif
@@ -44,42 +46,64 @@
 /** The maximum length of a morse message to be flashed by an
  * LED, including room for a null terminator.
  */
-# define W_LED_MORSE_MAX_SIZE (32 + 1)
+# define W_LED_MORSE_MAX_SIZE (128 + 1)
 #endif
 
-#ifndef W_LED_MORSE_DURATION_DOT_MS
-/** The default duration of a dot when an LED is flashing morse,
- * in milliseconds.
+#ifndef W_LED_MORSE_DURATION_UNIT_MS
+/** The default unit duration when an LED is flashing morse,
+ * in milliseconds.  From
+ * https://en.wikipedia.org/wiki/Morse_code#/media/File:International_Morse_Code.svg,
+ * a dot is one unit, a dash is three units, the space between
+ * the dots and dashes within a letter is one unit, the space
+ * between letters is three units and the space between  words is
+ * seven units.
+ *
+ * The duration is chosen as a multiple of W_LED_TICK_TIMER_PERIOD_MS.
  */
-# define W_LED_MORSE_DURATION_DOT_MS 100
+# define W_LED_MORSE_DURATION_UNIT_MS (W_LED_TICK_TIMER_PERIOD_MS * 10)
 #endif
 
-#ifndef W_LED_MORSE_DURATION_DASH_MS
-/** The default duration of a dash when an LED is flashing morse,
- * in milliseconds.
+#ifndef W_LED_MORSE_DURATION_MULTIPLIER_DOT
+/** The multiplier of W_LED_MORSE_DURATION_UNIT_MS to form a
+ * dot.
  */
-# define W_LED_MORSE_DURATION_DASH_MS 500
+# define W_LED_MORSE_DURATION_MULTIPLIER_DOT 1
 #endif
 
-#ifndef W_LED_MORSE_DURATION_GAP_LETTER_MS
-/** The default duration of a gap between each letter when an LED
- * is flashing morse, in milliseconds.
+#ifndef W_LED_MORSE_DURATION_MULTIPLIER_DASH
+/** The multiplier of W_LED_MORSE_DURATION_UNIT_MS to form a
+ * dash.
  */
-# define W_LED_MORSE_DURATION_GAP_LETTER_MS 100
+# define W_LED_MORSE_DURATION_MULTIPLIER_DASH 3
 #endif
 
-#ifndef W_LED_MORSE_DURATION_GAP_WORD_MS
-/** The default duration of a gap between words when an LED is
- * flashing morse, in milliseconds.
+#ifndef W_LED_MORSE_DURATION_MULTIPLIER_GAP
+/** The multiplier of W_LED_MORSE_DURATION_UNIT_MS to form a
+ * gap between the dots and dashes within a letter.
  */
-# define W_LED_MORSE_DURATION_GAP_WORD_MS 500
+# define W_LED_MORSE_DURATION_MULTIPLIER_GAP 1
+#endif
+
+#ifndef W_LED_MORSE_DURATION_MULTIPLIER_GAP_LETTER
+/** The multiplier of W_LED_MORSE_DURATION_UNIT_MS to form a
+ * gap between letters.
+ */
+# define W_LED_MORSE_DURATION_MULTIPLIER_GAP_LETTER 3
+#endif
+
+#ifndef W_LED_MORSE_DURATION_MULTIPLIER_GAP_WORD
+/** The multiplier of W_LED_MORSE_DURATION_UNIT_MS to form a
+ * gap between words.  Since there will be a letter gap after
+ * the last letter of a word, this is only 4 rather than 7.
+ */
+# define W_LED_MORSE_DURATION_MULTIPLIER_GAP_WORD 4
 #endif
 
 #ifndef W_LED_MORSE_DURATION_GAP_REPEAT_MS
 /** The default duration of a gap between repeats when an LED is
  * flashing morse repeatedly, in milliseconds.
  */
-# define W_LED_MORSE_DURATION_GAP_REPEAT_MS 1000
+# define W_LED_MORSE_DURATION_GAP_REPEAT_MS 500
 #endif
 
 #ifndef W_LED_WINK_DURATION_MS
@@ -179,33 +203,34 @@ int wLedModeBreatheSet(wLed_t led = W_LED_BOTH,
  * repeats.
  *
  * @param led                   the LED or LEDs apply the overlay to.
- * @param offsetLeftToRightMs   the offset from the left to the right
- *                              LED in milliseconds (negative for the
- *                              other way); only employed if led is
- *                              W_LED_BOTH.
  * @param sequenceStr           the null-terminated sequence of characters
  *                              in the morse sequence, max length
  *                              W_LED_MORSE_MAX_SIZE (including null
- *                              terminator).
+ *                              terminator).  Lower case characters will
+ *                              be converted to upper case, any
+ *                              characters outside A to Z and 0 to 9 will
+ *                              be ignored.  Use nullptr to clear a previous
+ *                              morse overlay prematurely.
  * @param repeat                the number of times to repeat the morse
- *                              sequence.
- * @param durationDotMs         the duration of a dot in milliseconds.
- * @param durationDashMs        the duration of a dash in milliseconds.
- * @param durationGapLetterMs   the duration of a letter gap in milliseconds.
- * @param durationGapWordMs     the duration of a word gap in milliseconds.
+ *                              sequence; 0 means just do it once.
+ * @param levelPercent          the brightness to apply as a percentage.
+ * @param durationUnitMs        the duration of a unit in milliseconds,
+ *                              where, from
+ *                              https://en.wikipedia.org/wiki/Morse_code#/media/File:International_Morse_Code.svg,
+ *                              a dot is one unit, a dash is three units,
+ *                              the space between the dots and dashes within
+ *                              a letter is one unit, the space between
+ *                              letters is three units and the space between
+ *                              words is seven units.
  * @param durationGapRepeatMs   the duration of the gap between repeats of
  *                              a morse sequence in milliseconds.
  * @return                      zero on success else negative error code.
  */
 int wLedOverlayMorseSet(wLed_t led = W_LED_BOTH,
-                        int offsetLeftToRightMs = 0,
                         const char *sequenceStr = nullptr,
-                        unsigned int repeat = 1,
-                        unsigned int levelPercent = 0,
-                        unsigned int durationDotMs = W_LED_MORSE_DURATION_DOT_MS,
-                        unsigned int durationDashMs = W_LED_MORSE_DURATION_DASH_MS,
-                        unsigned int durationGapLetterMs = W_LED_MORSE_DURATION_GAP_LETTER_MS,
-                        unsigned int durationGapWordMs = W_LED_MORSE_DURATION_GAP_WORD_MS,
+                        unsigned int repeat = 0,
+                        unsigned int levelPercent = 100,
+                        unsigned int durationUnitMs = W_LED_MORSE_DURATION_UNIT_MS,
                         unsigned int durationGapRepeatMs = W_LED_MORSE_DURATION_GAP_REPEAT_MS);
 
 /** Add a wink overlay (i.e. an LED switching off for a brief period)
@@ -247,8 +272,8 @@ int wLedModeLevelScaleSet(wLed_t led = W_LED_BOTH, unsigned int percent = 100,
  */
 void wLedDeinit();
 
-/** Run through a test sequence for the LEDs: everything must already
- * have been initialised before this can be called.
+/** Run through a test sequence for the LEDs: wLedInit() must have
+ * been called and returned successfully for this to work.
  *
  * @return zero on success else negative error code.
  */

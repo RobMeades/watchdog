@@ -105,7 +105,8 @@ int main(int argc, char *argv[])
             errorCode = wMsgInit();
         }
         if (errorCode == 0) {
-            // Initialise control
+            // Now that messaging is available, we should
+            // be able to initialise control
             errorCode = wControlInit();
         }
         if (errorCode == 0) {
@@ -118,7 +119,8 @@ int main(int argc, char *argv[])
             errorCode = wCameraInit();
         }
         if (errorCode == 0) {
-            // Initialise image processing
+            // Now that the camera has been initialised, we
+            // should be able to initialise image processing
             errorCode = wImageProcessingInit();
         }
         if (errorCode == 0) {
@@ -128,7 +130,7 @@ int main(int argc, char *argv[])
                                W_UTIL_DIR_SEPARATOR +
                                commandLineParameters.outputFileName +
                                W_HLS_PLAYLIST_FILE_EXTENSION +
-                               W_UTIL_SYSTEM_SILENT).c_str() );
+                               W_UTIL_SYSTEM_SILENT).c_str());
             system(std::string("rm " +
                                commandLineParameters.outputDirectory +
                                W_UTIL_DIR_SEPARATOR +
@@ -140,7 +142,8 @@ int main(int argc, char *argv[])
             system(std::string("mkdir -p " +
                                commandLineParameters.outputDirectory).c_str());
 
-            // Initialise video encoding
+            // With image processing initialised, we should
+            // be able to initialise video encoding
             errorCode = wVideoEncodeInit(commandLineParameters.outputDirectory,
                                          commandLineParameters.outputFileName);
         }
@@ -149,10 +152,11 @@ int main(int argc, char *argv[])
             // Everything is now initialised, ready to go; kick things off
             // by starting control operations, which will requesting the
             // video to start encoding, which will in turn start the image
-            // processing code, which will in turn start the camera code
+            // processing code, which will in turn start the camera
             errorCode = wControlStart();
 
             // Cycle through the LED test while we're waiting to finish
+            W_LOG_INFO("running, press CTRL-C to stop.");
             while ((errorCode == 0) && wUtilKeepGoing()) {
                 errorCode = wLedTest();
             }

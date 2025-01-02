@@ -65,7 +65,7 @@ int wVideoEncodeInit(std::string outputDirectory, std::string outputFileName);
  */
 int wVideoEncodeStart();
 
-/** Stop video encoding; you don't have to call this function
+/** Stop video encoding; you do not have to call this function
  * on exit, wVideoEncodeDeinit() will tidy up appropriately.
  *
  * @return zero on success else negative error code.
