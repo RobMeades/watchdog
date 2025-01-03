@@ -305,25 +305,25 @@ static int viewToFrameAndLimit(const cv::Point *pointView, cv::Point *pointFrame
         pointFrame->y = -(pointView->y - W_VIEW_ORIGIN_AS_FRAME.y);
 
         if (pointFrame->x < 0) {
-            W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
-                       " negative (%d), limiting to zero.",
-                       pointFrame->x);
+            //W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
+            //           " negative (%d), limiting to zero.",
+            //           pointFrame->x);
             pointFrame->x = 0;
         } else if (pointFrame->x >= W_CAMERA_WIDTH_PIXELS) {
-            W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
-                       " too large (%d), limiting to %d.",
-                       pointFrame->x, W_CAMERA_WIDTH_PIXELS - 1);
+            //W_LOG_WARN("viewToFrameAndLimit() x value of frame is"
+            //           " too large (%d), limiting to %d.",
+            //           pointFrame->x, W_CAMERA_WIDTH_PIXELS - 1);
             pointFrame->x = W_CAMERA_WIDTH_PIXELS - 1;
         }
         if (pointFrame->y < 0) {
-            W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
-                       " negative (%d), limiting to zero.",
-                       pointFrame->y);
+            //W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
+            //           " negative (%d), limiting to zero.",
+            //           pointFrame->y);
             pointFrame->y = 0;
         } else if (pointFrame->y >= W_CAMERA_HEIGHT_PIXELS) {
-            W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
-                       " too large (%d), limiting to %d.",
-                       pointFrame->y, W_CAMERA_HEIGHT_PIXELS - 1);
+            //W_LOG_WARN("viewToFrameAndLimit() y value of frame is"
+            //           " too large (%d), limiting to %d.",
+            //           pointFrame->y, W_CAMERA_HEIGHT_PIXELS - 1);
             pointFrame->y = W_CAMERA_HEIGHT_PIXELS - 1;
         }
     }
@@ -344,25 +344,25 @@ static int frameToViewAndLimit(const cv::Point *pointFrame, cv::Point *pointView
         pointView->y = W_FRAME_ORIGIN_AS_VIEW.y - pointFrame->y;
 
         if (pointView->x < W_VIEW_LEFT) {
-            W_LOG_WARN("frameToViewAndLimit() x value of view is"
-                       " too small (%d), limiting to %d.",
-                       pointView->x, W_VIEW_LEFT);
+            //W_LOG_WARN("frameToViewAndLimit() x value of view is"
+            //           " too small (%d), limiting to %d.",
+            //           pointView->x, W_VIEW_LEFT);
             pointView->x = W_VIEW_LEFT;
         } else if (pointView->x > W_VIEW_RIGHT) {
-            W_LOG_WARN("frameToViewAndLimit() x value of view is"
-                       " too large (%d), limiting to %d.",
-                       pointView->x, W_VIEW_RIGHT);
+            //W_LOG_WARN("frameToViewAndLimit() x value of view is"
+            //           " too large (%d), limiting to %d.",
+            //           pointView->x, W_VIEW_RIGHT);
             pointView->x = W_VIEW_RIGHT;
         }
         if (pointView->y < W_VIEW_BOTTOM) {
-            W_LOG_WARN("frameToViewAndLimit() y value of view is"
-                       " too small (%d), limiting to %d.",
-                       pointView->y, W_VIEW_BOTTOM);
+            //W_LOG_WARN("frameToViewAndLimit() y value of view is"
+            //           " too small (%d), limiting to %d.",
+            //           pointView->y, W_VIEW_BOTTOM);
             pointView->y = W_VIEW_BOTTOM;
         } else if (pointView->y > W_VIEW_TOP) {
-            W_LOG_WARN("frameToViewAndLimit() y value of view is"
-                       " too large (%d), limiting to %d.",
-                       pointView->y, W_VIEW_TOP);
+            //W_LOG_WARN("frameToViewAndLimit() y value of view is"
+            //           " too large (%d), limiting to %d.",
+            //           pointView->y, W_VIEW_TOP);
             pointView->y = W_VIEW_TOP;
         }
     }
@@ -380,35 +380,35 @@ static bool rectGetInfoAndLimit(const cv::Rect *rect, wRectInfo_t *rectInfo)
         rectInfo->centreFrame = {rect->x + (rect->width >> 1),
                                  rect->y + (rect->height >> 1)};
         if (rectInfo->areaPixels > W_CAMERA_AREA_PIXELS) {
-            W_LOG_WARN("rectGetInfoAndLimit() area is"
-                       " too large (%d), limiting to %d.",
-                       rectInfo->areaPixels, W_CAMERA_AREA_PIXELS);
+            //W_LOG_WARN("rectGetInfoAndLimit() area is"
+            //           " too large (%d), limiting to %d.",
+            //           rectInfo->areaPixels, W_CAMERA_AREA_PIXELS);
             rectInfo->areaPixels = W_CAMERA_AREA_PIXELS;
             isLimited = true;
         }
         if (rectInfo->centreFrame.x >= W_CAMERA_WIDTH_PIXELS) {
-            W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
-                       " centre is too large (%d), limiting to %d.",
-                       rectInfo->centreFrame.x, W_CAMERA_WIDTH_PIXELS - 1);
+            //W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
+            //           " centre is too large (%d), limiting to %d.",
+            //           rectInfo->centreFrame.x, W_CAMERA_WIDTH_PIXELS - 1);
             rectInfo->centreFrame.x = W_CAMERA_WIDTH_PIXELS - 1;
             isLimited = true;
         } else if (rectInfo->centreFrame.x < 0) {
-            W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
-                       " is negative (%d), limiting to zero.",
-                       rectInfo->centreFrame.x);
+            //W_LOG_WARN("rectGetInfoAndLimit() x frame coordinate of rectangle"
+            //           " is negative (%d), limiting to zero.",
+            //           rectInfo->centreFrame.x);
             rectInfo->centreFrame.x = 0;
             isLimited = true;
         }
         if (rectInfo->centreFrame.y >= W_CAMERA_HEIGHT_PIXELS) {
-            W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
-                       " centre is too large (%d), limiting to %d.",
-                       rectInfo->centreFrame.y, W_CAMERA_HEIGHT_PIXELS - 1);
+            //W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
+            //           " centre is too large (%d), limiting to %d.",
+            //           rectInfo->centreFrame.y, W_CAMERA_HEIGHT_PIXELS - 1);
             rectInfo->centreFrame.y = W_CAMERA_HEIGHT_PIXELS - 1;
             isLimited = true;
         } else if (rectInfo->centreFrame.y < 0) {
-            W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
-                       " is negative (%d), limiting to zero.",
-                       rectInfo->centreFrame.y);
+            //W_LOG_WARN("rectGetInfoAndLimit() y frame coordinate of rectangle"
+            //           " is negative (%d), limiting to zero.",
+            //           rectInfo->centreFrame.y);
             rectInfo->centreFrame.y = 0;
             isLimited = true;
         }

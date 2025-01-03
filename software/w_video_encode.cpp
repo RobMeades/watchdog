@@ -419,14 +419,11 @@ int wVideoEncodeInit(std::string outputDirectory, std::string outputFileName)
                             // HLS client has to seek backwards from the front and can't find
                             // a key frame it may fail to play the stream
                             codecContext->gop_size = W_HLS_SEGMENT_DURATION_SECONDS * W_COMMON_FRAME_RATE_HERTZ;
-                            // From the discussion here:
+                            // See the discussion here on setting keyint_min:
                             // https://superuser.com/questions/908280/what-is-the-correct-way-to-fix-keyframes-in-ffmpeg-for-dash/1223359#1223359
-                            // ... the intended effect of setting keyint_min to twice
-                            // the GOP size is that key-frames can still be inserted
-                            // at a scene-cut but they don't become the kind of key-frame
-                            // that would cause a segment to end early; this keeps the rate
-                            // for the HLS protocol nice and steady at W_HLS_SEGMENT_DURATION_SECONDS
-                            codecContext->keyint_min = codecContext->gop_size * 2;
+                            // ...noting that the [current version of the] libx264
+                            // codec doesn't seem to have a keyint field.
+                            codecContext->keyint_min = codecContext->gop_size;
                             codecContext->pix_fmt = AV_PIX_FMT_YUV420P;
                             codecContext->codec_id = AV_CODEC_ID_H264;
                             codecContext->codec_type = AVMEDIA_TYPE_VIDEO;
