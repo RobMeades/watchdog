@@ -19,11 +19,6 @@
  * application.
  */
 
-// The CPP stuff.
-#include <string>
-#include <memory>
-#include <mutex>
-
 // The OpenCV stuff (for cv::Point).
 #include <opencv2/core/types.hpp>
 
@@ -52,7 +47,7 @@ typedef enum {
 } wControlMsgType_t;
 
 /** The message body structure corresponding to our one message:
- * W_VIDEO_ENCODE_MSG_TYPE_AVFRAME_PTR_PTR.
+ * W_CONTROL_MSG_TYPE_FOCUS_CHANGE.
  */
 typedef struct {
     cv::Point pointView;
@@ -88,9 +83,9 @@ static int gMsgQueueId = -1;
  * STATIC FUNCTIONS: MISC
  * -------------------------------------------------------------- */
 
-// Handle a focus change: conform to the function signature of
-// wImageProcessingFocusFunction_t, just put the focus change on
-// our queue.
+// Handle a focus change: conforms to the function signature of
+// wImageProcessingFocusFunction_t and just puts the focus change
+// on our queue.
 static int focusCallback(cv::Point pointView, int areaPixels)
 {
     int queueLengthOrErrorCode = -EBADF;

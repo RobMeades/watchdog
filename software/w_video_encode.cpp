@@ -26,7 +26,6 @@
 // The CPP stuff.
 #include <string>
 #include <memory>
-#include <mutex>
 
 extern "C" {
 // The FFMPEG stuff, in good 'ole C.
