@@ -318,10 +318,12 @@ int wCameraInit()
 
             // Configure the camera with the stream
             gContext->cameraCfg = camera->generateConfiguration({W_CAMERA_STREAM_ROLE});
-            gContext->cameraCfg = camera->generateConfiguration({W_CAMERA_STREAM_ROLE});
             cameraStreamConfigure(gContext->cameraCfg->at(0), W_CAMERA_STREAM_FORMAT,
                                   W_CAMERA_WIDTH_PIXELS,
                                   W_CAMERA_HEIGHT_PIXELS);
+
+            // Camera is assumed to be upside-down
+            gContext->cameraCfg->orientation = libcamera::Orientation::Rotate0 * libcamera::Transform::VFlip;
 
             // Validate and apply the configuration
             if (gContext->cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {
