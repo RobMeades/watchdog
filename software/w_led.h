@@ -252,10 +252,12 @@ int wLedOverlayWinkSet(wLed_t led,
  * @return               zero on success else negative error code.
  */
 int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute = W_LED_RANDOM_BLINK_RATE_PER_MINUTE,
-                                  int rangeSeconds = W_LED_RANDOM_BLINK_RANGE_SECONDS,
-                                  unsigned int durationMs = W_LED_RANDOM_BLINK_DURATION_MS);
+                              int rangeSeconds = W_LED_RANDOM_BLINK_RANGE_SECONDS,
+                              unsigned int durationMs = W_LED_RANDOM_BLINK_DURATION_MS);
 
-/** Scale the brightness of one or both LEDs
+/** Scale the brightness of one or both LEDs; note that this does not
+ * apply to the Morse overlay, which always has maximum brightness
+ * for readability.
  *
  * @param led         the LED to apply the scale factor to.
  * @param percent     the scale factor as a percentage.
@@ -263,8 +265,8 @@ int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute = W_LED_RANDOM_BLINK_RA
  *                    level to the new level in milliseconds.
  * @return            zero on success else negative error code.
  */
-int wLedModeLevelScaleSet(wLed_t led = W_LED_BOTH, unsigned int percent = 100,
-                          unsigned int rampMs = 0);
+int wLedLevelScaleSet(wLed_t led = W_LED_BOTH, unsigned int percent = 100,
+                      unsigned int rampMs = 0);
 
 /** Deinitialise LEDs and free resources.
  *

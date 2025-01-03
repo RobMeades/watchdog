@@ -371,13 +371,13 @@ static int randomBlink(wLedOverlayRandomBlink_t *randomBlink,
     return levelPercent;
 }
 
-// Move any level changes on.
+// Move on any level changes for constant mode or breathe mode.
 // IMPORTANT: the LED context must be locked before this is called.
-static int updateLevel(wLed_t led, wLedState_t *state,
-                       uint64_t nowTick, wLedLevel_t *levelAverage,
-                       unsigned int levelAmplitudePercent = 0,
-                       unsigned int rateMilliHertz = 0,
-                       uint64_t offsetLeftToRightTicks = 0)
+static int updateLevelMode(wLed_t led, wLedState_t *state,
+                           uint64_t nowTick, wLedLevel_t *levelAverage,
+                           unsigned int levelAmplitudePercent = 0,
+                           unsigned int rateMilliHertz = 0,
+                           uint64_t offsetLeftToRightTicks = 0)
 {
     int levelPercentOrErrorCode = -EINVAL;
 
@@ -452,7 +452,7 @@ static int updateLevel(wLed_t led, wLedState_t *state,
 
 // Check if the given character is an allowed Morse character
 // and, if it is a lower case one, convert it to upper case.
-static bool morseValid(char in, char *out)
+static bool validMorse(char in, char *out)
 {
     bool valid = false;
 
@@ -482,13 +482,13 @@ static bool morseValid(char in, char *out)
 // Get whether the LED should be on or not (as a percentage) for a new
 // morse element and how many ticks to do that for; letter and elementIndex
 // are advanced as appropriate, ticksWithinElement is set.
-static int updateLevelMorse(unsigned int levelPercent,
-                            unsigned int lastLevelPercent,
-                            unsigned int durationUnitTicks,
-                            unsigned int durationGapRepeatTicks,
-                            char **letter,
-                            unsigned int *elementIndex,
-                            int64_t *ticksWithinElement)
+static int updateMorse(unsigned int levelPercent,
+                       unsigned int lastLevelPercent,
+                       unsigned int durationUnitTicks,
+                       unsigned int durationGapRepeatTicks,
+                       char **letter,
+                       unsigned int *elementIndex,
+                       int64_t *ticksWithinElement)
 {
     int levelPercentOrErrorCode = -EINVAL;
 
@@ -561,8 +561,8 @@ static int updateLevelMorse(unsigned int levelPercent,
 
 // Move a Morse sequence on.
 // IMPORTANT: the LED context must be locked before this is called.
-static int updateMorse(wLed_t led, wLedOverlayMorse_t **morse,
-                       uint64_t nowTick)
+static int updateLevelMorse(wLed_t led, wLedOverlayMorse_t **morse,
+                            uint64_t nowTick)
 {
     int levelPercentOrErrorCode = -EINVAL;
 
@@ -571,13 +571,13 @@ static int updateMorse(wLed_t led, wLedOverlayMorse_t **morse,
             // Do the next thing, advancing elementIndex and
             // potentially letter, setting ticksWithinElement
             // and returning the new level
-            levelPercentOrErrorCode = updateLevelMorse((*morse)->levelPercent,
-                                                       (*morse)->lastLevelPercent,
-                                                       (*morse)->durationUnitTicks,
-                                                       (*morse)->durationGapRepeatTicks,
-                                                       &((*morse)->letter),
-                                                       &((*morse)->elementIndex),
-                                                       &((*morse)->ticksWithinElement));
+            levelPercentOrErrorCode = updateMorse((*morse)->levelPercent,
+                                                  (*morse)->lastLevelPercent,
+                                                  (*morse)->durationUnitTicks,
+                                                  (*morse)->durationGapRepeatTicks,
+                                                  &((*morse)->letter),
+                                                  &((*morse)->elementIndex),
+                                                  &((*morse)->ticksWithinElement));
             if ((*morse)->letter - (*morse)->sequenceStr >= (*morse)->sequenceLength) {
                 if ((*morse)->repeat > 0) {
                     // At the end of the sequence, do repeat
@@ -611,8 +611,8 @@ static int updateMorse(wLed_t led, wLedOverlayMorse_t **morse,
 
 // Wink.
 // IMPORTANT: the LED context must be locked before this is called.
-static int updateWink(wLed_t led, wLedOverlayWink_t **wink,
-                      uint64_t nowTick, int currentLevelPercent)
+static int updateLevelWink(wLed_t led, wLedOverlayWink_t **wink,
+                           uint64_t nowTick, int currentLevelPercent)
 {
     int levelPercentOrErrorCode = -EINVAL;
 
@@ -666,9 +666,9 @@ static void ledLoop()
                     if (state->morse) {
                         // If we are running a morse sequence, that
                         // takes priority, including over the blink
-                        levelPercent = updateMorse((wLed_t) x,
-                                                   &(state->morse),
-                                                   gContext.nowTick);
+                        levelPercent = updateLevelMorse((wLed_t) x,
+                                                        &(state->morse),
+                                                        gContext.nowTick);
                     }
                     if (levelPercent < 0) {
                         // Do the modes etc. if the level hasn't been
@@ -678,21 +678,21 @@ static void ledLoop()
                             {
                                 wLedModeConstant_t *mode = &(state->mode.constant);
                                 // Progress any change of level
-                                levelPercent = updateLevel((wLed_t) x, state,
-                                                            gContext.nowTick,
-                                                            &(mode->level));
+                                levelPercent = updateLevelMode((wLed_t) x, state,
+                                                               gContext.nowTick,
+                                                               &(mode->level));
                             }
                             break;
                             case W_LED_MODE_TYPE_BREATHE:
                             {
                                 wLedModeBreathe_t *mode = &(state->mode.breathe);
                                 // Progress any change of level
-                                levelPercent = updateLevel((wLed_t) x, state,
-                                                            gContext.nowTick,
-                                                            &(mode->levelAverage),
-                                                            mode->levelAmplitudePercent,
-                                                            mode->rateMilliHertz,
-                                                            mode->offsetLeftToRightTicks);
+                                levelPercent = updateLevelMode((wLed_t) x, state,
+                                                               gContext.nowTick,
+                                                               &(mode->levelAverage),
+                                                               mode->levelAmplitudePercent,
+                                                               mode->rateMilliHertz,
+                                                               mode->offsetLeftToRightTicks);
                             }
                             break;
                             default:
@@ -700,9 +700,9 @@ static void ledLoop()
                         }
                         // Wink overlays the mode
                         if (state->wink) {
-                            levelPercent = updateWink((wLed_t) x, &(state->wink),
-                                                      gContext.nowTick,
-                                                      levelPercent);
+                            levelPercent = updateLevelWink((wLed_t) x, &(state->wink),
+                                                           gContext.nowTick,
+                                                           levelPercent);
                         }
                     }
                     // Apply the new level
@@ -728,8 +728,8 @@ static int64_t msToTicks(int64_t milliseconds)
 }
 
 // Convert a time in ticks of the LED loop into milliseconds;
-// this is generally only used for debug prints: don't forget
-// to print it as a %lld since it is an int64_t.
+// this is only used for debug prints: don't forget to print
+// it as a %lld since it is an int64_t.
 static int64_t ticksToMs(int64_t ticks)
 {
     return ticks * W_LED_TICK_TIMER_PERIOD_MS;
@@ -778,11 +778,15 @@ static uint64_t levelChangeIntervalSet(unsigned int rampMs,
         if (changePercent) {
             // Set the change per interval
             *changePercent = levelChangePercent;
-            if (changeInterval > 0) {
+            if (changePeriod > 0) {
                 *changePercent = levelChangePercent * changeInterval / changePeriod;
                 if (*changePercent == 0) {
                     // Avoid rounding errors leaving us in limbo
-                    *changePercent = 1;
+                    if (levelChangePercent > 0) {
+                        *changePercent = 1;
+                    } else {
+                        *changePercent = -1;
+                    }
                 }
             }
         }
@@ -1038,7 +1042,7 @@ static void msgHandlerLedOverlayWinkUpdate(wLed_t led,
 {
     wLedOverlayWink_t **overlayDst = &(state->wink);
 
-    // Make sure there's memory; this will be free()ed by updateWink()
+    // Make sure there's memory; this will be free()ed by updateLevelWink()
     if (!*overlayDst) {
         *overlayDst = (wLedOverlayWink_t *) malloc(sizeof(**overlayDst));
     }
@@ -1146,6 +1150,59 @@ static void msgHandlerLedOverlayRandomBlink(void *msgBody,
  * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyLevelScale_t
  * -------------------------------------------------------------- */
 
+// Update function called only by msgHandlerLedLevelScale().
+// IMPORTANT: the LED context must be locked before this is called.
+static void msgHandlerLedLevelUpdate(wLed_t led,
+                                     wLedState_t *state,
+                                     uint64_t nowTick,
+                                     wLedMsgBodyLevelScale_t *msg)
+{
+    switch (state->modeType) {
+        case W_LED_MODE_TYPE_CONSTANT:
+        {
+            wLedModeConstant_t *modeDst = &(state->mode.constant);
+            modeDst->level.targetPercent = limitLevel((modeDst->level.targetPercent *
+                                                       msg->percent) / 100);
+            modeDst->level.changeStartTick = levelChangeStartSet(nowTick,
+                                                                 &(msg->apply),
+                                                                 led);
+            modeDst->level.changeInterval = levelChangeIntervalSet(msg->rampMs,
+                                                                   modeDst->level.targetPercent,
+                                                                   state->levelAveragePercent,
+                                                                   &(modeDst->level.changePercent));
+            // This is W_LOG_DEBUG_MORE since it will be within a sequence
+            // of log prints in msgHandlerLedModeBreathe()
+            W_LOG_DEBUG_MORE(" (so start tick %06lld, interval %lld tick(s),"
+                             " change per tick %d%%)",
+                             modeDst->level.changeStartTick,
+                             modeDst->level.changeInterval,
+                             modeDst->level.changePercent);
+        }
+        break;
+        case W_LED_MODE_TYPE_BREATHE:
+        {
+            wLedModeBreathe_t *modeDst = &(state->mode.breathe);
+            modeDst->levelAverage.targetPercent = limitLevel((modeDst->levelAverage.targetPercent *
+                                                              msg->percent) / 100);
+            modeDst->levelAverage.changeStartTick = levelChangeStartSet(nowTick,
+                                                                        &(msg->apply),
+                                                                        led);
+            modeDst->levelAverage.changeInterval = levelChangeIntervalSet(msg->rampMs,
+                                                                          modeDst->levelAverage.targetPercent,
+                                                                          state->levelAveragePercent,
+                                                                          &(modeDst->levelAverage.changePercent));
+            W_LOG_DEBUG_MORE(" (so start tick %06lld, interval %lld tick(s),"
+                             " change per tick %d%%)",
+                             modeDst->levelAverage.changeStartTick,
+                             modeDst->levelAverage.changeInterval,
+                             modeDst->levelAverage.changePercent);
+        }
+        break;
+        default:
+            break;
+    };
+}
+
 // Message handler for wLedMsgBodyLevelScale_t.
 static void msgHandlerLedLevelScale(void *msgBody, unsigned int bodySize,
                                     void *context)
@@ -1155,8 +1212,35 @@ static void msgHandlerLedLevelScale(void *msgBody, unsigned int bodySize,
 
     assert(bodySize == sizeof(*msg));
 
-    // TODO
-    (void) ledContext;
+    W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyLevelScale_t (LED %d,"
+                      " scale factor %d%%, ramp %d ms)", ledContext->nowTick,
+                      msg->apply.led, msg->percent,  msg->rampMs);
+
+    // Lock the LED context
+    ledContext->mutex.lock();
+
+    if (msg->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
+        // We're updating one LED
+        wLedState_t *state = &(ledContext->ledState[msg->apply.led]);
+        W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
+                         gLedStr[msg->apply.led], state->modeType,
+                         state->levelAveragePercent, state->lastChangeTick);
+        msgHandlerLedLevelUpdate(msg->apply.led, state, ledContext->nowTick, msg);
+    } else {
+        // Update both LEDs
+        for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
+            wLedState_t *state = &(ledContext->ledState[x]);
+            W_LOG_DEBUG_MORE("; %s LED mode %d, level %d%%, last change %06lld",
+                             gLedStr[x], state->modeType,
+                             state->levelAveragePercent, state->lastChangeTick);
+            msgHandlerLedLevelUpdate((wLed_t) x, state, ledContext->nowTick, msg);
+        }
+    }
+    W_LOG_DEBUG_MORE(".");
+    W_LOG_DEBUG_END;
+
+    // Unlock the context again
+    ledContext->mutex.unlock();
 }
 
 /* ----------------------------------------------------------------
@@ -1327,7 +1411,7 @@ int wLedOverlayMorseSet(wLed_t led, const char *sequenceStr,
             (strlen(sequenceStr) < sizeof(overlay->sequenceStr) - 1)) {
             for (unsigned int x = 0; (x < sizeof(overlay->sequenceStr) - 1) &&
                                      (*(sequenceStr + x) != 0); x++) {
-                if (morseValid(*(sequenceStr + x), out)) {
+                if (validMorse(*(sequenceStr + x), out)) {
                     out++;
                     overlay->sequenceLength++;
                 }
@@ -1400,8 +1484,8 @@ int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute,
 }
 
 // Scale the level of one or both LEDs.
-int wLedModeLevelScaleSet(wLed_t led, unsigned int percent,
-                          unsigned int rampMs)
+int wLedLevelScaleSet(wLed_t led, unsigned int percent,
+                      unsigned int rampMs)
 {
     int errorCode = -EBADF;
     wLedMsgBodyLevelScale_t msg = {};
@@ -1573,6 +1657,7 @@ int wLedTest()
             }
         }
     }
+
     if ((errorCode == 0) && wUtilKeepGoing()) {
         // Switch both LEDs off between tests
         errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 0);
@@ -1596,10 +1681,41 @@ int wLedTest()
                 errorCode = wLedModeConstantSet(W_LED_RIGHT, 0, 0, 1000);
                 if (errorCode == 0) {
                     sleep(2);
-                    // Switch both LEDs off at the end
-                    errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 0);
+                }
+            }
+        }
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        // Switch both LEDs off between tests
+        errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 0);
+        if (errorCode == 0) {
+            sleep(2);
+        }
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        W_LOG_INFO("%stesting level scaling.", prefix);
+        errorCode = wLedModeConstantSet();
+        if (errorCode == 0) {
+            sleep(2);
+            W_LOG_INFO("%s%s LED brought down by 90%% over two seconds.", prefix, gLedStr[W_LED_LEFT]);
+            errorCode = wLedLevelScaleSet(W_LED_LEFT, 10, 2000);
+            if (errorCode == 0) {
+                sleep(5);
+                W_LOG_INFO("%s%s LED brought down by 70%% over two seconds.", prefix, gLedStr[W_LED_RIGHT]);
+                errorCode = wLedLevelScaleSet(W_LED_RIGHT, 30, 2000);
+                if (errorCode == 0) {
+                    sleep(5);
+                    W_LOG_INFO("%s%s brightened by 200%% over 5 seconds.", prefix, gLedStr[W_LED_BOTH]);
+                    errorCode = wLedLevelScaleSet(W_LED_BOTH, 200, 5000);
                     if (errorCode == 0) {
-                        sleep(1);
+                        sleep(10);
+                        W_LOG_INFO("%s%s ramped down to nothing over 5 seconds.", prefix, gLedStr[W_LED_BOTH]);
+                        errorCode = wLedLevelScaleSet(W_LED_BOTH, 0, 5000);
+                        if (errorCode == 0) {
+                            sleep(10);
+                        }
                     }
                 }
             }
