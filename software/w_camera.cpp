@@ -322,8 +322,9 @@ int wCameraInit()
                                   W_CAMERA_WIDTH_PIXELS,
                                   W_CAMERA_HEIGHT_PIXELS);
 
-            // Camera is assumed to be upside-down
+#if W_CAMERA_UPSIDE_DOWN
             gContext->cameraCfg->orientation = libcamera::Orientation::Rotate0 * libcamera::Transform::VFlip;
+#endif
 
             // Validate and apply the configuration
             if (gContext->cameraCfg->validate() != libcamera::CameraConfiguration::Valid) {

@@ -1,5 +1,5 @@
 # Introduction
-Here you will find all of the software aspects, running in C++, using [libcamera](https://libcamera.org/), [OpenCV](https://opencv.org/) and [FFmpeg](https://www.ffmpeg.org/).  I did try doing this stuff from Python on a PiZero2W but it was taking soooo lonnnngggggg: up to 60&nbsp;seconds just to import the Python modules, hence I switched to C instead.  Then I found that the PiZero2W wasn't quite up to running an H.264 video encoder as well as capturing the video: at 854x480-YUV420 resolution it was getting something like 22&nbsp;FPS through the encoder with some encode durations being several seconds, at 1920x1080-YUV420 it would often stall entirely.  So I made room in the watchdog for a Pi&nbsp;5 with 8&nbsp;gigabytes of RAM (a steady 25&nbsp;fps encoded video at 1920x1080-YUV420, worst-case encode time 60&nbsp;ms) but I continued with C++ 'cos I'd already passed through that pain barrier.
+Here you will find all of the software aspects, running in C++, using [libcamera](https://libcamera.org/), [OpenCV](https://opencv.org/) and [FFmpeg](https://www.ffmpeg.org/).  I did try doing this stuff from Python on a PiZero2W but it was taking soooo lonnnngggggg: up to 60&nbsp;seconds just to import the Python modules, hence I switched to C instead.  Then I found that the PiZero2W wasn't quite up to running an H.264 video encoder as well as capturing the video: at 854x480-YUV420 resolution it was getting something like 22&nbsp;FPS through the encoder with some encode durations being several seconds, at 1920x1080-YUV420 it would often stall entirely.  So I made room in the watchdog for a Pi&nbsp;5 with 8&nbsp;gigabytes of RAM (a steady 25&nbsp;fps encoded video at 1920x1080-YUV420, worst-case encode time 60&nbsp;ms, though by the time everything else was running I had scaled that to 950x540-YUV420 and 15&nbsp;fps) but I continued with C++ 'cos I'd already passed through that pain barrier.
 
 Note that these instructions are for the V3 Pi camera; this camera can ONLY be accessed through `libcamera`, which the Python module [PiCamera2](https://github.com/raspberrypi/picamera2) wraps, and which [OpenCV](https://opencv.org/) does NOT understand natively (different from the V2 camera, which [OpenCV](https://opencv.org/) could use directly).
 
@@ -20,7 +20,7 @@ The files, and structure, are as follows:
 - each API is formed by a pair of `.h`/.`cpp` files: so for instance the `wCamera` API is contained in the [w_camera.h](w_camera.h)/[w_camera.cpp](w_camera.cpp) file pair,
 - an API may include a pair of `wXxxInit()`/`wXxxDeinit()` functions that should be called at start/end of day by `main()`,
 - the important APIs are [wCamera](w_camera.h), [wImageProcessing](w_image_processing.h) and [wVideoEncode](w_video_encode.h): [wVideoEncode](w_video_encode.h) is the start, so calling `wVideoEncodeStart()` will in turn call `wImageProcessingStart()`, which will in turn call `wCameraStart()` and image frames will be taken from the camera, processed and written to HLS format video files (see also [w_hls.h](w_hls.h)) in a directory of your choice,
-- the [wMsg](w_msg.h) API forms a key piece of infrastucture, allowing data and commands to be queued \[by the APIs themselves under a function-calling shim\], providing asynchronous behaviour.
+- the [wMsg](w_msg.h) API forms a key piece of infrastructure, allowing data and commands to be queued \[by the APIs themselves under a function-calling shim\], providing asynchronous behaviour.
 - the [wMotor](w_motor.h) API controls the stepper motors and the [wLed](w_led.h) API controls the LEDs that form the watchdog's eyes,
 - the [wGpio](w_gpio.h) API provides access to the Raspberry Pi's GPIO pins for [wMotor](w_motor.h) and [wLed](w_led.h),
 - miscellaneous utils can be found in [wUtil](w_util.h), debug logging in [wLog](w_log.h) and a small number of common definitions in [wCommon](w_common.h),
@@ -104,15 +104,15 @@ Install [OpenCV](https://opencv.org/) and its development libraries with:
 sudo apt install python3-opencv libopencv-dev
 ```
 
+## FFmpeg
+
 Install the dependencies for [FFmpeg](https://www.ffmpeg.org/) as follows; you probably don't actually need half of these but it does no harm to have them:
 
 ```
 sudo apt install imagemagick libasound2-dev libass-dev libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev libfreetype6-dev libgmp-dev libmp3lame-dev libopencore-amrnb-dev libopencore-amrwb-dev libopus-dev librtmp-dev libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-net-dev libsdl2-ttf-dev libsnappy-dev libsoxr-dev libssh-dev libtool libv4l-dev libva-dev libvdpau-dev libvo-amrwbenc-dev libvorbis-dev libwebp-dev libx264-dev libx265-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb1-dev libxml2-dev lzma-dev nasm python3-dev python3-pip texinfo yasm zlib1g-dev libdrm-dev
 ```
 
-## FFmpeg
-
-Fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) with:
+Then fetch and compile what we need from [FFmpeg](https://www.ffmpeg.org/) with:
 
 ```
 cd ~
@@ -127,7 +127,7 @@ Note: for the PiZero2W replace `--arch=arm64` with `--arch=armel`.
 
 ## Apache
 
-As a browser interface, being a traditionalist, I would suggest installing Apache with:
+To provide a browser interface, being ancient, I would suggest installing Apache with:
 
 ```
 sudo apt install apache2
@@ -147,7 +147,9 @@ sudo a2enmod headers
 
 ...to enable the headers module of Apache and see the additional `Header set` lines in the Apache configuration file below.
 
-Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.  You probably also need to add in the same Apache configuration file:
+Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.
+
+You probably also need to add, in the same Apache configuration file:
 
 ```
         <Directory your_document_root>
@@ -159,7 +161,7 @@ Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRo
         </Directory>
 ```
 
-Whatever directory you choose, to make it accessible to the default Apache user, `www-data`:
+Whatever directory you choose, to make it accessible to the default Apache user, "`www-data`":
 
 ```
 sudo usermod -a -G www-data <your_user>
@@ -281,4 +283,4 @@ sudo journalctl -u watchdog
 ```
 
 # A Note On Developing
-I edited the source files on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put *` the files to the Pi before compiling in an `ssh` terminal to the Pi.  You can also open files in `nano` on the Pi and `CTRL-O` to write the file, but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line endings; that said, the `meson` build system and GCC worked fine with Windows line endings on Linux.
+I edited the source files on a PC (in [Notepad++](https://notepad-plus-plus.org/)) and `sftp`->`put *` the files to the Pi before compiling in an `ssh` terminal to the Pi.  You can also open files in `nano` on the Pi and `CTRL-O` to write the file, but press `ALT-D` before you press `<enter>` to commit the write to change to Linux line-endings; that said, the `meson` build system and GCC worked fine with Windows line-endings on Linux.

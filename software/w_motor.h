@@ -41,22 +41,41 @@
 
 #ifndef W_MOTOR_ROTATE_DIRECTION_SENSE
 /** The direction that a "1" on the rotate motor's direction
- * pin causes the motor to move: 1 since a 1 on the rotate
+ * pin causes the motor to move: -1 since a -1 on the rotate
  * motors direction pin causes it to move towards the maximum,
- * which is W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT (otherwise it would
- * need to be -1).
+ * which is W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT (otherwise it would
+ * need to be 1).
  */
-# define W_MOTOR_ROTATE_DIRECTION_SENSE 1
+# define W_MOTOR_ROTATE_DIRECTION_SENSE -1
 #endif
 
 #ifndef W_MOTOR_VERTICAL_DIRECTION_SENSE
 /** The direction that a "1" on the vertical motor's direction
- * pin causes the motor to move: 1 since a -1 on the vertical
+ * pin causes the motor to move: -1 since a -1 on the vertical
  * motors direction pin causes it to move towards the maximum,
  * which is W_GPIO_PIN_INPUT_LOOK_UP_LIMIT (otherwise it would
- * need to be -1).
+ * need to be 1).
  */
 # define W_MOTOR_VERTICAL_DIRECTION_SENSE -1
+#endif
+
+#ifndef W_MOTOR_ROTATE_HAS_THROW
+/** The rotation motor is directly connected to the world, it
+ * has no "throw" to take accout of.
+ */
+# define W_MOTOR_ROTATE_HAS_THROW false
+#endif
+
+#ifndef W_MOTOR_VERTICAL_HAS_THROW
+/** The vertical motor is connected to the world through cog
+ * wheels and hence throw needs to be taken into account,
+ * i.e. the number of steps to change direction in what is
+ * inevitably a somewhat loosely-coupled mechanism.
+ *
+ * TODO: however, this is currently not doing what I want it
+ * to do, hence setting false.
+ */
+# define W_MOTOR_VERTICAL_HAS_THROW false
 #endif
 
 #ifndef W_MOTOR_DIRECTION_WAIT_MS
@@ -78,7 +97,7 @@
 /** How many steps to stay clear of the limit switches in normal
  * operation.
  */
-# define W_MOTOR_LIMIT_MARGIN_STEPS 10
+# define W_MOTOR_LIMIT_MARGIN_STEPS 50
 #endif
 
 /* ----------------------------------------------------------------
@@ -116,9 +135,13 @@ typedef struct {
     int pinMin;   // The pin which, when pulled low, indicates min has been reached
     int senseDirection; // 1 if a 1 at pinDirection moves towards max, else -1
     wMotorRestPosition_t restPosition;
+    bool hasThrow; // True if the motor is connected to the world through cogs etc.
+    int lastUnitStep; // Needed since Linux doesn't allow the state of an output pin to be read
     bool calibrated; // Ignore the remaining values if this is false
-    int max;      // A calibrated limit
-    int min;      // A calibrated limit
+    int max;      // The positive calibrated limit in steps
+    int min;      // The negative calibrated limit in steps
+    int throwToPositive; // The calibrated number of steps it takes to change direction, -ve to +ve
+    int throwToNegative; // The calibrated number ot steps it takes to change direction, +ve to -ve
     int now;
 } wMotor_t;
 
@@ -140,6 +163,12 @@ int wMotorInit();
  * actually stepped in stepsTaken; being short on steps does not
  * constitute an error.  Will only move if calibrated unless
  * evenIfUnCalibrated is true.
+ *
+ * For W_MOTOR_TYPE_VERTICAL a positive step moves the watchdog to
+ * look upwards, a negative stop to look downwards.
+ *
+ * For W_MOTOR_TYPE_ROTATE a positive step moves the watchdog to
+ * look to the right, a negative step to look to the left.
  *
  * @param type               the motor type to move.
  * @param steps              the number of steps to move the motor.
@@ -172,6 +201,14 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken = nullptr);
  * @return     zero on success else negative error code.
  */
 int wMotorCalibrate(wMotorType_t type);
+
+/** Get the calibrated range of a motor; will return 0 if a motor
+ * is uncalibrated.
+ *
+ * @param type the motor type to get the range of.
+ * @return     the range in steps else negative error code.
+ */
+int wMotorRangeGet(wMotorType_t type);
 
 /** Deinitialise the motors: this will disable the motors and no
  * movement will be possible until motorInit() is called once

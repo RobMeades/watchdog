@@ -1522,6 +1522,18 @@ void wLedDeinit()
         gTimerFd = -1;
         if (gContext.randomBlink) {
             free(gContext.randomBlink);
+            gContext.randomBlink = nullptr;
+        }
+        for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gContext.ledState); x++) {
+            wLedState_t *state = &(gContext.ledState[x]);
+            if (state->morse) {
+                free(state->morse);
+                state->morse = nullptr;
+            }
+            if (state->wink) {
+                free(state->wink);
+                state->wink = nullptr;
+            }
         }
     }
 }

@@ -64,6 +64,10 @@
 # define W_UTIL_MONITOR_TIMING_LENGTH 1000
 #endif
 
+/** Return the absolute value of a signed integer
+ */
+# define W_UTIL_ABS(x) ((x) >= 0 ? (x) : -(x))
+
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
@@ -83,7 +87,7 @@ typedef struct {
     std::chrono::time_point<std::chrono::high_resolution_clock> previousTimestamp;
     std::chrono::duration<double> gap[W_UTIL_MONITOR_TIMING_LENGTH];
     unsigned int numGaps;
-    // This is  non-NULL only when duration = W_MONITOR_TIMING_LENGTH
+    // This is non-NULL only when duration has W_MONITOR_TIMING_LENGTH entries
     std::chrono::duration<double> *oldestGap;
     std::chrono::duration<double> total;
     std::chrono::duration<double> largest;

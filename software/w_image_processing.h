@@ -46,7 +46,10 @@
  * produced by the image processing, used by
  * wImageProcessingFocusConsume().
  *
- * @param pointView   the focus point in view coordinates.
+ * @param pointView   the focus point in view coordinates; view
+ *                    coordinates have their origin in the
+ *                    centre of the screen with the axes just like
+ *                    a conventional X/Y graph.
  * @param areaPixels  the area of the focus point in pixels.
  */
 typedef int (wImageProcessingFocusFunction_t)(cv::Point pointView,
@@ -83,9 +86,11 @@ int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback)
 /** Set the focus point to be drawn on the processed image.
  *
  * @param pointView   a pointer to the focus point in view
- *                    coordinates, use nullptr to set the focus
- *                    point as invalid (in which case it will
- *                    not appear on the image).
+ *                    coordinates (i.e just like an X/Y graph
+ *                    with the origin in the centre of the screen),
+ *                    use nullptr to set the focus point as
+ *                    invalid (in which case it will not be
+ *                    drawn on the image).
  * @return            zero on success else negative error code.
  */
 int wImageProcessingFocusSet(const cv::Point *pointView);

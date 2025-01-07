@@ -147,6 +147,10 @@ int wCommandLineParse(int argc, char *argv[],
                             parameters->outputFileName = str;
                         }
                     }
+                // Test for flagStaticCamera
+                } else if (std::string(argv[x]) == "-s") {
+                    parameters->flagStaticCamera = true;
+                    errorCode = 0;
                 }
                 x++;
             }
@@ -176,6 +180,9 @@ void wCommandLinePrintChoices(wCommandLineParameters_t *choices)
         }
         std::cout << ", output files will be named "
                   << choices->outputFileName;
+        if (choices->flagStaticCamera) {
+            std::cout << ", head will not track";
+        }
     }
     std::cout << "." << std::endl;
 }
@@ -204,6 +211,12 @@ void wCommandLinePrintHelp(wCommandLineParameters_t *defaults)
               <<  W_HLS_SEGMENT_FILE_EXTENSION << " files)";
     if (defaults && !defaults->outputFileName.empty()) {
         std::cout << " (default " << defaults->outputFileName << ")";
+    }
+    std::cout << "." << std::endl;
+
+    std::cout << "  -s static camera (head will move for calibration but not thereafter)";
+    if (defaults) {
+        std::cout << " (default " << (defaults->flagStaticCamera ? "on)" : "off)");
     }
     std::cout << "." << std::endl;
     std::cout << "Note that this program needs to be able to access HW and";

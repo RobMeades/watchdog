@@ -42,6 +42,7 @@
  * -------------------------------------------------------------- */
 
 // Movement tracking: order must match wMovementType_t.
+// The compiler will initialise any uninitialised fields to zero.
 static wMotor_t gMotor[] = {{.name = "vertical",
                              .safetyLimit = W_MOTOR_VERTICAL_MAX_STEPS,
                              .pinDisable = W_GPIO_PIN_OUTPUT_VERTICAL_DISABLE,
@@ -51,16 +52,18 @@ static wMotor_t gMotor[] = {{.name = "vertical",
                              .pinMin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
                              .senseDirection = W_MOTOR_VERTICAL_DIRECTION_SENSE,
                              .restPosition = W_MOTOR_REST_POSITION_MAX,
+                             .hasThrow = W_MOTOR_VERTICAL_HAS_THROW,
                              .calibrated = false},
                             {.name = "rotate",
                              .safetyLimit = W_MOTOR_ROTATE_MAX_STEPS,
                              .pinDisable = W_GPIO_PIN_OUTPUT_ROTATE_DISABLE,
                              .pinDirection = W_GPIO_PIN_OUTPUT_ROTATE_DIRECTION,
                              .pinStep = W_GPIO_PIN_OUTPUT_ROTATE_STEP,
-                             .pinMax = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
-                             .pinMin = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
+                             .pinMax = W_GPIO_PIN_INPUT_LOOK_RIGHT_LIMIT,
+                             .pinMin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
                              .senseDirection = W_MOTOR_ROTATE_DIRECTION_SENSE,
                              .restPosition = W_MOTOR_REST_POSITION_CENTRE,
+                             .hasThrow = W_MOTOR_ROTATE_HAS_THROW,
                              .calibrated = false}};
 
 // Array of names for the rest positions, just for printing; must be in the
@@ -104,39 +107,80 @@ static int enableAll(bool enableNotDisable = true)
     return errorCode;
 }
 
-// Perform a step; will not move if at a limit; being at
-// a limit does not constitute an error: supply stepTaken
-// if you want to know the outcome.
-static int step(wMotor_t *motor, int steps = 1, int *stepsTaken = nullptr)
+// Set direction.
+static int directionSet(wMotor_t *motor, int step)
 {
     int errorCode = -EINVAL;
 
-    if (stepsTaken) {
-        *stepsTaken = 0;
+    if (motor && (step <= 1) && (step >= -1)) {
+        unsigned int levelDirection = 0;
+        if (step >= 0) {
+            levelDirection = step;
+        }
+
+        if (motor->senseDirection < 0) {
+            levelDirection = !levelDirection;
+        }
+
+        errorCode = wGpioSet(motor->pinDirection, levelDirection);
+        if (errorCode == 0) {
+            motor->lastUnitStep = step;
+        }
+    }
+
+    return errorCode;
+}
+
+// Get the appropriate value for the additional "throw" steps
+// based on the direction we are now going in.
+static int throwGet(wMotor_t *motor, int steps, int *stepsForThrow)
+{
+    int errorCode = -EINVAL;
+
+    if (motor) {
+        errorCode = 0;
+        if (stepsForThrow) {
+            *stepsForThrow = 0;
+            // If the signs are different, we're asking for
+            // a different direction to that set and hence
+            // can allow for throw
+            if ((steps * motor->lastUnitStep) < 0) {
+                if (steps > 0) {
+                    *stepsForThrow = motor->throwToPositive;
+                } else if (steps < 0) {
+                    *stepsForThrow = motor->throwToNegative;
+                }
+            }
+        }
+    }
+
+    return errorCode;
+}
+
+// Perform a step; will not move if at a limit; being at
+// a limit does not constitute an error: supply stepTaken
+// if you want to know the outcome.
+static int stepOnce(wMotor_t *motor, int stepUnit = 1, int *stepTaken = nullptr)
+{
+    int errorCode = -EINVAL;
+
+    if (stepTaken) {
+        *stepTaken = 0;
     }
 
     if (motor) {
         // Check for limits
         errorCode = 0;
-        if (steps > 0) {
+        if (stepUnit > 0) {
             errorCode = wGpioGet(motor->pinMax);
-        } else if (steps < 0) {
+        } else if (stepUnit < 0) {
             errorCode = wGpioGet(motor->pinMin);
         }
 
         if (errorCode == 1) {
             // A limit level of 1 means the pin remains in its default
             // pulled-up state, we can move
-
-            // Set the correct direction
-            unsigned int levelDirection = 0;
-            if (steps >= 0) {
-                levelDirection = steps;
-            }
-            if (motor->senseDirection < 0) {
-                levelDirection = !levelDirection;
-            }
-            errorCode = wGpioSet(motor->pinDirection, levelDirection);
+            errorCode = directionSet(motor, stepUnit);
             if (errorCode == 0) {
                 // Wait a moment for the direction pin to settle
                 std::this_thread::sleep_for(std::chrono::milliseconds(W_MOTOR_DIRECTION_WAIT_MS));
@@ -151,12 +195,12 @@ static int step(wMotor_t *motor, int steps = 1, int *stepsTaken = nullptr)
                     }
                 }
             }
-            if ((errorCode == 0) && (stepsTaken)) {
+            if ((errorCode == 0) && (stepTaken)) {
                 // We have taken a step
-                *stepsTaken = steps;
+                *stepTaken = stepUnit;
             }
-        } else if ((errorCode == 0) && (steps != 0)) {
-            W_LOG_DEBUG("%s: hit %s limit.", motor->name, steps > 0 ? "max" : "min");
+        } else if ((errorCode == 0) && (stepUnit != 0)) {
+            W_LOG_DEBUG("%s: hit %s limit.", motor->name, stepUnit > 0 ? "max" : "min");
         }
 
         if (errorCode < 0) {
@@ -165,6 +209,112 @@ static int step(wMotor_t *motor, int steps = 1, int *stepsTaken = nullptr)
     }
 
     return errorCode;
+}
+
+// Take multiple steps; being short on steps does not constitue an
+// error; supply stepsTaken if you want to know the outcome.
+int stepMany(wMotor_t *motor, int steps, int *stepsTaken = nullptr)
+{
+    int errorCode = -EINVAL;
+
+    if (motor) {
+        errorCode = 0;
+        int stepTaken = 1;
+        int stepUnit = stepTaken;
+        if (steps < 0) {
+            stepUnit = -stepUnit;
+        }
+        for (int x = 0; (x < steps * stepUnit) && (stepTaken != 0) &&
+                        (errorCode == 0); x++) {
+            stepTaken = 0;
+            errorCode = stepOnce(motor, stepUnit, &stepTaken);
+            if ((errorCode == 0) && (stepsTaken)) {
+                *stepsTaken += stepTaken;
+            }
+        }
+    }
+
+    return errorCode;
+}
+
+// Step away from a limit until the limit is no longer signalled.
+// Always returns a positive number on success.
+int stepAwayFromLimit(wMotor_t *motor)
+{
+    int stepsOrErrorCode = -EINVAL;
+    int stepUnit = 0;
+    int limitPin = -1;
+    // This just for debug prints
+    const char *limitStr = "none";
+
+    if (motor) {
+        // Check for max limit
+        stepsOrErrorCode = wGpioGet(motor->pinMax);
+        if (stepsOrErrorCode == 0) {
+            // The max pin is shorted to ground, so we step negatively
+            stepUnit = -1;
+            limitPin = motor->pinMax;
+            limitStr = "max";
+        }
+        if (stepsOrErrorCode >= 0) {
+            // Check for min limit
+            stepsOrErrorCode = wGpioGet(motor->pinMin);
+            if (stepsOrErrorCode == 0) {
+                // The min pin is shorted to ground
+                if (stepUnit != 0) {
+                    // Both pins appear to be grounded, error
+                    stepsOrErrorCode = -ENXIO;
+                    W_LOG_ERROR("%s: both limit switches appear to be on!",
+                                motor->name);
+                } else {
+                    // S'OK, we can step positively
+                    stepUnit = 1;
+                    limitPin = motor->pinMin;
+                    limitStr = "min";
+                }
+            } else {
+                // Not an error, just not at any limit, nothing to do
+                stepsOrErrorCode = 0;
+            }
+            if ((stepUnit != 0) && (limitPin >= 0)) {
+                // Step until we are no longer at the limit pin
+                int steps = 0;
+                while ((stepsOrErrorCode == 0) &&
+                       (steps < (int) motor->safetyLimit) &&
+                       (wGpioGet(limitPin) == 0)) {
+                    int stepTaken = 0;
+                    stepsOrErrorCode = stepOnce(motor, stepUnit, &stepTaken);
+                    if (stepTaken != stepUnit) {
+                        // We need this to be an error or we could
+                        // be here forever
+                        stepsOrErrorCode = -ENXIO;
+                    }
+                    if (stepsOrErrorCode == 0) {
+                        steps++;
+                    }
+                }
+                if (wGpioGet(limitPin) == 0) {
+                    // Still at the limit pin: error
+                    stepsOrErrorCode = -ENXIO;
+                }
+                if (stepsOrErrorCode == 0) {
+                    // Success
+                    stepsOrErrorCode = steps;
+                } else {
+                    W_LOG_ERROR_START("%s: error %d moving away from %s limit",
+                                       motor->name, stepsOrErrorCode, limitStr);
+                    if (wGpioGet(limitPin) == 0) {
+                        W_LOG_ERROR_MORE(", limit pin (%d) still in contact", limitPin);
+                    }
+                    W_LOG_ERROR_MORE(" after %d step(s)!", steps);
+                    W_LOG_ERROR_END;
+                }
+                
+            }
+        }
+    }
+
+    return stepsOrErrorCode;
 }
 
 /* ----------------------------------------------------------------
@@ -210,8 +360,8 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
                bool evenIfUnCalibrated)
 {
     int errorCode = -EINVAL;
-    int stepUnit = 1;
     int stepsCompleted = 0;
+    int stepsForThrow = 0;
 
     if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
         wMotor_t *motor = &(gMotor[type]);
@@ -241,46 +391,73 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
                         steps = -motor->safetyLimit;
                     }
                 }
-                stepUnit = -1;
             }
 
             if (motor->calibrated) {
-                W_LOG_DEBUG("%s: moving %+d step(s).", motor->name, steps);
+                // Determine if the direction of travel has changed
+                // so that we can account for throw
+                errorCode = throwGet(motor, steps, &stepsForThrow);
+                if (errorCode == 0) {
+                    W_LOG_DEBUG_START("%s: moving %+d step(s)", motor->name, steps);
+                    if (stepsForThrow != 0) {
+                        W_LOG_DEBUG_MORE(", plus %d step(s) for throw", stepsForThrow);
+                    }
+                    W_LOG_DEBUG_MORE(".");
+                    W_LOG_DEBUG_END;
+
+                    if (stepsForThrow != 0) {
+                        // Move the throw steps separately as the count of throw steps
+                        // must not get mixed up with the number of steps we report back
+                        errorCode = stepMany(motor, stepsForThrow, &stepsCompleted);
+                        if (W_UTIL_ABS(stepsCompleted) < W_UTIL_ABS(stepsForThrow)) {
+                            W_LOG_WARN_START("%s: only %+d step(s) of throw taken (%d short)",
+                                             motor->name, stepsCompleted,
+                                             stepsForThrow - stepsCompleted);
+                            if (motor->calibrated) {
+                                W_LOG_WARN_MORE(" motor now needs calibration");
+                            }
+                            W_LOG_WARN_MORE(".");
+                            W_LOG_WARN_END;
+                            motor->calibrated = false;
+                        }
+                    }
+                } else {
+                    W_LOG_WARN("%s: unable to determine if direction has changed",
+                               " motor now needs calibration.", motor->name);
+                    motor->calibrated = false;
+                }
             } else {
                 W_LOG_WARN("%s: uncalibrated movement of %+d step(s).",
                            motor->name, steps);
             }
 
-            // Actually move
-            int stepTaken = 1;
-            for (int x = 0; (x < steps * stepUnit) && (stepTaken != 0) &&
-                            (errorCode == 0); x++) {
-                stepTaken = 0;
-                errorCode = step(motor, stepUnit, &stepTaken);
-                if (errorCode == 0) {
-                    stepsCompleted += stepTaken;
+            if (errorCode == 0) {
+                if (motor->calibrated || evenIfUnCalibrated) {
+                    // Actually move
+                    stepsCompleted = 0;
+                    errorCode = stepMany(motor, steps, &stepsCompleted);
+                    if (motor->calibrated) {
+                        motor->now += stepsCompleted;
+                        W_LOG_INFO("%s: now at position %d.", motor->name, motor->now);
+                    }
+                    if (stepsCompleted < steps) {
+                        W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
+                                         motor->name, stepsCompleted, steps - stepsCompleted);
+                        if (motor->calibrated) {
+                            W_LOG_WARN_MORE(" motor now needs calibration");
+                        }
+                        W_LOG_WARN_MORE(".");
+                        W_LOG_WARN_END;
+                        motor->calibrated = false;
+                    }
+
+                    if (stepsTaken) {
+                        *stepsTaken = stepsCompleted;
+                    }
                 }
             }
-
-            if (motor->calibrated) {
-                motor->now += stepsCompleted;
-                W_LOG_INFO("%s: now at position %d.", motor->name, motor->now);
-            }
-
-            if (stepsCompleted < steps) {
-                W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
-                                 motor->name, stepsCompleted, steps - stepsCompleted);
-                if (motor->calibrated) {
-                    W_LOG_WARN_MORE(" motor now needs calibration");
-                }
-                W_LOG_WARN_MORE(".");
-                W_LOG_WARN_END;
-                motor->calibrated = false;
-            }
-
-            if (stepsTaken) {
-                *stepsTaken = stepsCompleted;
-            }
+        } else {
+            W_LOG_WARN("%s: not calibrated, not moving.",  motor->name);
         }
     }
 
@@ -333,6 +510,9 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken)
             if (stepsTaken) {
                 *stepsTaken = stepsCompleted;
             }
+        } else {
+            W_LOG_WARN("%s: not calibrated, not moving to rest position.",
+                       motor->name);
         }
     }
 
@@ -353,30 +533,52 @@ int wMotorCalibrate(wMotorType_t type)
         errorCode = wMotorMove(type, -motor->safetyLimit, &steps, true);
         if (errorCode == 0) {
             if (steps > (int) -motor->safetyLimit) {
-                steps = 0;
-                // Do the same in the forward direction
-                errorCode = wMotorMove(type, motor->safetyLimit, &steps, true);
-                if (errorCode == 0) {
-                    if (steps < ((int) motor->safetyLimit)) {
-                        // steps is now the distance between the minimum
-                        // and maximum limits: set the current position
-                        // and the limits; the margin will be just inside
-                        // the limit switches so that we can move without
-                        // stressing them and we know that our movement
-                        // has become innaccurate if we hit them
-                        steps >>= 1;
-                        motor->now = steps;
-                        steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
-                        motor->max = steps;
-                        motor->min = -steps;
-                        motor->calibrated = true;
-                        W_LOG_INFO("%s: calibrated range +/- %d step(s).",
-                                   motor->name, steps);
-                    } else {
-                        W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
-                                    " from the max limit did not reach the min"
-                                    " limit switch.", motor->name,
-                                    motor->safetyLimit);
+                if (motor->hasThrow) {
+                    // Step away from the minimum limit until we are no longer
+                    // at the minimum limit: this is the throw in a negative
+                    // to positive direction.
+                    errorCode = stepAwayFromLimit(motor);
+                }
+                if (errorCode >= 0) {
+                    motor->throwToPositive = errorCode;
+                    steps = 0;
+                    // Move the full safety distance backwards to the max limit switch
+                    errorCode = wMotorMove(type, motor->safetyLimit, &steps, true);
+                    if (errorCode == 0) {
+                        if (steps < ((int) motor->safetyLimit)) {
+                            // steps is now the distance between the minimum
+                            // and maximum limits: set the current position
+                            // and the limits; the margin will be just inside
+                            // the limit switches so that we can move without
+                            // stressing them and we know that our movement
+                            // has become innaccurate if we hit them
+                            steps >>= 1;
+                            motor->now = steps;
+                            steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
+                            motor->max = steps;
+                            motor->min = -steps;
+                            if (motor->hasThrow) {
+                                // Finally, step away from the maximum limit until
+                                // we are no longer at the limit: this is the throw
+                                // in a positive to negative direction.
+                                errorCode = stepAwayFromLimit(motor);
+                            }
+                            if (errorCode >= 0) {
+                                motor->throwToNegative = -errorCode;
+                                errorCode = 0;
+                                motor->calibrated = true;
+                                W_LOG_INFO("%s: calibrated range +/- %d step(s),"
+                                           " -ve to +ve throw %+d step(s), +ve to -ve"
+                                           " throw %+d step(s).", motor->name, steps,
+                                           motor->throwToPositive,
+                                           motor->throwToNegative);
+                            }
+                        } else {
+                            W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
+                                        " from the max limit did not reach the min"
+                                        " limit switch.", motor->name,
+                                        motor->safetyLimit);
+                        }
                     }
                 }
             } else {
@@ -392,6 +594,21 @@ int wMotorCalibrate(wMotorType_t type)
     }
 
     return errorCode;
+}
+
+// Get the calibrated range of a motor.
+int wMotorRangeGet(wMotorType_t type)
+{
+    int rangeOrErrorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+        wMotor_t *motor = &(gMotor[type]);
+        rangeOrErrorCode = 0;
+        if (motor->calibrated) {
+            rangeOrErrorCode = motor->max - motor->min;
+        }
+    }
+    return rangeOrErrorCode;
 }
 
 // Deinitialise the motors.

@@ -53,6 +53,10 @@
  * information, warning and errors from libcamera, but not pure debug.
  */
 
+// The Linux/Posix stuff.
+#include <unistd.h> // For sleep()
+
+// The watchdog stuff.
 #include <w_util.h>
 #include <w_log.h>
 #include <w_command_line.h>
@@ -86,7 +90,7 @@
 int main(int argc, char *argv[])
 {
     int errorCode = -ENXIO;
-    wCommandLineParameters_t commandLineParameters;
+    wCommandLineParameters_t commandLineParameters = {};
 
     // Process the command-line parameters
     if (wCommandLineParse(argc, argv, &commandLineParameters) == 0) {
@@ -153,12 +157,11 @@ int main(int argc, char *argv[])
             // by starting control operations, which will requesting the
             // video to start encoding, which will in turn start the image
             // processing code, which will in turn start the camera
-            errorCode = wControlStart();
+            errorCode = wControlStart(commandLineParameters.flagStaticCamera);
 
-            // Cycle through the LED test while we're waiting to finish
             W_LOG_INFO("running, press CTRL-C to stop.");
             while ((errorCode == 0) && wUtilKeepGoing()) {
-                errorCode = wLedTest();
+                sleep(1);
             }
 
             // Done

@@ -39,6 +39,7 @@ typedef struct {
     std::string programName;
     std::string outputDirectory;
     std::string outputFileName;
+    bool flagStaticCamera;
 } wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------
