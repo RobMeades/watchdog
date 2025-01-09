@@ -17,10 +17,12 @@
 #ifndef _W_MOTOR_H_
 #define _W_MOTOR_H_
 
+// This API is dependent on std::string.
+#include <string>
+
 /** @file
  * @brief The motor API for the watchdog application; this API is
- * thread-safe aside from wMotorInit()/wMotorDeinit(), which should
- * not be called at the same time as any other API or each other..
+ * thread-safe.
  */
 
 /* ----------------------------------------------------------------
@@ -59,25 +61,6 @@
 # define W_MOTOR_VERTICAL_DIRECTION_SENSE -1
 #endif
 
-#ifndef W_MOTOR_ROTATE_HAS_THROW
-/** The rotation motor is directly connected to the world, it
- * has no "throw" to take accout of.
- */
-# define W_MOTOR_ROTATE_HAS_THROW false
-#endif
-
-#ifndef W_MOTOR_VERTICAL_HAS_THROW
-/** The vertical motor is connected to the world through cog
- * wheels and hence throw needs to be taken into account,
- * i.e. the number of steps to change direction in what is
- * inevitably a somewhat loosely-coupled mechanism.
- *
- * TODO: however, this is currently not doing what I want it
- * to do, hence setting false.
- */
-# define W_MOTOR_VERTICAL_HAS_THROW false
-#endif
-
 #ifndef W_MOTOR_DIRECTION_WAIT_MS
 /** The pause between setting the direction that a step is to
  * take and requesting the step.
@@ -100,6 +83,18 @@
 # define W_MOTOR_LIMIT_MARGIN_STEPS 50
 #endif
 
+#ifndef W_MOTOR_CALIBRATE_ONE_CALIBRATE_ALL
+/** Normally, when a motor is uncalibrated it can be calibrated
+ * and the calibration of the other motor is unaffected.  However,
+ * it can also be that jarring during the calibration process,
+ * which involves hitting the end-stops, cause the calibration of
+ * one motor to adversly affect the calibration or the position
+ * of the other; set this to true and if one motor falls out of
+ * calibration _both_ motors will be calibrated.
+ */
+# define W_MOTOR_CALIBRATE_ONE_CALIBRATE_ALL true
+#endif
+
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
@@ -110,7 +105,8 @@
  */
 typedef enum {
     W_MOTOR_TYPE_VERTICAL = 0,
-    W_MOTOR_TYPE_ROTATE = 1
+    W_MOTOR_TYPE_ROTATE = 1,
+    W_MOTOR_TYPE_MAX_NUM
 } wMotorType_t;
 
 /** Where the motor should sit by default, e.g. after calibration;
@@ -135,13 +131,10 @@ typedef struct {
     int pinMin;   // The pin which, when pulled low, indicates min has been reached
     int senseDirection; // 1 if a 1 at pinDirection moves towards max, else -1
     wMotorRestPosition_t restPosition;
-    bool hasThrow; // True if the motor is connected to the world through cogs etc.
     int lastUnitStep; // Needed since Linux doesn't allow the state of an output pin to be read
     bool calibrated; // Ignore the remaining values if this is false
     int max;      // The positive calibrated limit in steps
     int min;      // The negative calibrated limit in steps
-    int throwToPositive; // The calibrated number of steps it takes to change direction, -ve to +ve
-    int throwToNegative; // The calibrated number ot steps it takes to change direction, +ve to -ve
     int now;
 } wMotor_t;
 
@@ -194,6 +187,20 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken = nullptr,
  */
 int wMotorMoveToRest(wMotorType_t type, int *stepsTaken = nullptr);
 
+/** Determine if a motor needs calibration.
+ *
+ * @param type the motor type.
+ * @return     true if the motor needs calibration, else false.
+ */
+bool wMotorNeedsCalibration(wMotorType_t type);
+
+/** Get the descriptive name of the given motor.
+ *
+ * @param type the motor type.
+ * @return     the motor name; may be an empty string.
+ */
+std::string wMotorNameGet(wMotorType_t type);
+
 /** Calibrate the movement range of a motor; THIS WILL CAUSE MOVEMENT.
  * If successful then the motor will be marked as calibrated.
  *
@@ -202,8 +209,8 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken = nullptr);
  */
 int wMotorCalibrate(wMotorType_t type);
 
-/** Get the calibrated range of a motor; will return 0 if a motor
- * is uncalibrated.
+/** Get the calibrated range of a motor; will return an error if
+ * a motor is uncalibrated.
  *
  * @param type the motor type to get the range of.
  * @return     the range in steps else negative error code.

@@ -25,6 +25,7 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <atomic>
 
 // The OpenCV stuff.
 #include <opencv2/imgcodecs.hpp>
@@ -226,6 +227,7 @@ typedef struct {
     std::shared_ptr<cv::BackgroundSubtractor> backgroundSubtractor;
     cv::Mat maskForeground;
     wPointProtected_t focusPointView;
+    std::atomic<bool> resetBackgroundSubtractor;
     wCommonFrameFunction_t *outputCallback;
     wImageProcessingFocusFunction_t *focusCallback;
 } wImageProcessingContext_t;
@@ -542,6 +544,12 @@ static void msgHandlerImageProcessingImageBuffer(void *msgBody,
     cv::Mat frameOpenCvGray(msg->height, msg->width, CV_8UC1,
                             msg->data, msg->stride);
 
+    // Reset the background model if requested
+    if (imageProcessingContext->resetBackgroundSubtractor) {
+        gContext->backgroundSubtractor->clear();
+        imageProcessingContext->resetBackgroundSubtractor = false;
+    }
+
     // Update the background model: this will cause moving areas to
     // appear as pixels with value 255, stationary areas to appear
     // as pixels with value 0
@@ -812,6 +820,15 @@ int wImageProcessingStop()
 
     return errorCode;
 }
+
+// Reset the motion detector.
+void wImageProcessingResetMotionDetect()
+{
+    if (gContext) {
+        gContext->resetBackgroundSubtractor = true;
+    }
+}
+
 
 // Deinitialise image processing.
 void wImageProcessingDeinit()

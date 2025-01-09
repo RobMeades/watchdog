@@ -20,6 +20,7 @@
 
 // The CPP stuff.
 #include <thread>
+#include <mutex>
 
 // Other parts of watchdog.
 #include <w_util.h>
@@ -41,6 +42,9 @@
  * VARIABLES
  * -------------------------------------------------------------- */
 
+// Mutex to protect the API.
+static std::mutex gMutex;
+
 // Movement tracking: order must match wMovementType_t.
 // The compiler will initialise any uninitialised fields to zero.
 static wMotor_t gMotor[] = {{.name = "vertical",
@@ -52,7 +56,6 @@ static wMotor_t gMotor[] = {{.name = "vertical",
                              .pinMin = W_GPIO_PIN_INPUT_LOOK_DOWN_LIMIT,
                              .senseDirection = W_MOTOR_VERTICAL_DIRECTION_SENSE,
                              .restPosition = W_MOTOR_REST_POSITION_MAX,
-                             .hasThrow = W_MOTOR_VERTICAL_HAS_THROW,
                              .calibrated = false},
                             {.name = "rotate",
                              .safetyLimit = W_MOTOR_ROTATE_MAX_STEPS,
@@ -63,7 +66,6 @@ static wMotor_t gMotor[] = {{.name = "vertical",
                              .pinMin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
                              .senseDirection = W_MOTOR_ROTATE_DIRECTION_SENSE,
                              .restPosition = W_MOTOR_REST_POSITION_CENTRE,
-                             .hasThrow = W_MOTOR_ROTATE_HAS_THROW,
                              .calibrated = false}};
 
 // Array of names for the rest positions, just for printing; must be in the
@@ -76,6 +78,7 @@ static const char *gRestPositionStr[] = {"centre", "max", "min"};
 
 // Enable or disable motor control; a disabled motor will also be
 // marked as uncalibrated since it may move freely when disabled.
+// IMPORTANT: gMutex must be locked before this is called.
 static int enable(wMotor_t *motor, bool enableNotDisable = true)
 {
     int errorCode = wGpioSet(motor->pinDisable, !enableNotDisable);
@@ -90,11 +93,13 @@ static int enable(wMotor_t *motor, bool enableNotDisable = true)
 
 // Enable or disable all motors; a disabled motor will also be
 // marked as uncalibrated since it may move freely once disabled.
+// IMPORTANT: gMutex must be locked before this is called.
 static int enableAll(bool enableNotDisable = true)
 {
     int errorCode = 0;
 
     for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gMotor); x++) {
+
         wMotor_t *motor = &(gMotor[x]);
         int y = enable(motor, enableNotDisable);
         if (y < 0) {
@@ -108,6 +113,7 @@ static int enableAll(bool enableNotDisable = true)
 }
 
 // Set direction.
+// IMPORTANT: gMutex must be locked before this is called.
 static int directionSet(wMotor_t *motor, int step)
 {
     int errorCode = -EINVAL;
@@ -131,35 +137,11 @@ static int directionSet(wMotor_t *motor, int step)
     return errorCode;
 }
 
-// Get the appropriate value for the additional "throw" steps
-// based on the direction we are now going in.
-static int throwGet(wMotor_t *motor, int steps, int *stepsForThrow)
-{
-    int errorCode = -EINVAL;
-
-    if (motor) {
-        errorCode = 0;
-        if (stepsForThrow) {
-            *stepsForThrow = 0;
-            // If the signs are different, we're asking for
-            // a different direction to that set and hence
-            // can allow for throw
-            if ((steps * motor->lastUnitStep) < 0) {
-                if (steps > 0) {
-                    *stepsForThrow = motor->throwToPositive;
-                } else if (steps < 0) {
-                    *stepsForThrow = motor->throwToNegative;
-                }
-            }
-        }
-    }
-
-    return errorCode;
-}
-
 // Perform a step; will not move if at a limit; being at
 // a limit does not constitute an error: supply stepTaken
 // if you want to know the outcome.
+// This does NOT advance motor->now.
+// IMPORTANT: gMutex must be locked before this is called.
 static int stepOnce(wMotor_t *motor, int stepUnit = 1, int *stepTaken = nullptr)
 {
     int errorCode = -EINVAL;
@@ -213,7 +195,9 @@ static int stepOnce(wMotor_t *motor, int stepUnit = 1, int *stepTaken = nullptr)
 
 // Take multiple steps; being short on steps does not constitue an
 // error; supply stepsTaken if you want to know the outcome.
-int stepMany(wMotor_t *motor, int steps, int *stepsTaken = nullptr)
+// This does NOT advance motor->now.
+// IMPORTANT: gMutex must be locked before this is called.
+static int stepMany(wMotor_t *motor, int steps, int *stepsTaken = nullptr)
 {
     int errorCode = -EINVAL;
 
@@ -239,7 +223,9 @@ int stepMany(wMotor_t *motor, int steps, int *stepsTaken = nullptr)
 
 // Step away from a limit until the limit is no longer signalled.
 // Always returns a positive number on success.
-int stepAwayFromLimit(wMotor_t *motor)
+// This does NOT advance motor->now.
+// IMPORTANT: gMutex must be locked before this is called.
+static int stepAwayFromLimit(wMotor_t *motor)
 {
     int stepsOrErrorCode = -EINVAL;
     int stepUnit = 0;
@@ -317,54 +303,19 @@ int stepAwayFromLimit(wMotor_t *motor)
     return stepsOrErrorCode;
 }
 
-/* ----------------------------------------------------------------
- * PUBLIC FUNCTIONS
- * -------------------------------------------------------------- */
-
-// Initialise the motors: THIS WILL CAUSE MOVEMENT.
-int wMotorInit()
-{
-    int errorCode;
-
-    W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
-
-    // Calibrate movement
-    errorCode = enableAll();
-    for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
-                             (errorCode == 0); x++) {
-        errorCode = wMotorCalibrate((wMotorType_t) x);
-    }
-
-    if (errorCode == 0) {
-        W_LOG_INFO("calibration successful, moving to rest position.");
-        for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
-                                 (errorCode == 0); x++) {
-            errorCode = wMotorMoveToRest((wMotorType_t) x);
-        }
-    }
-
-    if (errorCode != 0) {
-        // Disable motors again if calibration or moving
-        // to rest position failed
-        enableAll(false);
-    }
-
-    return errorCode;
-}
-
 // Try to move the given number of steps, returning
 // the number actually stepped in stepsTaken; being short
 // on steps does not constitute an error.  Will only move
 // if calibrated unless evenIfUnCalibrated is true.
-int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
-               bool evenIfUnCalibrated)
+// This advances motor->now if the motor is calibrated.
+// IMPORTANT: gMutex must be locked before this is called.
+static int move(wMotor_t *motor, int steps, int *stepsTaken,
+                bool evenIfUnCalibrated)
 {
     int errorCode = -EINVAL;
     int stepsCompleted = 0;
-    int stepsForThrow = 0;
 
-    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
-        wMotor_t *motor = &(gMotor[type]);
+    if (motor) {
         if (motor->calibrated || evenIfUnCalibrated) {
             errorCode = 0;
             if (steps > 0) {
@@ -393,67 +344,36 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
                 }
             }
 
-            if (motor->calibrated) {
-                // Determine if the direction of travel has changed
-                // so that we can account for throw
-                errorCode = throwGet(motor, steps, &stepsForThrow);
-                if (errorCode == 0) {
-                    W_LOG_DEBUG_START("%s: moving %+d step(s)", motor->name, steps);
-                    if (stepsForThrow != 0) {
-                        W_LOG_DEBUG_MORE(", plus %d step(s) for throw", stepsForThrow);
-                    }
-                    W_LOG_DEBUG_MORE(".");
-                    W_LOG_DEBUG_END;
-
-                    if (stepsForThrow != 0) {
-                        // Move the throw steps separately as the count of throw steps
-                        // must not get mixed up with the number of steps we report back
-                        errorCode = stepMany(motor, stepsForThrow, &stepsCompleted);
-                        if (W_UTIL_ABS(stepsCompleted) < W_UTIL_ABS(stepsForThrow)) {
-                            W_LOG_WARN_START("%s: only %+d step(s) of throw taken (%d short)",
-                                             motor->name, stepsCompleted,
-                                             stepsForThrow - stepsCompleted);
-                            if (motor->calibrated) {
-                                W_LOG_WARN_MORE(" motor now needs calibration");
-                            }
-                            W_LOG_WARN_MORE(".");
-                            W_LOG_WARN_END;
-                            motor->calibrated = false;
-                        }
-                    }
-                } else {
-                    W_LOG_WARN("%s: unable to determine if direction has changed",
-                               " motor now needs calibration.", motor->name);
-                    motor->calibrated = false;
+            if (steps != 0) {
+                // Actually move
+                stepsCompleted = 0;
+                errorCode = stepMany(motor, steps, &stepsCompleted);
+                if (motor->calibrated) {
+                    motor->now += stepsCompleted;
                 }
-            } else {
-                W_LOG_WARN("%s: uncalibrated movement of %+d step(s).",
-                           motor->name, steps);
-            }
-
-            if (errorCode == 0) {
-                if (motor->calibrated || evenIfUnCalibrated) {
-                    // Actually move
-                    stepsCompleted = 0;
-                    errorCode = stepMany(motor, steps, &stepsCompleted);
+                if (stepsCompleted < steps) {
+                    W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
+                                     motor->name, stepsCompleted, steps - stepsCompleted);
                     if (motor->calibrated) {
-                        motor->now += stepsCompleted;
-                        W_LOG_INFO("%s: now at position %d.", motor->name, motor->now);
+                        W_LOG_WARN_MORE(" motor now needs calibration");
                     }
-                    if (stepsCompleted < steps) {
-                        W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
-                                         motor->name, stepsCompleted, steps - stepsCompleted);
-                        if (motor->calibrated) {
-                            W_LOG_WARN_MORE(" motor now needs calibration");
+                    W_LOG_WARN_MORE(".");
+                    W_LOG_WARN_END;
+                    if (motor->calibrated) {
+#if W_MOTOR_CALIBRATE_ONE_CALIBRATE_ALL
+                        // If one motor has become uncalibrated we declare
+                        // all uncalibrated
+                        for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gMotor); x++) {
+                            gMotor[x].calibrated = false;
                         }
-                        W_LOG_WARN_MORE(".");
-                        W_LOG_WARN_END;
+#else
                         motor->calibrated = false;
+#endif
                     }
+                }
 
-                    if (stepsTaken) {
-                        *stepsTaken = stepsCompleted;
-                    }
+                if (stepsTaken) {
+                    *stepsTaken = stepsCompleted;
                 }
             }
         } else {
@@ -467,14 +387,16 @@ int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
 // Send a motor to its rest position; will only do so if
 // the motor is calibrated.  Not being able to get to the
 // rest position _does_ constitute an error.
-int wMotorMoveToRest(wMotorType_t type, int *stepsTaken)
+// This uses move() and hence advances motor->now if the
+// motor is calibrated.
+// IMPORTANT: gMutex must be locked before this is called.
+static int moveToRest(wMotor_t *motor, int *stepsTaken = nullptr)
 {
     int errorCode = -EINVAL;
     int steps = 0;
     int stepsCompleted = 0;
 
-    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
-        wMotor_t *motor = &(gMotor[type]);
+    if (motor) {
         if (motor->calibrated) {
             errorCode = 0;
             switch (motor->restPosition) {
@@ -492,7 +414,7 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken)
             }
 
             if (steps != 0) {
-                errorCode = wMotorMove(type, steps, &stepsCompleted, true);
+                errorCode = move(motor, steps, &stepsCompleted, false);
                 if (errorCode == 0) {
                     if (stepsCompleted != steps) {
                         errorCode = -ENXIO;
@@ -520,65 +442,45 @@ int wMotorMoveToRest(wMotorType_t type, int *stepsTaken)
 }
 
 // Calibrate the movement range of a motor.
-int wMotorCalibrate(wMotorType_t type)
+// IMPORTANT: gMutex must be locked before this is called.
+static int calibrate(wMotor_t *motor)
 {
     int errorCode = -EINVAL;
     int steps = 0;
 
-    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
-        wMotor_t *motor = &(gMotor[type]);
+    if (motor) {
         errorCode = 0;
         motor->calibrated = false;
         // Move the full safety distance backwards to the min limit switch
-        errorCode = wMotorMove(type, -motor->safetyLimit, &steps, true);
+        errorCode = move(motor, -motor->safetyLimit, &steps, true);
         if (errorCode == 0) {
             if (steps > (int) -motor->safetyLimit) {
-                if (motor->hasThrow) {
-                    // Step away from the minimum limit until we are no longer
-                    // at the minimum limit: this is the throw in a negative
-                    // to positive direction.
-                    errorCode = stepAwayFromLimit(motor);
-                }
-                if (errorCode >= 0) {
-                    motor->throwToPositive = errorCode;
-                    steps = 0;
-                    // Move the full safety distance backwards to the max limit switch
-                    errorCode = wMotorMove(type, motor->safetyLimit, &steps, true);
-                    if (errorCode == 0) {
-                        if (steps < ((int) motor->safetyLimit)) {
-                            // steps is now the distance between the minimum
-                            // and maximum limits: set the current position
-                            // and the limits; the margin will be just inside
-                            // the limit switches so that we can move without
-                            // stressing them and we know that our movement
-                            // has become innaccurate if we hit them
-                            steps >>= 1;
-                            motor->now = steps;
-                            steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
-                            motor->max = steps;
-                            motor->min = -steps;
-                            if (motor->hasThrow) {
-                                // Finally, step away from the maximum limit until
-                                // we are no longer at the limit: this is the throw
-                                // in a positive to negative direction.
-                                errorCode = stepAwayFromLimit(motor);
-                            }
-                            if (errorCode >= 0) {
-                                motor->throwToNegative = -errorCode;
-                                errorCode = 0;
-                                motor->calibrated = true;
-                                W_LOG_INFO("%s: calibrated range +/- %d step(s),"
-                                           " -ve to +ve throw %+d step(s), +ve to -ve"
-                                           " throw %+d step(s).", motor->name, steps,
-                                           motor->throwToPositive,
-                                           motor->throwToNegative);
-                            }
-                        } else {
-                            W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
-                                        " from the max limit did not reach the min"
-                                        " limit switch.", motor->name,
-                                        motor->safetyLimit);
-                        }
+                steps = 0;
+                // Move the full safety distance to the max limit switch
+                errorCode = move(motor, motor->safetyLimit, &steps, true);
+                if (errorCode == 0) {
+                    if (steps < ((int) motor->safetyLimit)) {
+                        // steps is now the distance between the minimum
+                        // and maximum limits: set the current position
+                        // and the limits; the margin will be just inside
+                        // the limit switches so that we can move without
+                        // stressing them and we know that our movement
+                        // has become innaccurate if we hit them
+                        // Make the range a +/- one about a central origin
+                        steps >>= 1;
+                        motor->now = steps;
+                        steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
+                        motor->max = steps;
+                        motor->min = -steps;
+                        errorCode = 0;
+                        motor->calibrated = true;
+                        W_LOG_INFO("%s: calibrated range +/- %d step(s).",
+                                   motor->name, steps);
+                    } else {
+                        W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
+                                    " from the max limit did not reach the min"
+                                    " limit switch.", motor->name,
+                                    motor->safetyLimit);
                     }
                 }
             } else {
@@ -596,25 +498,165 @@ int wMotorCalibrate(wMotorType_t type)
     return errorCode;
 }
 
+/* ----------------------------------------------------------------
+ * PUBLIC FUNCTIONS
+ * -------------------------------------------------------------- */
+
+// Initialise the motors: THIS WILL CAUSE MOVEMENT.
+int wMotorInit()
+{
+    int errorCode;
+
+    gMutex.lock();
+
+    W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
+
+    // Calibrate movement
+    errorCode = enableAll();
+    for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
+                             (errorCode == 0); x++) {
+        errorCode = calibrate(&(gMotor[x]));
+    }
+
+    if (errorCode == 0) {
+        W_LOG_INFO("calibration successful, moving to rest position.");
+        for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
+                                 (errorCode == 0); x++) {
+            errorCode = moveToRest(&(gMotor[x]));
+        }
+    }
+
+    if (errorCode != 0) {
+        // Disable motors again if calibration or moving
+        // to rest position failed
+        enableAll(false);
+    }
+
+    gMutex.unlock();
+
+    return errorCode;
+}
+
+// Try to move the given number of steps, returning
+// the number actually stepped in stepsTaken; being short
+// on steps does not constitute an error.  Will only move
+// if calibrated unless evenIfUnCalibrated is true.
+int wMotorMove(wMotorType_t type, int steps, int *stepsTaken,
+               bool evenIfUnCalibrated)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        errorCode = move(&(gMotor[type]), steps, stepsTaken,
+                         evenIfUnCalibrated);
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Send a motor to its rest position; will only do so if
+// the motor is calibrated.  Not being able to get to the
+// rest position _does_ constitute an error.
+int wMotorMoveToRest(wMotorType_t type, int *stepsTaken)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        errorCode = moveToRest(&(gMotor[type]), stepsTaken);
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Determine if a motor needs calibration.
+bool wMotorNeedsCalibration(wMotorType_t type)
+{
+    bool needsCalibration = false;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        wMotor_t *motor = &(gMotor[type]);
+        needsCalibration = !motor->calibrated;
+
+        gMutex.unlock();
+    }
+
+    return needsCalibration;
+}
+// Get the descriptive name of the given motor.
+std::string wMotorNameGet(wMotorType_t type)
+{
+    std::string name = "";
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        wMotor_t *motor = &(gMotor[type]);
+        name = std::string(motor->name);
+
+        gMutex.unlock();
+    }
+
+    return name;
+}
+
+// Calibrate the movement range of a motor.
+int wMotorCalibrate(wMotorType_t type)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        errorCode = calibrate(&(gMotor[type]));
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
+}
+
 // Get the calibrated range of a motor.
 int wMotorRangeGet(wMotorType_t type)
 {
     int rangeOrErrorCode = -EINVAL;
 
     if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
         wMotor_t *motor = &(gMotor[type]);
-        rangeOrErrorCode = 0;
+        rangeOrErrorCode = -EBADF;
         if (motor->calibrated) {
             rangeOrErrorCode = motor->max - motor->min;
         }
+
+        gMutex.unlock();
     }
+
     return rangeOrErrorCode;
 }
 
 // Deinitialise the motors.
 void wMotorDeinit()
 {
+    gMutex.lock();
     enableAll(false);
+    gMutex.unlock();
 }
 
 // End of file

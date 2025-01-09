@@ -110,6 +110,10 @@ int wImageProcessingFocusSet(const cv::Point *pointView);
  */
 int wImageProcessingStart(wCommonFrameFunction_t *outputCallback);
 
+/** Reset the motion detector: useful if the camera is moved.
+ */
+void wImageProcessingResetMotionDetect();
+
 /** Stop image processing; you do not have to call this function
  * on exit, wImageProcessingDeinit() will tidy up appropriately.
  *
