@@ -39,7 +39,7 @@
  * this you may also need to change W_LED_MORSE_DURATION_UNIT_MS
  * below.
  */
-# define W_LED_TICK_TIMER_PERIOD_MS 20
+# define W_LED_TICK_TIMER_PERIOD_MS 5
 #endif
 
 #ifndef W_LED_MORSE_MAX_SIZE
@@ -60,7 +60,7 @@
  *
  * The duration is chosen as a multiple of W_LED_TICK_TIMER_PERIOD_MS.
  */
-# define W_LED_MORSE_DURATION_UNIT_MS (W_LED_TICK_TIMER_PERIOD_MS * 10)
+# define W_LED_MORSE_DURATION_UNIT_MS (W_LED_TICK_TIMER_PERIOD_MS * 40)
 #endif
 
 #ifndef W_LED_MORSE_DURATION_MULTIPLIER_DOT
@@ -110,6 +110,12 @@
 /** The default duration of a wink in milliseconds.
  */
 # define W_LED_WINK_DURATION_MS 250
+#endif
+
+#ifndef W_LED_PULSE_DURATION_MS
+/** THe default duration of a single pulse in milliseconds.
+ */
+# define W_LED_PULSE_DURATION_MS 250
 #endif
 
 #ifndef W_LED_RANDOM_BLINK_RATE_PER_MINUTE
@@ -242,6 +248,17 @@ int wLedOverlayMorseSet(wLed_t led = W_LED_BOTH,
  */
 int wLedOverlayWinkSet(wLed_t led,
                        unsigned int durationMs = W_LED_WINK_DURATION_MS);
+
+/** Add a single pulse as an overlay to the current mode.
+ *
+ * @param led                   the LED to pulse.
+ * @param levelPercent          the brightness of the pulse as a percentage.
+ * @param durationMs            the duration of the pulse in milliseconds.
+ * @return                      zero on success else negative error code.
+ */
+int wLedOverlayPulseSet(wLed_t led,
+                        unsigned int levelPercent = 100,
+                        unsigned int durationMs = W_LED_PULSE_DURATION_MS);
 
 /** Add a random blink overlay (i.e. both LEDs switching off for a brief period)
  * as an overlay to the current mode.

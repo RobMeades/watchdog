@@ -39,7 +39,9 @@ typedef struct {
     std::string programName;
     std::string outputDirectory;
     std::string outputFileName;
+    std::string cfgFilePath;
     bool flagStaticCamera;
+    bool doNotOperateMotors;
 } wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------

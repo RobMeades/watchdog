@@ -503,36 +503,39 @@ static int calibrate(wMotor_t *motor)
  * -------------------------------------------------------------- */
 
 // Initialise the motors: THIS WILL CAUSE MOVEMENT.
-int wMotorInit()
+int wMotorInit(bool doNotOperateMotors)
 {
-    int errorCode;
+    int errorCode = 0;
 
-    gMutex.lock();
+    if (!doNotOperateMotors) {
 
-    W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
+        gMutex.lock();
 
-    // Calibrate movement
-    errorCode = enableAll();
-    for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
-                             (errorCode == 0); x++) {
-        errorCode = calibrate(&(gMotor[x]));
-    }
+        W_LOG_INFO("calibrating limits of movement, STAND CLEAR!");
 
-    if (errorCode == 0) {
-        W_LOG_INFO("calibration successful, moving to rest position.");
+        // Calibrate movement
+        errorCode = enableAll();
         for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
                                  (errorCode == 0); x++) {
-            errorCode = moveToRest(&(gMotor[x]));
+            errorCode = calibrate(&(gMotor[x]));
         }
-    }
 
-    if (errorCode != 0) {
-        // Disable motors again if calibration or moving
-        // to rest position failed
-        enableAll(false);
-    }
+        if (errorCode == 0) {
+            W_LOG_INFO("calibration successful, moving to rest position.");
+            for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gMotor)) &&
+                                     (errorCode == 0); x++) {
+                errorCode = moveToRest(&(gMotor[x]));
+            }
+        }
 
-    gMutex.unlock();
+        if (errorCode != 0) {
+            // Disable motors again if calibration or moving
+            // to rest position failed
+            enableAll(false);
+        }
+
+        gMutex.unlock();
+    }
 
     return errorCode;
 }

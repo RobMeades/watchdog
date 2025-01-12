@@ -19,6 +19,7 @@
  */
 
 // The Linux/Posix stuff.
+#include <unistd.h> // For get_current_dir_name()
 #include <signal.h>
 
 // Us.
@@ -133,6 +134,32 @@ void wUtilMonitorTimingUpdate(wUtilMonitorTiming_t *monitorTiming)
 
     // Store the timestamp for next time
     monitorTiming->previousTimestamp = timestamp;
+}
+
+// Return the directory part of a file path.
+std::string wUtilDirectoryPathGet(std::string path, bool absolute)
+{
+    if (!path.empty()) {
+        if (absolute && !(path.find_first_of(W_UTIL_DIR_SEPARATOR) == 0)) {
+            // If we haven't already got an absolute path, make it absolute
+            char *currentDirName = get_current_dir_name();
+            if (currentDirName) {
+                path = std::string(currentDirName) + W_UTIL_DIR_SEPARATOR + path;
+                free(currentDirName);
+            }
+        }
+        // Find the last slash and cut there
+        unsigned int lastDirSeparatorPos = path.find_last_of(W_UTIL_DIR_SEPARATOR);
+        if (lastDirSeparatorPos != std::string::npos) {
+            path = path.substr(0, lastDirSeparatorPos);
+        } else {
+            // If there are no slashes, the directory must be the
+            // current one
+            path = std::string(W_UTIL_DIR_THIS);
+        }
+    }
+
+    return path;
 }
 
 // End of file

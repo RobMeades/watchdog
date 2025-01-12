@@ -117,6 +117,17 @@ typedef struct {
     uint64_t lastTick;
 } wLedOverlayWink_t;
 
+/** Single pulse overlay.
+ */
+typedef struct {
+    unsigned int levelPercent;
+    int64_t remainingTicks;
+    uint64_t lastTick;
+    unsigned int index;
+    unsigned int ticksThisIndex;
+    unsigned int ticksPerIndex;
+} wLedOverlayPulse_t;
+
 /** Random blink overlay.
  */
 typedef struct {
@@ -150,6 +161,7 @@ typedef struct {
     uint64_t lastChangeTick;
     wLedOverlayMorse_t *morse;
     wLedOverlayWink_t *wink;
+    wLedOverlayPulse_t *pulse;
 } wLedState_t;
 
 /** Context that must be maintained for the LED message handlers.
@@ -181,6 +193,7 @@ typedef enum {
     W_LED_MSG_TYPE_MODE_BREATHE,          // wLedMsgBodyModeBreathe_t
     W_LED_MSG_TYPE_OVERLAY_MORSE,         // wLedMsgBodyOverlayMorse_t
     W_LED_MSG_TYPE_OVERLAY_WINK,          // wLedMsgBodyOverlayWink_t
+    W_LED_MSG_TYPE_OVERLAY_PULSE,         // wLedMsgBodyOverlayPulse_t
     W_LED_MSG_TYPE_OVERLAY_RANDOM_BLINK,  // wLedMsgBodyOverlayRandomBlink_t
     W_LED_MSG_TYPE_LEVEL_SCALE            // wLedMsgBodyLevelScale_t
 } wLedMsgType_t;
@@ -217,6 +230,13 @@ typedef struct {
     wLedOverlayWink_t overlay;
 } wLedMsgBodyOverlayWink_t;
 
+/** The message body structure corresponding to W_LED_MSG_TYPE_OVERLAY_PULSE.
+ */
+typedef struct {
+    wLedApply_t apply;
+    wLedOverlayPulse_t overlay;
+} wLedMsgBodyOverlayPulse_t;
+
 /** The message body structure corresponding to W_LED_MSG_TYPE_OVERLAY_RANDOM_BLINK.
  */
 typedef struct {
@@ -239,6 +259,7 @@ typedef union {
     wLedMsgBodyModeBreathe_t modeBreathe;               // W_LED_MSG_TYPE_MODE_BREATHE
     wLedMsgBodyOverlayMorse_t overlayMorse;             // W_LED_MSG_TYPE_OVERLAY_MORSE
     wLedMsgBodyOverlayWink_t overlayWink;               // W_LED_MSG_TYPE_OVERLAY_WINK
+    wLedMsgBodyOverlayPulse_t overlayPulse;             // W_LED_MSG_TYPE_OVERLAY_PULSE
     wLedMsgBodyOverlayRandomBlink_t overlayRandomBlink; // W_LED_MSG_TYPE_OVERLAY_RANDOM_BLINK
     wLedMsgBodyLevelScale_t levelScale;                 // W_LED_MSG_TYPE_LEVEL_SCALE
 } wLedMsgBody_t;
@@ -360,8 +381,7 @@ static int randomBlink(wLedOverlayRandomBlink_t *randomBlink,
         } else {
             if (nowTick > randomBlink->lastBlinkTicks +
                           randomBlink->intervalTicks +
-                          (randomBlink->rangeTicks * rand() / RAND_MAX) -
-                          (randomBlink->rangeTicks / 2)) {
+                          (randomBlink->rangeTicks * rand() / RAND_MAX)) {
                 randomBlink->lastBlinkTicks = nowTick;
                 levelPercent = 0;
             }
@@ -633,6 +653,45 @@ static int updateLevelWink(wLed_t led, wLedOverlayWink_t **wink,
     return levelPercentOrErrorCode;
 }
 
+// Single pulse.
+// IMPORTANT: the LED context must be locked before this is called.
+static int updateLevelPulse(wLed_t led, wLedOverlayPulse_t **pulse,
+                            uint64_t nowTick, int currentLevelPercent)
+{
+    int levelPercentOrErrorCode = -EINVAL;
+
+    if (pulse && *pulse) {
+        levelPercentOrErrorCode = (*pulse)->levelPercent;
+        if ((*pulse)->remainingTicks > 0) {
+            // Work out the index in the sine table (which we cover twice,
+            // once going up and again going down) we are at
+            unsigned int index = (*pulse)->index;
+            if (index < (W_UTIL_ARRAY_COUNT(gSinePercent) << 1)) {
+                if (index >= W_UTIL_ARRAY_COUNT(gSinePercent)) {
+                    // In the second half, ramping down
+                    index = (W_UTIL_ARRAY_COUNT(gSinePercent) - 1) - (index % W_UTIL_ARRAY_COUNT(gSinePercent));
+                }
+                levelPercentOrErrorCode = (levelPercentOrErrorCode * gSinePercent[index]) / 100;
+                levelPercentOrErrorCode = limitLevel(levelPercentOrErrorCode);
+                (*pulse)->ticksThisIndex++;
+                if ((*pulse)->ticksThisIndex >= (*pulse)->ticksPerIndex) {
+                    (*pulse)->index++;
+                    (*pulse)->ticksThisIndex = 0;
+                }
+            }
+            (*pulse)->remainingTicks -= nowTick - (*pulse)->lastTick;
+            (*pulse)->lastTick = nowTick;
+        } else {
+            // Done, leave the level as it is
+            free(*pulse);
+            *pulse = nullptr;
+            levelPercentOrErrorCode = currentLevelPercent;
+        }
+    }
+
+    return levelPercentOrErrorCode;
+}
+
 // A loop to drive the dynamic behaviours of the LEDs.
 static void ledLoop()
 {
@@ -670,9 +729,15 @@ static void ledLoop()
                                                         &(state->morse),
                                                         gContext.nowTick);
                     }
+                    // Pulse overrides the mode
+                    if (state->pulse) {
+                        levelPercent = updateLevelPulse((wLed_t) x, &(state->pulse),
+                                                        gContext.nowTick,
+                                                        levelPercent);
+                    }
                     if (levelPercent < 0) {
                         // Do the modes etc. if the level hasn't been
-                        // set by a blink or by morse
+                        // set by a blink or by morse or by a pulse
                         switch (state->modeType) {
                             case W_LED_MODE_TYPE_CONSTANT:
                             {
@@ -1094,6 +1159,80 @@ static void msgHandlerLedOverlayWink(void *msgBody, unsigned int bodySize,
 }
 
 /* ----------------------------------------------------------------
+ * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyOverlayPulse_t
+ * -------------------------------------------------------------- */
+
+// Update function called only by msgHandlerLedOverlayPulse().
+// IMPORTANT: the LED context must be locked before this is called.
+static void msgHandlerLedOverlayPulseUpdate(wLed_t led,
+                                            wLedState_t *state,
+                                            uint64_t nowTick,
+                                            wLedOverlayPulse_t *overlaySrc)
+{
+    wLedOverlayPulse_t **overlayDst = &(state->pulse);
+
+    // Make sure there's memory; this will be free()ed by updateLevelPulse()
+    if (!*overlayDst) {
+        *overlayDst = (wLedOverlayPulse_t *) malloc(sizeof(**overlayDst));
+    }
+    if (*overlayDst) {
+        memset(*overlayDst, 0, sizeof(**overlayDst));
+        (*overlayDst)->levelPercent = overlaySrc->levelPercent;
+        (*overlayDst)->remainingTicks = overlaySrc->remainingTicks;
+        (*overlayDst)->lastTick = nowTick;
+        // We need to fit remainingTicks across an "up" gSinePercent
+        // and a "down" gSinePercent: work out the ticks per gSinePercent
+        // entry
+        (*overlayDst)->ticksPerIndex = (overlaySrc->remainingTicks /
+                                        W_UTIL_ARRAY_COUNT(gSinePercent)) >> 1;
+
+        if ((*overlayDst)->ticksPerIndex == 0) {
+            (*overlayDst)->ticksPerIndex = 1;
+        }
+        // This is W_LOG_DEBUG_MORE since it will be within a sequence
+        // of log prints in msgHandlerLedOverlayPulse()
+        W_LOG_DEBUG_MORE("; %s, duration %lld ms",
+                         gLedStr[led],
+                         ticksToMs((*overlayDst)->remainingTicks));
+    }
+}
+
+// Message handler for wLedMsgBodyOverlayPulse_t.
+static void msgHandlerLedOverlayPulse(void *msgBody, unsigned int bodySize,
+                                     void *context)
+{
+    wLedMsgBodyOverlayPulse_t *msg = &(((wLedMsgBody_t *) msgBody)->overlayPulse);
+    wLedOverlayPulse_t *overlay = &(msg->overlay);
+    wLedContext_t *ledContext = (wLedContext_t *) context;
+
+    assert(bodySize == sizeof(*msg));
+
+    W_LOG_DEBUG_START("HANDLER [%06lld]: wLedMsgBodyOverlayPulse_t (LED %d),"
+                      " %d%%", ledContext->nowTick, msg->apply.led,
+                      overlay->levelPercent);
+
+    // Lock the LED context
+    ledContext->mutex.lock();
+
+    if (msg->apply.led < W_UTIL_ARRAY_COUNT(ledContext->ledState)) {
+        // We're updating one LED
+        wLedState_t *state = &(ledContext->ledState[msg->apply.led]);
+        msgHandlerLedOverlayPulseUpdate(msg->apply.led, state, ledContext->nowTick, overlay);
+    } else {
+        // Update both LEDs
+        for (size_t x = 0; x < W_UTIL_ARRAY_COUNT(ledContext->ledState); x++) {
+            wLedState_t *state = &(ledContext->ledState[x]);
+            msgHandlerLedOverlayPulseUpdate((wLed_t) x, state, ledContext->nowTick, overlay);
+        }
+    }
+    W_LOG_DEBUG_MORE(".");
+    W_LOG_DEBUG_END;
+
+    // Unlock the context again
+    ledContext->mutex.unlock();
+}
+
+/* ----------------------------------------------------------------
  * STATIC FUNCTIONS: MESSAGE HANDLER wLedMsgBodyOverlayRandomBlink_t
  * -------------------------------------------------------------- */
 
@@ -1256,6 +1395,8 @@ static wLedMsgHandler_t gMsgHandler[] = {{.msgType = W_LED_MSG_TYPE_MODE_CONSTAN
                                           .function = msgHandlerLedOverlayMorse},
                                          {.msgType = W_LED_MSG_TYPE_OVERLAY_WINK,
                                           .function = msgHandlerLedOverlayWink},
+                                         {.msgType = W_LED_MSG_TYPE_OVERLAY_PULSE,
+                                          .function = msgHandlerLedOverlayPulse},
                                          {.msgType = W_LED_MSG_TYPE_OVERLAY_RANDOM_BLINK,
                                           .function = msgHandlerLedOverlayRandomBlink},
                                          {.msgType = W_LED_MSG_TYPE_LEVEL_SCALE,
@@ -1457,6 +1598,32 @@ int wLedOverlayWinkSet(wLed_t led, unsigned int durationMs)
     return errorCode;
 }
 
+// Add a single pulse as an overlay to the current mode.
+int wLedOverlayPulseSet(wLed_t led,
+                        unsigned int levelPercent,
+                        unsigned int durationMs)
+{
+    int errorCode = -EBADF;
+    wLedMsgBodyOverlayPulse_t msg = {};
+    wLedOverlayPulse_t *overlay = &(msg.overlay);
+
+    if (gMsgQueueId >= 0) {
+        msg.apply.led = led;
+        overlay->remainingTicks = msToTicks(durationMs);
+        overlay->levelPercent = levelPercent,
+        errorCode = wMsgPush(gMsgQueueId,
+                             W_LED_MSG_TYPE_OVERLAY_PULSE,
+                             &msg, sizeof(msg));
+        if (errorCode >= 0) {
+            errorCode = 0;
+        }
+    }
+
+    return errorCode;
+}
+
+
+
 // Set a random blink overlay.
 int wLedOverlayRandomBlinkSet(unsigned int ratePerMinute,
                               int rangeSeconds,
@@ -1530,6 +1697,10 @@ void wLedDeinit()
                 free(state->morse);
                 state->morse = nullptr;
             }
+            if (state->pulse) {
+                free(state->pulse);
+                state->pulse = nullptr;
+            }
             if (state->wink) {
                 free(state->wink);
                 state->wink = nullptr;
@@ -1563,6 +1734,34 @@ int wLedTest()
         }
         // Switch blinking off again
         errorCode = wLedOverlayRandomBlinkSet(0);
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        // Switch both LEDs off between tests
+        errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 0);
+        if (errorCode == 0) {
+            sleep(2);
+
+            W_LOG_INFO("%stesting single pulses.", prefix);
+            W_LOG_INFO("%sboth LEDs, default level and duration.",
+                       prefix);
+            errorCode = wLedOverlayPulseSet(W_LED_BOTH);
+            if (errorCode == 0) {
+                sleep(1);
+            }
+            W_LOG_INFO("%sleft LED, 100%% and one second duration.",
+                       prefix);
+            errorCode = wLedOverlayPulseSet(W_LED_LEFT, 100, 1000);
+            if (errorCode == 0) {
+                sleep(1);
+            }
+            W_LOG_INFO("%sright LED, 50%% and two seconds duration.",
+                       prefix);
+            errorCode = wLedOverlayPulseSet(W_LED_RIGHT, 50, 2000);
+            if (errorCode == 0) {
+                sleep(3);
+            }
+        }
     }
 
     if ((errorCode == 0) && wUtilKeepGoing()) {

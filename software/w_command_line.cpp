@@ -22,13 +22,11 @@
 // The CPP stuff.
 #include <string>
 
-// The Linux/Posix stuff.
-#include <unistd.h> // For get_current_dir_name()
-
 // Other parts of watchdog.
 #include <w_util.h>
 #include <w_log.h>
 #include <w_hls.h>
+#include <w_cfg.h>
 
 // Us.
 #include <w_command_line.h>
@@ -48,35 +46,6 @@
 /* ----------------------------------------------------------------
  * STATIC FUNCTIONS
  * -------------------------------------------------------------- */
-
-// Given a C string that is assumed to be a path, return the directory
-// portion of that as a C++ string.
-static std::string getDirectoryPath(const char *path, bool absolute = false)
-{
-    std::string directoryPath;
-
-    if (path) {
-        directoryPath = std::string(path);
-        if (absolute && !(directoryPath.find_first_of(W_UTIL_DIR_SEPARATOR) == 0)) {
-            // If we haven't already got an absolute path, make it absolute
-            char *currentDirName = get_current_dir_name();
-            if (currentDirName) {
-                directoryPath = std::string(currentDirName) + W_UTIL_DIR_SEPARATOR + directoryPath;
-                free(currentDirName);
-            } else {
-                W_LOG_ERROR("unable to get the current directory name");
-            }
-        }
-        // Remove any slash off the end to avoid double-slashing when
-        // we concatenate this with something else
-        unsigned int length = directoryPath.length();
-        if ((length > 0) && (directoryPath.find_last_of(W_UTIL_DIR_SEPARATOR) == length)) {
-            directoryPath = directoryPath.substr(0, length - 1);
-        }
-    }
-
-    return directoryPath;
-}
 
 // Given a C string that is assumed to be a path, return the file name
 // portion of that string.
@@ -119,6 +88,7 @@ int wCommandLineParse(int argc, char *argv[],
         parameters->programName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
         parameters->outputDirectory = std::string(W_HLS_OUTPUT_DIRECTORY_DEFAULT);
         parameters->outputFileName = std::string(W_HLS_FILE_NAME_ROOT_DEFAULT);
+        parameters->cfgFilePath = std::string(W_CFG_FILE_PATH_DEFAULT);
         if ((argc > 0) && (argv)) {
             // Find the program name in the first argument
             parameters->programName = getFileName(argv[x]);
@@ -132,7 +102,7 @@ int wCommandLineParse(int argc, char *argv[],
                     x++;
                     if (x < argc) {
                         errorCode = 0;
-                        std::string str = getDirectoryPath(argv[x]);
+                        std::string str = std::string(argv[x]);
                         if (!str.empty()) {
                             parameters->outputDirectory = str;
                         }
@@ -147,9 +117,23 @@ int wCommandLineParse(int argc, char *argv[],
                             parameters->outputFileName = str;
                         }
                     }
+                // Test for configuration file path option
+                } else if (std::string(argv[x]) == "-c") {
+                    x++;
+                    if (x < argc) {
+                        errorCode = 0;
+                        std::string str = std::string(argv[x]);
+                        if (!str.empty()) {
+                            parameters->cfgFilePath = str;
+                        }
+                    }
                 // Test for flagStaticCamera
                 } else if (std::string(argv[x]) == "-s") {
                     parameters->flagStaticCamera = true;
+                    errorCode = 0;
+                // Test for doNotOperateMotors
+                } else if (std::string(argv[x]) == "-z") {
+                    parameters->doNotOperateMotors = true;
                     errorCode = 0;
                 }
                 x++;
@@ -180,8 +164,13 @@ void wCommandLinePrintChoices(wCommandLineParameters_t *choices)
         }
         std::cout << ", output files will be named "
                   << choices->outputFileName;
+        std::cout << ", the JSON configuration file will be "
+                  << choices->cfgFilePath;
         if (choices->flagStaticCamera) {
             std::cout << ", head will not track";
+        }
+        if (choices->doNotOperateMotors) {
+            std::cout << ", motors will not move";
         }
     }
     std::cout << "." << std::endl;
@@ -214,11 +203,30 @@ void wCommandLinePrintHelp(wCommandLineParameters_t *defaults)
     }
     std::cout << "." << std::endl;
 
+    std::cout << "  -c <file path> set file path of the JSON configuration"
+              << " file used by the web interface (or anything else for that"
+              << " matter) to control behaviour (default ";
+    if (defaults && !defaults->cfgFilePath.empty()) {
+        std::cout << defaults->cfgFilePath;
+    } else {
+        std::cout << "no configuration file will be used";
+    }
+    std::cout << ");" << std::endl;
+    std::cout << "     if the file does not exist a default file containing"
+              << " all possible options will be written." << std::endl;
+
     std::cout << "  -s static camera (head will move for calibration but not thereafter)";
     if (defaults) {
         std::cout << " (default " << (defaults->flagStaticCamera ? "on)" : "off)");
     }
     std::cout << "." << std::endl;
+
+    std::cout << "  -z do not operate motors (used for deubg/maintenance only)";
+    if (defaults) {
+        std::cout << " (default " << (defaults->doNotOperateMotors ? "on)" : "off)");
+    }
+    std::cout << "." << std::endl;
+
     std::cout << "Note that this program needs to be able to access HW and";
     std::cout << " change scheduling priority, which requires elevated privileges." << std::endl;
 }

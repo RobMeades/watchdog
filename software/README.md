@@ -125,6 +125,31 @@ sudo make install
 
 Note: for the PiZero2W replace `--arch=arm64` with `--arch=armel`.
 
+## GPIO
+
+To read and write GPIOs we need `libgpiod` (v1.6); install the development libraries with:
+
+```
+sudo apt install libgpiod-dev
+```
+
+## cJSON
+
+The web interface configures the operation of the executable by writing a JSON file, for which [cJSON](https://github.com/DaveGamble/cJSON) is used.
+
+Fetch, compile and install it with:
+
+```
+cd~
+git clone https://github.com/DaveGamble/cJSON.git
+cd cJSON
+mkdir build
+cd build
+cmake ..
+make
+sudo make install
+```
+
 ## Apache
 
 To provide a browser interface, being ancient, I would suggest installing Apache with:
@@ -178,13 +203,6 @@ Restart Apache for the changes to take effect:
 
 ```
 sudo systemctl restart apache2
-```
-
-## GPIO
-To read and write GPIOs we need `libgpiod` (v1.6); install the development libraries with:
-
-```
-sudo apt install libgpiod-dev
 ```
 
 # Increasing SD Card Life

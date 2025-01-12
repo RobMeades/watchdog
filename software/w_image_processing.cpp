@@ -26,6 +26,8 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <vector>
+#include <algorithm>  // For std::sort()
 
 // The OpenCV stuff.
 #include <opencv2/imgcodecs.hpp>
@@ -422,7 +424,7 @@ static bool rectGetInfoAndLimit(const cv::Rect *rect, wRectInfo_t *rectInfo)
 // Sorting function for findFocusFrame().
 static bool compareRectInfo(wRectInfo_t rectInfoA,
                             wRectInfo_t rectInfoB) {
-    return rectInfoA.areaPixels >= rectInfoB.areaPixels;
+    return rectInfoA.areaPixels > rectInfoB.areaPixels;
 }
 
 // Find where the focus should be, in frame coordinates,
@@ -448,7 +450,7 @@ static int findFocusFrame(const std::vector<std::vector<cv::Point>> contours,
                 rectGetInfoAndLimit(&rect, &rectInfo);
                 rectInfos.push_back(rectInfo);
             }
-            sort(rectInfos.begin(), rectInfos.end(), compareRectInfo);
+            std::sort(rectInfos.begin(), rectInfos.end(), compareRectInfo);
 
             // Go through the list; the centre of the first (therefore largest)
             // rectangle is assumed to be the centre of our focus, then each

@@ -17,7 +17,8 @@
 #ifndef _W_UTIL_H_
 #define _W_UTIL_H_
 
-// This API is dependent on std::chrono.
+// This API is dependent on std::string and std::chrono.
+#include <string>
 #include <chrono>
 
 /** @file
@@ -64,7 +65,7 @@
 # define W_UTIL_MONITOR_TIMING_LENGTH 1000
 #endif
 
-/** Return the absolute value of a signed integer
+/** Return the absolute value of a signed integer.
  */
 # define W_UTIL_ABS(x) ((x) >= 0 ? (x) : -(x))
 
@@ -134,6 +135,15 @@ bool wUtilTimeoutExpired(wUtilTimeoutStart_t startTime,
  * @param monitorTiming a poinner to the monitoring buffer.
  */
 void wUtilMonitorTimingUpdate(wUtilMonitorTiming_t *monitorTiming);
+
+/** Given a string that is assumed to be a path, return the directory
+ * portion of that.
+ *
+ * @param path     a file path.
+ * @param absolute whether the returned path should be absolute or not.
+ * @return         the directory part of path.
+ */
+std::string wUtilDirectoryPathGet(std::string path, bool absolute = false);
 
 #endif // _W_UTIL_H_
 

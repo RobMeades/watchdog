@@ -148,9 +148,13 @@ typedef struct {
  * will both function.  wGpioInit() must have returned successfully
  * before this is called.
  *
- * @return  zero on success else negative error code.
+ * @param doNotOperateMotors if true, the motors will not be operated,
+ *                           even for calibration; used for debug/
+ *                           maintenance only as the API will not
+ *                           do anything useful with this flag set.
+ * @return                   zero on success else negative error code.
  */
-int wMotorInit();
+int wMotorInit(bool doNotOperateMotors = false);
 
 /** Try to move the given number of steps, returning the number
  * actually stepped in stepsTaken; being short on steps does not

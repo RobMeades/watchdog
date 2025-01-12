@@ -20,15 +20,17 @@
 }
 
 .container {
-  margin: 0 auto;
-  width: 100%;
+    margin: 0 auto;
+    width: 100%;
 }
 </style>
 
 <div class="container">
-   <video width="950" height="540" id="video"></video>
-   <button class="btn" id="play" hidden />
+    <video width="950" height="540" id="video"></video>
+    <button class="btn" id="play" hidden />
 </div>
+
+<pre id="cfg">Configuration will appear here.</pre>
 
 <script>
 'use strict';
@@ -90,6 +92,18 @@ if (Hls.isSupported()) {
     // This is using the built-in support of the plain video element, without using hls.js.
     video.src = 'video/watchdog.m3u8';
     video.addEventListener('loadedmetadata', startPlaying);
+}
+</script>
+
+<script>
+// Display the configuration file
+getCfg("watchdog.cfg");
+
+async function getCfg(file) {
+  let object = await fetch(file);
+  let rawContents = await object.text();
+  let json = JSON.parse(rawContents);
+  document.getElementById("cfg").innerHTML = JSON.stringify(json, undefined, 2);
 }
 </script>
 

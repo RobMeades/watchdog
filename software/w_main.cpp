@@ -60,6 +60,7 @@
 #include <w_util.h>
 #include <w_log.h>
 #include <w_command_line.h>
+#include <w_cfg.h>
 #include <w_gpio.h>
 #include <w_msg.h>
 #include <w_control.h>
@@ -98,11 +99,15 @@ int main(int argc, char *argv[])
         // Capture CTRL-C so that we can exit in an organised fashion
         wUtilTerminationCaptureSet();
 
-        // Initialise GPIOs
-        errorCode = wGpioInit();
+        // Initialise configuration
+        errorCode = wCfgInit(commandLineParameters.cfgFilePath);
+        if (errorCode == 0) {
+            // We should now be able to initialise GPIOs
+            errorCode = wGpioInit();
+        }
         if (errorCode == 0) {
             // We should now be able to initialise the motors
-            errorCode = wMotorInit();;
+            errorCode = wMotorInit(commandLineParameters.doNotOperateMotors);;
         }
         if (errorCode == 0) {
             // Initialise messaging
@@ -178,6 +183,7 @@ int main(int argc, char *argv[])
         wMsgDeinit();
         wMotorDeinit();
         wGpioDeinit();
+        wCfgDeinit();
 
         W_LOG_INFO_START("exiting");
         if (errorCode != 0) {

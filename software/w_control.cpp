@@ -281,10 +281,12 @@ static int stepsPerPixelX100Set(unsigned int *stepsPerPixelX100)
 
 // Create an array of steps; stepsPerPixelX100 and steps must be
 // pointers to arrays of size W_MOTOR_TYPE_MAX_NUM.
-static void stepListSet(const cv::Point *focus,
+static bool stepListSet(const cv::Point *focus,
                         const unsigned int *stepsPerPixelX100,
                         wControlSteps_t *steps)
 {
+    bool stepping = false;
+
     if (focus && stepsPerPixelX100 && steps) {
         // The centre of our point of view is 0, 0, with +Y upwards,
         // -Y downwards, +X to the right, -X to the left, like a
@@ -355,6 +357,7 @@ static void stepListSet(const cv::Point *focus,
                     }
                     // Add the new step to the list
                     (steps + m)->durationTicksList.push_back(durationTicks);
+                    stepping = true;
                 }
                 if (m == 0) {
                     W_LOG_DEBUG_MORE(", ramp/mid/ramp");
@@ -373,6 +376,8 @@ static void stepListSet(const cv::Point *focus,
             W_LOG_DEBUG_END;
         }
     }
+
+    return stepping;
 }
 
 // Perform a step: steps must be a pointer to an array
@@ -610,7 +615,9 @@ static void controlLoop()
                         if (gContext.intervalCountTicks >= msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
                             // If there is no interval to wait,
                             // create a new step list if required
-                            stepListSet(&focusPointView, stepsPerPixelX100, steps);
+                            if (stepListSet(&focusPointView, stepsPerPixelX100, steps)) {
+                                wLedModeConstantSet(W_LED_BOTH, 0, 100, 500);
+                            }
                         } else {
                             if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_GUARD_MS)) {
                                 // Reset the motion detection in the image processing code
@@ -633,6 +640,7 @@ static void controlLoop()
                             if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
                                 W_LOG_DEBUG("inter-movement wait (%d ms) now over.",
                                             W_CONTROL_MOTOR_MOVE_INTERVAL_MS);
+                                wLedModeConstantSet(W_LED_BOTH, 0, 10, 500);
                             }
                         }
 
@@ -656,12 +664,13 @@ static void controlLoop()
                     // if the failure is due to calibration it wiil be caught next time
                     // around
                     stepsPerPixelX100Set(stepsPerPixelX100);
-                    if (calibrationAttemptFailureCount > 0) {
-                        W_LOG_WARN("motor recalibration has failed %d time(s).",
-                                   calibrationAttemptFailureCount);
-                    }
                 }
             }
+        }
+
+        if (calibrationAttemptFailureCount > 0) {
+            W_LOG_WARN("motor recalibration failed %d time(s) during operation.",
+                       calibrationAttemptFailureCount);
         }
 
         // Not sure if this is necessary
@@ -835,8 +844,9 @@ int wControlStart(bool staticCamera)
             // Start video encoding
             errorCode = wVideoEncodeStart();
             if (errorCode == 0) {
-                // We're breathing
-                wLedModeBreatheSet();
+                // We're up
+                wLedModeConstantSet(W_LED_BOTH, 0, 10, 1000);
+                wLedOverlayRandomBlinkSet(5);
             } else {
                  wImageProcessingFocusConsume(nullptr);
             }
