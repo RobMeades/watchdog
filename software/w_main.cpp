@@ -159,8 +159,8 @@ int main(int argc, char *argv[])
 
         if (errorCode == 0) {
             // Everything is now initialised, ready to go; kick things off
-            // by starting control operations, which will requesting the
-            // video to start encoding, which will in turn start the image
+            // by starting control operations, which will request the video
+            // encode to start encoding, which will in turn start the image
             // processing code, which will in turn start the camera
             errorCode = wControlStart(commandLineParameters.flagStaticCamera);
 
