@@ -1,445 +1,77 @@
+<!--
+Copyright 2025 Rob Meades
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 <!DOCTYPE html PUBLIC "-//Netscape Comm. Corp.//DTD HTML//EN">
 <html>
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-<head><meta http-equiv="content-type" content="text/html; charset=UTF-8"></head>
-<body>
 
-<style>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <head>
+        <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+        <link rel="stylesheet" href="styles.css">
+    </head>
+    <body>
 
-/* Container to hold the video image with a button placed on top of it */
-.btn {
-    width: 950px;
-    height: 540px;
-    background-image:url(play.png);
-    background-repeat:no-repeat;
-    background-color: transparent;
-    border:0
-}
-.container .btn {
-    /* This puts the button image on top of the video */
-    position: absolute;
-    top: 0px;
-    left: 0px;
-}
-.container {
-    margin: 0 auto;
-    width: 100%;
-}
+        <!-- Main page -->
+        <div class="container">
+            <video width="950" height="540" id="video"></video>
+            <button class="btn" id="play" hidden />
+        </div>
+        <br>
+        <table id="week" width="950" cellspacing="0" cellpadding="0"></table>
 
-/* Table to show the weekly schedule */
-.table, th, td, tr {
-    font-family: Arial, Helvetica, sans-serif;
-    border-bottom: solid 1px #ccc;
-    border-right: solid 1px #ccc; 
-    border-left: solid 1px #ccc;
-    border-collapse: collapse;
-}
-th, td {
-    /* 12% leaves us with even column widths for 7 days of the week plus room for a narrower left-hand column with hours */
-    width: 12%;
-    /* Just a little padding as it is a bit crowded otherwise */
-    padding: 2px;
-}
-td:first-child {
-    /* The first column's HH:MM:SS fits into a 7% column width */
-    width: 7%;
-}
+        <!-- Modal dialog box for weekly schedule modifications  -->
+        <div id="schedule-change" class="dialog">
+            <div class="dialog-content">
+                <div class="dialog-header">
+                    <span id="dialog-close-btn" class="dialog-close" aria-label="Close">&times;</span>
+                    <h2>Modify Schedule</h2>
+                </div>
+                <div class="dialog-body">
+                    <p>What do you want to change for that time period?</p>
+                    <div class="radio-groups">
+                        <div class="radio-group">
+                            <h3>Motors</h3>
+                            <label class="radio-label">
+                                <input type="radio" name="motors" value="off">off
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="motors" value="on">on
+                            </label>
+                        </div>
+                        <div class="radio-group">
+                            <h3>Lights</h3>
+                            <label class="radio-label">
+                                <input type="radio" name="lights" value="off">off
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="lights" value="on">on
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="dialog-footer">
+                    <button id="schedule-change-submit-btn">Submit</button>
+                </div>
+            </div>
+        </div>
 
-/* Colours for the cells of the table */
-.cellOn {
- background-color: transparent;
-}
-.cellMotorsOffLightsOn {
-  background-color: rgba(0, 153, 255, 0.8);
-}
-.cellMotorsOnLightsOff {
-  background-color: rgba(0, 102, 255, 0.8);
-}
-.cellOff {
-  background-color: rgba(0, 0, 255, 0.8);
-}
-
-</style>
-
-<div class="container">
-    <video width="950" height="540" id="video"></video>
-    <button class="btn" id="play" hidden />
-</div>
-
-<br>
-
-<table id="week" width="950" cellspacing="0" cellpadding="0"></table>
-
-<pre id="cfg">Configuration will appear here.</pre>
-
-<script>
-'use strict';
-var playButton = document.getElementById('play');
-var video = document.getElementById('video');
-
-function startPlaying() {
-    // For mobile browsers the start of playing has to
-    // be performed by a user action otherwise it will
-    // be ignored
-    playButton.addEventListener('click', function() {
-        video.play();
-        video.muted = true;
-        playButton.hidden = true;
-    });
-    playButton.hidden = false;
-}
-
-if (Hls.isSupported()) {
-    var config = {
-      debug: true,
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 5,
-      maxLiveSyncPlaybackRate: 2
-    };
-
-    var hls = new Hls(config);
-
-    // This puts up alert boxes in the browser that need to be dismissed
-    // before continuing
-    //hls.on(Hls.Events.ERROR, function (event, data) {
-    //  alert("HLS error: \n" + JSON.stringify(data, null, 4));
-    //});
-
-    hls.loadSource('video/watchdog.m3u8');
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, startPlaying);
-    hls.on(Hls.Events.ERROR, function(event, data) {
-        if (data.fatal) {
-            switch (data.type) {
-                case Hls.ErrorTypes.NETWORK_ERROR:
-                    // try to recover network error
-                    console.log("fatal network error, trying to recover");
-                    hls.startLoad();
-                break;
-                case Hls.ErrorTypes.MEDIA_ERROR:
-                    console.log("fatal media error, trying to recover");
-                    hls.recoverMediaError();
-                break;
-                default:
-                    console.log("unhandled error (" + data.type + ")");
-                break;
-            }
-        }
-    });
-} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    // hls.js is not supported on platforms that do not have Media Source Extensions (MSE) enabled.
-    // When the browser has built-in HLS support (check using `canPlayType`), we can provide an HLS manifest (i.e. .m3u8 URL) directly to the video element through the `src` property.
-    // This is using the built-in support of the plain video element, without using hls.js.
-    video.src = 'video/watchdog.m3u8';
-    video.addEventListener('loadedmetadata', startPlaying);
-}
-</script>
-
-<script>
-// Display the configuration file
-getCfg("watchdog.cfg");
-
-async function getCfg(file) {
-  let object = await fetch(file);
-  let rawContents = await object.text();
-  let json = JSON.parse(rawContents);
-  document.getElementById("cfg").innerHTML = JSON.stringify(json, undefined, 2);
-}
-
-// Dynamic table creator, following the pattern here:
-// https://jsfiddle.net/onury/kBQdS/.
-var dynamicTable = (function() {
-    let _tableId, _table, _columnTitles, _rowTitles, _defaultText;
-
-    // Build a row.  Data can be a list of strings or it
-    // can be a ilst of objects with "class" and "contents"
-    // members.
-    function _buildRow(rowTitle, data) {
-        let columnPrefix = '<td valign="top" align="center"';
-        let columnPostfix = '</td>';
-        let row = '<tr>';
-        if (rowTitle) {
-            row += columnPrefix + '>' + rowTitle + columnPostfix;
-        }
-        if (data) {
-            data.forEach(function(column) {
-                cellClass = '';
-                contents = column;
-                if (column['class']) {
-                    cellClass = ' class="' + column.class + '"';
-                    contents = column.contents;
-                }
-                row += columnPrefix + cellClass + '>' + contents + columnPostfix;
-            });
-        }
-        row += '</tr>';
-        return row;
-    }
-
-    // Make a colour class list for all of the cells
-    // A cell is identified by the column title and the
-    // row title concatanated together.
-    function _colours(data) {
-        let colours = {};
-        if (data && _rowTitles && _columnTitles) {
-            // At the start of the week, motors and lights are on
-            let motorsOff = false;
-            let lightsOff = false;
-            _columnTitles.forEach(function(columnTitle) {
-                let dayData = data[columnTitle];
-                _rowTitles.forEach(function(rowTitle) {
-                    if (dayData) {
-                        let cellData = dayData[rowTitle];
-                        if (cellData) {
-                            cellData.forEach(function(item) {
-                                if (item.switchType === 'off') {
-                                    if (item.thing === 'motors') {
-                                       motorsOff = true;
-                                    } else if (item.thing === 'lights') {
-                                       lightsOff = true;
-                                    }
-                                } else if (item.switchType === 'on') {
-                                    if (item.thing === 'motors') {
-                                       motorsOff = false;
-                                    } else if (item.thing === 'lights') {
-                                       lightsOff = false;
-                                    }
-                                }
-                            })
-                        }
-                    }
-                    let cell = 'cellOn';
-                    if (motorsOff || lightsOff) {
-                        if (motorsOff && lightsOff) {
-                            cell = 'cellOff';
-                        } else if (motorsOff) {
-                            cell = 'cellMotorsOffLightsOn';
-                        } else {
-                            cell = 'cellMotorsOnLightsOff';
-                        }
-                    }
-                    colours[columnTitle + rowTitle] = cell;
-                })
-            })
-        }
-        return colours;
-    }
-
-    // Build the headers of the table.
-    function _setColumnTitles() {
-        let h = _buildRow(' ', _columnTitles);
-        if (_table.children('thead').length < 1) {
-            _table.prepend('<thead></thead>');
-        }
-        _table.children('thead').html(h);
-    }
-
-    // Display something when we have no data to populate the table.
-    function _setNoItemsInfo() {
-        if (_table.length > 0) {
-            let colspan = _columnTitles != null && _columnTitles.length > 0 ?
-                         'colspan="' + _columnTitles.length + '"' : '';
-            let content = '<tr class="no-items"><td ' + colspan +
-                          ' valign="top" align="center">' + 
-                          _defaultText + '</td></tr>';
-            if (_table.children('tbody').length > 0) {
-                _table.children('tbody').html(content);
-            } else {
-                _table.append('<tbody>' + content + '</tbody>');
-            }
-        }
-    }
-
-    // Remove the "no data to display" thingy.
-    function _removeNoItemsInfo() {
-        let c = _table.children('tbody').children('tr');
-        if (c.length == 1 && c.hasClass('no-items')) {
-            _table.children('tbody').empty();
-        }
-    }
-
-    return {
-        // Configure the dynamic table.
-        cfg: function(tableId, columnTitles, rowTitles, defaultText) {
-            _tableId = tableId;
-            _table = $('#' + tableId);
-            _columnTitles = columnTitles || null;
-            _rowTitles = rowTitles || null;
-            _defaultText = defaultText || 'No data';
-            _setColumnTitles();
-            _setNoItemsInfo();
-            return this;
-        },
-        // Load data into the dynamic table.
-        // Data should be an object containing an entry for each
-        // columnTitle; if there is data at one of those column
-        // titles it will be in a list attached as an object
-        // whose name matches one of our rowTitles.
-        load: function(data) {
-            if (_table.length > 0) {
-                _setColumnTitles();
-                _removeNoItemsInfo();
-                if (data && _rowTitles && _columnTitles) {
-                    // We want to colour the cells based on the state
-                    // of the motors and the lights but we can't do
-                    // that as we go as the order of the table is
-                    // wrong: make a matric of cell colours that we 
-                    // can apply as we go.
-                    let cellColours = _colours(data);
-                    _rowTitles.forEach(function(rowTitle) {
-                        let list = [];
-                        _columnTitles.forEach(function(columnTitle) {
-                            let contents = '';
-                            let dayData = data[columnTitle];
-                            if (dayData) {
-                                let cellData = dayData[rowTitle];
-                                if (cellData) {
-                                    cellData.forEach(function(item, index) {
-                                        if (index > 0) {
-                                            contents += ', ';
-                                        }
-                                        contents = item.thing + ' ' + item.switchType;
-                                    });
-                                }
-                            }
-                            list.push({"contents": contents,
-                                       "class": cellColours[columnTitle + rowTitle]});
-                        });
-                        let row = _buildRow(rowTitle, list);
-                        _table.children('tbody')['append'](row);
-                    });
-                } else {
-                    _setNoItemsInfo();
-                }
-            }
-            return this;
-        },
-        // Clear the table body.
-        clear: function() {
-            _setNoItemsInfo();
-            return this;
-        }
-    };
-}());
-
-// Convert a string of the form HH:MM:SS into seconds.
-function timeStrToSeconds(timeStr) {
-    return parseInt(timeStr.substring(0, 2), 10) * 60 * 60 +
-           parseInt(timeStr.substring(3, 5), 10) * 60 +
-           parseInt(timeStr.substring(7, 9), 10);
-}
-
-// Fetch a data file from the server.
-async function dataFetch(file) {
-    let json = {};
-
-    try {
-        let object = await fetch(file);
-        let rawContents = await object.text();
-        json = await JSON.parse(rawContents);
-    } catch {
-        console.log("unable to fetch " + file);
-    }
-
-    return json;
-}
-
-// Wait for the asynchronous function to complete and
-// load the weekly schedule table.
-(async () => {
-    // Fetch the configuration data from the server
-    var cfgData = await dataFetch('watchdog.cfg');
-    loadTable(cfgData);
-})();
-
-// Populate the weekly schedule table.
-function loadTable(cfgData) {
-    // The days of the week, which are our column titles and will be the
-    // same as the days of the week returned in the configuration file
-    // from the server (ignoring case)
-    let dayList = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    // The HH:MM:SS of the day, which are our row titles
-    let timeStrList = ['00:00:00', '01:00:00', '02:00:00', '03:00:00', '04:00:00', '05:00:00',
-                       '06:00:00', '07:00:00', '08:00:00', '09:00:00', '10:00:00', '11:00:00',
-                       '12:00:00', '13:00:00', '14:00:00', '15:00:00', '16:00:00', '17:00:00',
-                       '18:00:00', '19:00:00', '20:00:00', '21:00:00', '22:00:00', '23:00:00'];
-    // How long each of the times above covers
-    let durationSeconds = 60 * 60;
-    // The things we want to show in the table; these will be in the configuration
-    // data we receive from the server
-    let thingList = ['motors', 'lights'];
-    // The types of operations on the things that we want to show in the table,
-    // which will again be in the data we receive from the server
-    let switchTypeList = ['off', 'on'];
-
-    // Configure the table
-    let weekTable = dynamicTable.cfg('week', dayList, timeStrList, 'Loading...');
-
-    // The form of this data is as described at the top of w_cfg.h;
-    // turn it into a block of weekly data that can be passed to
-    // the table
-    let weekData = cfgData['week'];
-    let daysObject = {};
-    if (weekData) {
-        dayList.forEach(function(day) {
-            let timesObject = {};
-            let dayData = weekData[day.toLowerCase()];
-            if (dayData) {
-                // Check for all of our time windows
-                timeStrList.forEach(function(timeStr) {
-                    let happenings = [];
-                    // Check for all of our things
-                    thingList.forEach(function(thing) {
-                        // Check for all of our switch types
-                        switchTypeList.forEach(function(switchType) {
-                            // See if there is a list of times for that switch type
-                            let timeList = [];
-                            try {
-                                timeList = dayData[thing][switchType];
-                            } catch {
-                                // There was not
-                            }
-                            if (timeList && (timeList.length > 0)) {
-                                timeList.forEach(function(switchTimeStr) {
-                                    // We have timeStr (the row title), which is "HH:MM:SS",
-                                    // and, in switchTimeStr (also "HH:MM:SS"), we have a
-                                    // time at which a switch type (off or on) occurs for a
-                                    // thing (motors or lights); if switchTimeStr is within
-                                    // the/ time window or timeStr, add an object to the
-                                    // list describing what happens then
-                                    let switchTime = timeStrToSeconds(switchTimeStr);
-                                    let time = timeStrToSeconds(timeStr);
-                                    if ((switchTime >= time) && (switchTime < time + durationSeconds)) {
-                                        happenings.push({'time': switchTimeStr, thing: thing, switchType: switchType});
-                                    }
-                                });
-                            }
-                        });
-                    });
-                    // If there were any happenings, make a time object with [a copy of]
-                    // the list of happenings and add it to the timesObject we were
-                    // passed
-                    if (happenings.length > 0) {
-                        timesObject[timeStr] = Array.from(happenings);
-                    }
-                });
-                // Add the day to the days object, if anything happened then
-                if (timesObject) {
-                    daysObject[day] = timesObject;
-                }
-            }
-        });
-    }
-
-    // daysObject contains all of the days from dayList[], to which is
-    // attached a set of objects named after the entries of timeStrList[]
-    // where something is scheduled to happen in that time window; pass
-    // this into our table.
-    weekTable.load(daysObject);
-}
-
-</script>
-
-</body>
+    <!-- Load the script last so that the document is loaded before the script refers to it -->
+    <script src="script.js"></script>
+    </body>
 </html>
+
+<!-- End of file -->
