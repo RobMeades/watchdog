@@ -835,7 +835,6 @@ int wControlStart(bool staticCamera)
     int errorCode = -EBADF;
 
     if (gTimerFd >= 0) {
-        errorCode = 0;
         gContext.staticCamera = staticCamera;
         gContext.intervalCountTicks = INT_MAX;
         // Set ourselves up as a consumer of focus from the image processing

@@ -18,6 +18,11 @@
  * @brief Style sheet for index.html.
  */
 
+/* Use a nice plain font throughout */
+body {
+    font-family: Arial, Helvetica, sans-serif;
+}
+
 /* Container to hold the video image with a button placed on top of it */
 .btn {
     width: 950px;
@@ -40,7 +45,6 @@
 
 /* Table to show the weekly schedule */
 .table, th, td, tr {
-    font-family: Arial, Helvetica, sans-serif;
     border-bottom: solid 1px #ccc;
     border-right: solid 1px #ccc; 
     border-left: solid 1px #ccc;
@@ -51,12 +55,15 @@
 tbody td:not(:first-child) {
     /* Show that the body of the table, bar the first column, is interactive */
     cursor: pointer;
+    /* Make the font size small enough that we can fit in "motors off, lights off" */
+    font-size: 12px;
 }
 th, td {
     /* 12% leaves us with even column widths for 7 days of the week plus room for a narrower left-hand column with hours */
     width: 12%;
     /* Just a little padding as it is a bit crowded for my liking otherwise */
     padding: 2px;
+    vertical-align: middle;
 }
 td:first-child {
     /* The first column's HH:MM:SS fits into a 7% column width nicely */
@@ -66,19 +73,22 @@ td.selected {
     background-color: rgb(51, 204, 51);
     color: white;
 }
+td:focus {
+  outline: 2px solid blue;
+}
 
 /* Colours for the cells of the table */
 .cell-on {
- background-color: white;
+    background-color: white;
 }
 .cell-motors-off-lights-on {
-  background-color: rgba(0, 153, 255, 0.8);
+    background-color: rgba(0, 153, 255, 0.8);
 }
 .cell-motors-on-lights-off {
-  background-color: rgba(0, 102, 255, 0.8);
+    background-color: rgba(0, 102, 255, 0.8);
 }
 .cell-off {
-  background-color: rgba(0, 0, 255, 0.8);
+    background-color: rgba(0, 0, 255, 0.8);
 }
 
 /* Modal dialog styles */
@@ -95,7 +105,6 @@ td.selected {
 }
 
 .dialog-content {
-    font-family: Arial, Helvetica, sans-serif;
     background-color: white;
     padding: 10px 30px;
     border-radius: 4px;
@@ -162,6 +171,34 @@ td.selected {
 .radio-label input[type="radio"] {
     order: 2; /* Radio button on the right */
     margin-left: 10px;
+}
+
+/* Timed, self-cancelling notification styles */
+#notification {
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(255, 255, 255, 0.8);
+    color: black;
+    padding: 5px;
+    border: 1px solid rgba(0, 0, 0, 0.8);
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.5s;
+}
+
+/* Note: these have to be #notification.blah as otherwise they won't overried the settings in #notification. */
+#notification.show {
+    display: block;
+    opacity: 1;
+}
+
+#notification.hide {
+    opacity: 0;
 }
 
 /* End of file */

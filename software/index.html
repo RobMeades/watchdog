@@ -34,10 +34,10 @@ limitations under the License.
         <table id="week" width="950" cellspacing="0" cellpadding="0"></table>
 
         <!-- Modal dialog box for weekly schedule modifications  -->
-        <div id="schedule-change" class="dialog">
+        <div id="schedule-change" class="dialog" tabindex="-1">
             <div class="dialog-content">
                 <div class="dialog-header">
-                    <span id="dialog-close-btn" class="dialog-close" aria-label="Close">&times;</span>
+                    <span id="dialog-close-btn" class="dialog-close" tabindex="0"role="button" title="Close" aria-label="Close">&times;</span>
                     <h2>Modify Schedule</h2>
                 </div>
                 <div class="dialog-body">
@@ -46,19 +46,19 @@ limitations under the License.
                         <div class="radio-group">
                             <h3>Motors</h3>
                             <label class="radio-label">
-                                <input type="radio" name="motors" value="off">off
+                                <input type="radio" name="motors" value="off" aria-label="Motors off">off
                             </label>
                             <label class="radio-label">
-                                <input type="radio" name="motors" value="on">on
+                                <input type="radio" name="motors" value="on" aria-label="Motors on">on
                             </label>
                         </div>
                         <div class="radio-group">
                             <h3>Lights</h3>
                             <label class="radio-label">
-                                <input type="radio" name="lights" value="off">off
+                                <input type="radio" name="lights" value="off" aria-label="Lights off">off
                             </label>
                             <label class="radio-label">
-                                <input type="radio" name="lights" value="on">on
+                                <input type="radio" name="lights" value="on" aria-label="Motors on">on
                             </label>
                         </div>
                     </div>
@@ -69,8 +69,11 @@ limitations under the License.
             </div>
         </div>
 
-    <!-- Load the script last so that the document is loaded before the script refers to it -->
-    <script src="script.js"></script>
+        <!-- Notification dialog box -->
+        <div id="notification" aria-live="polite" aria-atomic="true">empty</div>
+
+        <!-- Load the script last so that the document is loaded before the script refers to it -->
+        <script src="script.js"></script>
     </body>
 </html>
 
