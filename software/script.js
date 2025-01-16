@@ -589,7 +589,7 @@ const gDynamicTable = (function() {
     let _tableId, _table, _columnTitles, _rowTitles, _defaultText;
 
     // Build a row.  Data can be a list of strings or it
-    // can be a ilst of objects with "class" and "contents"
+    // can be a ilst of objects with "classList" and "contents"
     // members.
     function _buildRow(rowTitle, data) {
         const columnPrefix = '<td valign="top" align="center"';
@@ -599,16 +599,23 @@ const gDynamicTable = (function() {
         if (rowTitle) {
             row += columnPrefix + '>' + rowTitle + columnPostfix;
             if (_columnTitles) {
-                ariaLabelPrefix = 'aria-label="';
+                ariaLabelPrefix = ' aria-label="';
             }
         }
         if (data) {
             data.forEach(function(column, index) {
-                let cellClass = '';
+                let classes = '';
                 let contents = column;
                 let tabIndex = ''
-                if (column['class']) {
-                    cellClass = ' class="' + column.class + '"';
+                if (column['classList']) {
+                    classes = ' class ="';
+                    column['classList'].forEach(function(_class, index) {
+                        if (index > 0) {
+                            classes += ' ';
+                        }
+                        classes += _class;
+                    });
+                    classes += '"';
                     // Adding tabIndex="0" allows the cell to be tabbed-to
                     tabIndex = ' tabindex="0"'
                     contents = column.contents;
@@ -617,22 +624,23 @@ const gDynamicTable = (function() {
                 if (ariaLabelPrefix != null) {
                     ariaLabel = ariaLabelPrefix + rowTitle + ' on ' + _columnTitles[index] + '"';
                 }
-                row += columnPrefix + cellClass + ariaLabel + tabIndex + '>' + contents + columnPostfix;
+                row += columnPrefix + classes + ariaLabel + tabIndex + '>' + contents + columnPostfix;
             });
         }
         row += '</tr>';
         return row;
     }
 
-    // Make a colour class object for all of the cells.
-    // An entry in the object may be accessed by using a key
+    // Make a class object for all of the cells.
+    // An entry in the object, which will be a list of classes
+    // that must be applied to the cell, may be accessed by using a key
     // that is the column title and the row title concatanated.
-    function _cellColour(data) {
-        let colour = {};
+    function _cellClasses(data) {
+        let classObject = {};
         if (data && _rowTitles && _columnTitles) {
-            // At the start of the week, motors and lights are on
-            let motorsOff = false;
-            let lightsOff = false;
+            // TODO: deal with starting condition
+            let classList = [];
+            classList.push('cell-on');
             _columnTitles.forEach(function(columnTitle) {
                 let dayData = data[columnTitle];
                 _rowTitles.forEach(function(rowTitle) {
@@ -642,35 +650,42 @@ const gDynamicTable = (function() {
                             cellData.forEach(function(item) {
                                 if (item.switchType === 'off') {
                                     if (item.thing === 'motors') {
-                                       motorsOff = true;
+                                        // Remove "on" from the list 'cos they are not both on now
+                                        classList = classList.filter(value => value !== 'cell-on');
+                                        // Prevent duplicates
+                                        classList = classList.filter(value => value !== 'cell-motors-off');
+                                        classList.push('cell-motors-off');
                                     } else if (item.thing === 'lights') {
-                                       lightsOff = true;
+                                        // Remove "on" from the list 'cos they are not both on now
+                                        classList = classList.filter(value => value !== 'cell-on');
+                                        // Prevent duplicates
+                                        classList = classList.filter(value => value !== 'cell-lights-off');
+                                        classList.push('cell-lights-off');
                                     }
                                 } else if (item.switchType === 'on') {
                                     if (item.thing === 'motors') {
-                                       motorsOff = false;
+                                        // Remove the motors off class from the list
+                                        classList = classList.filter(value => value !== 'cell-motors-off');
                                     } else if (item.thing === 'lights') {
-                                       lightsOff = false;
+                                        // Remove the lights off class from the list
+                                        classList = classList.filter(value => value !== 'cell-lights-off');
                                     }
                                 }
                             })
+                            if (classList.length == 0) {
+                                // If the list is of size 0, both must be off
+                                classList = []
+                                classList.push('cell-on');
+                            }
                         }
                     }
-                    let cell = 'cell-on';
-                    if (motorsOff || lightsOff) {
-                        if (motorsOff && lightsOff) {
-                            cell = 'cell-off';
-                        } else if (motorsOff) {
-                            cell = 'cell-motors-off-lights-on';
-                        } else {
-                            cell = 'cell-motors-on-lights-off';
-                        }
+                    if (classList.length > 0) {
+                        classObject[columnTitle + rowTitle] = Array.from(classList);
                     }
-                    colour[columnTitle + rowTitle] = cell;
                 })
             })
         }
-        return colour;
+        return classObject;
     }
 
     // Build the headers of the table.
@@ -734,9 +749,9 @@ const gDynamicTable = (function() {
                     // We want to colour the cells based on the state
                     // of the motors and the lights but we can't do
                     // that as we go as the order of the table is
-                    // wrong: get a matrix of cell colours that we 
+                    // wrong: get a list of cell colours that we 
                     // can apply as we go.
-                    const cellColours = _cellColour(data);
+                    const classes = _cellClasses(data);
                     _rowTitles.forEach(function(rowTitle) {
                         let column = [];
                         _columnTitles.forEach(function(columnTitle) {
@@ -749,12 +764,17 @@ const gDynamicTable = (function() {
                                         if (index > 0) {
                                             contents += ', ';
                                         }
-                                        contents = item.thing + ' ' + item.switchType;
+                                        contents += item.thing + ' ' + item.switchType;
                                     });
                                 }
                             }
-                            column.push({"contents": contents,
-                                         "class": cellColours[columnTitle + rowTitle]});
+                            let classList = classes[columnTitle + rowTitle];
+                            if (classList) {
+                                column.push({"contents": contents,
+                                             "classList": classList});
+                            } else {
+                                column.push(contents);
+                            }
                         });
                         const row = _buildRow(rowTitle, column);
                         _table.children('tbody')['append'](row);

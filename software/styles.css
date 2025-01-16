@@ -70,7 +70,9 @@ td:first-child {
     width: 7%;
 }
 td.selected {
-    background-color: rgb(51, 204, 51);
+    /* The !important markers stops the "selected" colour from disappearing in the blended colour below. */
+    background-color: rgb(51, 204, 51) !important;
+    background-image: none !important;
     color: white;
 }
 td:focus {
@@ -81,14 +83,20 @@ td:focus {
 .cell-on {
     background-color: white;
 }
-.cell-motors-off-lights-on {
-    background-color: rgba(0, 153, 255, 0.8);
+.cell-motors-off {
+    /* Must be the same as the blended version below */
+    background-color: rgba(102, 204, 255, 0.5);
 }
-.cell-motors-on-lights-off {
-    background-color: rgba(0, 102, 255, 0.8);
+.cell-lights-off {
+    /* Must be the same as the blended version below */
+    background-color: rgba(204, 204, 255, 0.5);
 }
-.cell-off {
-    background-color: rgba(0, 0, 255, 0.8);
+/* Blended */
+.cell-lights-off.cell-motors-off {
+  background:
+    linear-gradient(rgba(204, 204, 255, 0.5), rgba(204, 204, 255, 0.5)),
+    linear-gradient(rgba(102, 204, 255, 0.5), rgba(102, 204, 255, 0.5));
+  background-blend-mode: multiply;
 }
 
 /* Modal dialog styles */
