@@ -19,11 +19,45 @@
  * and hls.js.
  */
 
+'use strict';
+
+/* ----------------------------------------------------------------
+ * MISC
+ * -------------------------------------------------------------- */
+
+// Track the state of the control key.
+let gKeyIsPressedCtrl = false;
+
+// Event listener: for CTRL-key handling.
+document.addEventListener('keyup', function(event) {
+    if (event.key === 'Control' || event.key === 'Meta') {
+        gKeyIsPressedCtrl = false;
+    }
+});
+
+// Event listener: for undo/redo keys on the whole document,
+// done in a slightly peculiar way as the browser's own
+// undo functionality interferes with the key-presses we
+// receive.
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Control' || event.key === 'Meta') {
+        gKeyIsPressedCtrl = true;
+        // Ctrl-Z (undo)
+    } else if (gKeyIsPressedCtrl && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault();
+        historyUndo();
+        // Ctrl-Y (redo)
+    } else if (gKeyIsPressedCtrl && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault();
+        historyRedo();
+    }
+});
+
 /* ----------------------------------------------------------------
  * HLS VIDEO PLAYING STUFF
  * -------------------------------------------------------------- */
 
-'use strict';
+// Grab the element IDs
 const gPlayButton = document.getElementById('play');
 const gVideo = document.getElementById('video');
 
@@ -112,19 +146,36 @@ function showNotification(message, timeoutMs = 5000) {
 }
 
 /* ----------------------------------------------------------------
- * WEEKLY SCHEDULE STUFF: EVENT LISTENERS, DIALOGS AND THE LIKE
+ * WEEKLY SCHEDULE STUFF: THE SCHEDULE CHANGE DIALOG
  * -------------------------------------------------------------- */
 
 // Grab the IDs of the elements of the schedule change dialogue box.
-const gDialog = document.getElementById('schedule-change');
-const gDialogCloseBtn = document.getElementById('dialog-close-btn');
+const gScheduleChangeDialog = document.getElementById('schedule-change');
+const gScheduleChangeDialogCloseBtn = document.getElementById('dialog-close-btn');
 const gScheduleChangeSubmitBtn = document.getElementById('schedule-change-submit-btn');
-const gRadioMotors = document.getElementById('radio-motors');
-const gRadioLights = document.getElementById('radio-lights');
+const gScheduleChangeRadioMotors = document.getElementById('radio-motors');
+const gScheduleChangeRadioLights = document.getElementById('radio-lights');
+
+// Engage the schedule-change modal dialog box.
+function scheduleChangeDialog() {
+    const radioButtons = document.querySelectorAll('input[type="radio"]');
+    // Uncheck the radio buttons before displaying them,
+    // as a kind of reset mechanism in case the user
+    // ticks one they didn't intend to
+    radioButtons.forEach(radio => {
+        radio.checked = false;
+    });
+
+    // Show the dialog box; event listeners will close it
+    gScheduleChangeDialog.style.display = 'flex';
+    // Since the dialog is a div, we need to move focus manually
+    gTableLastFocusedElement = document.activeElement;
+    gScheduleChangeDialog.focus();
+}
 
 // Close the schedule change dialog: called by event listeners.
 function scheduleChangeDialogClose() {
-    gDialog.style.display = 'none';
+    gScheduleChangeDialog.style.display = 'none';
     if (gTableLastFocusedElement) {
         gTableLastFocusedElement.focus();
     }
@@ -132,39 +183,97 @@ function scheduleChangeDialogClose() {
 
 // Event listener: close the schedule-change dialogue box
 // when the close button is clicked.
-gDialogCloseBtn.addEventListener('click', () => {
+gScheduleChangeDialogCloseBtn.addEventListener('click', () => {
     scheduleChangeDialogClose();
 });
 
 // Event listener: close the schedule-change dialog when
 // clicking outside the dialogue.
 window.addEventListener('click', (event) => {
-    if (event.target === gDialog) {
+    if (event.target === gScheduleChangeDialog) {
         scheduleChangeDialogClose();
     }
 });
 
 // Event listener: close the schedule-change dialogue box
 // if the escape key is pressed.
-gDialog.addEventListener('keydown', (event) => {
+gScheduleChangeDialog.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
         scheduleChangeDialogClose();
     }
 });
 
-// These variables and the functions that follow should
-// be inside the 'DOMContentLoaded' table manipulation
-// event listener below; however, in order to support
-// undo/redo, they have to be accessible to the
-// 'keydown' event listener and hence need to be at
-// the top level.
+// Event listener: schedule-change form submission.
+gScheduleChangeSubmitBtn.addEventListener('click', () => {
+    // Remove the dialog box
+    gScheduleChangeDialog.style.display = 'none';
+
+    // Get the selected radio buttons
+    const selectedMotors = document.querySelector('input[name="motors"]:checked');
+    const selectedLights = document.querySelector('input[name="lights"]:checked');
+
+    let notification = null;
+    if (selectedMotors) {
+        notification = 'motors ' + selectedMotors.value;
+    }
+    if (selectedLights) {
+        if (selectedMotors) {
+            notification += ', ';
+        } else {
+            notification = '';
+        }
+        notification += 'lights ' + selectedLights.value;
+    }
+
+    let isConfirmed = false;
+    if (notification != null) {
+        // Display an "are you sure" dialog box using the browser's
+        // native confirm() mechanism
+        isConfirmed = confirm('Set ' + notification + ': are you sure?');
+        if (isConfirmed) {
+            notification = 'Changes successfully written';
+        } else {
+            notification = 'Cancelled';
+        }
+    } else {
+        notification = 'Nothing to do';
+    }
+
+    if (isConfirmed) {
+        // Get the selected cells and update the table
+        const selectedCells = gTable.querySelectorAll('td.selected');
+        gDynamicTable.setMotorsLights(selectedCells, selectedMotors, selectedLights);
+
+        // Clear selection and selection state history,
+        // adding a new zero state
+        tableClearSelection();
+        historyStateClear();
+        historySaveState(true);
+        gTableLastSelectedCell = null;
+        gTableNumCellsSelected = 0;
+    }
+    if (gTableLastFocusedElement) {
+        gTableLastFocusedElement.focus();
+    }
+
+    if (notification != null) {
+        showNotification(notification);
+    }
+});
+
+/* ----------------------------------------------------------------
+ * WEEKLY SCHEDULE STUFF: NAVIGATING THE TABLE
+ * -------------------------------------------------------------- */
+
+// These variables and the functions that follow should really be
+// inside the 'DOMContentLoaded' table manipulation event listener
+// below; however, in order to support undo/redo, they have to be
+// accessible to the 'keydown' event listener and hence need to be
+// at the top level.
 let gTableLastSelectedCell = null;
 let gTableNumCellsSelected = 0;
 let gTableLastFocusedElement;
-let gHistory = [];
-let gHistoryStateIndex = -1;
 let gTable; // Will be populated by the 'DOMContentLoaded' event listener below
-let gKeyIsPressedCtrl = false;
 
 // Select a single cell.
 function tableSelectCell(cell) {
@@ -211,168 +320,12 @@ function tableToggleCellSelection(cell) {
     return numCells;
 }
 
-// Save the currently selected cells for undo/redo.
-function historySaveState(zero = false) {
-    let selectedState = null;
-    if (!zero) {
-        // Get the current cell selection state
-        const selectedCells = gTable.querySelectorAll('td.selected');
-        selectedState = Array.from(selectedCells).map(cell => ({
-            row: cell.parentElement.rowIndex,
-            col: cell.cellIndex
-        }));
-    }
-
-    // Clear the redo history if a new selection is made after undo
-    if (gHistoryStateIndex < gHistory.length - 1) {
-        gHistory.splice(gHistoryStateIndex + 1);
-    }
-
-    // Add the new state to the history
-    gHistory.push(selectedState);
-    gHistoryStateIndex = gHistory.length - 1;
-}
-
 // Clear all selections.
 function tableClearSelection() {
     let selectedCells = gTable.querySelectorAll('td.selected');
     selectedCells.forEach(cell => cell.classList.remove('selected'));
     return 0;
 }
-
-// Event listener: schedule-change form submission.
-gScheduleChangeSubmitBtn.addEventListener('click', () => {
-    // Remove the dialog box
-    gDialog.style.display = 'none';
-
-    // Get the selected radio buttons
-    const selectedMotors = document.querySelector('input[name="motors"]:checked');
-    const selectedLights = document.querySelector('input[name="lights"]:checked');
-
-    let notification = null;
-    if (selectedMotors) {
-        notification = 'motors ' + selectedMotors.value;
-    }
-    if (selectedLights) {
-        if (selectedMotors) {
-            notification += ', ';
-        } else {
-            notification = '';
-        }
-        notification += 'lights ' + selectedLights.value;
-    }
-
-    let isConfirmed = false;
-    if (notification != null) {
-        // Display an "are you sure" dialog box using the browser's native confirm() mechanism
-        isConfirmed = confirm('Set ' + notification + ': are you sure?');
-        if (isConfirmed) {
-            notification = 'Changes successfully written';
-        } else {
-            notification = 'Cancelled';
-        }
-    } else {
-        notification = 'Nothing to do';
-    }
-
-    if (notification != null) {
-        showNotification(notification);
-    }
-    if (isConfirmed) {
-        // Clear selection and selection state history,
-        // adding a new zero state
-        tableClearSelection();
-        historyStateClear();
-        historySaveState(true);
-        gTableLastSelectedCell = null;
-        gTableNumCellsSelected = 0;
-    }
-    if (gTableLastFocusedElement) {
-        gTableLastFocusedElement.focus();
-    }
-});
-
-// Engage the schedule-change modal dialog box.
-function scheduleChangeDialog() {
-    const radioButtons = document.querySelectorAll('input[type="radio"]');
-    // Uncheck the radio buttons before displaying them,
-    // as a kind of reset mechanism in case the user
-    // ticks one they didn't intend to
-    radioButtons.forEach(radio => {
-        radio.checked = false;
-    });
-
-    // Show the dialog box; event listeners will close it
-    gDialog.style.display = 'flex';
-    // Since the dialog is a div, we need to move focus manually
-    gTableLastFocusedElement = document.activeElement;
-    gDialog.focus();
-}
-
-// Retore the state of cell selection, used by table undo/redo.
-function historyRestoreSelectionState() {
-    // Clear the current selection
-    tableClearSelection();
-
-    // Restore the selection state from history
-    const selectedState = gHistory[gHistoryStateIndex];
-    gTableLastSelectedCell = null;
-    gTableNumCellsSelected = 0;
-    if (selectedState) {
-        selectedState.forEach(({ row, col }) => {
-            const cell = gTable.rows[row].cells[col];
-            cell.classList.add('selected');
-            gTableNumCellsSelected++;
-        });
-    }
-}
-
-// Clear selection state history.
-function historyStateClear() {
-    gHistory = [];
-    gHistoryStateIndex = -1;
-}
-
-// Undo table cell selection.
-function historyUndo() {
-    if (gHistoryStateIndex > 0) {
-        gHistoryStateIndex--; // Move to the previous state
-        historyRestoreSelectionState();
-    }
-}
-
-// Redo table cell selection.
-function historyRedo() {
-    if (gHistoryStateIndex < gHistory.length - 1) {
-        gHistoryStateIndex++; // Move to the next state
-        historyRestoreSelectionState();
-    }
-}
-
-// Event listener: undo/redo keys on the whole document,
-// done in a slightly peculiar way as the browser's own
-// undo functionality interferes with the key-presses we
-// receive.
-document.addEventListener('keydown', function(event) {
-    if (event.key === 'Control' || event.key === 'Meta') {
-        gKeyIsPressedCtrl = true;
-        // Ctrl-Z (undo)
-    } else if (gKeyIsPressedCtrl && (event.key === 'z' || event.key === 'Z')) {
-        event.preventDefault();
-        historyUndo();
-        // Ctrl-Y (redo)
-    } else if (gKeyIsPressedCtrl && (event.key === 'y' || event.key === 'Y')) {
-        event.preventDefault();
-        historyRedo();
-    }
-});
-
-// Event listener: key up for CTRL-key handling.
-document.addEventListener('keyup', function(event) {
-    if (event.key === 'Control' || event.key === 'Meta') {
-        gKeyIsPressedCtrl = false;
-    }
-});
 
 // A function which is attached to the table via an event listener
 // (see 'DOMContentLoaded') and (a) makes the tab ordering go down
@@ -542,8 +495,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Single-click
 
                     // Shift
-                    if (event.shiftKey && gTableLastSelectedCell) {
-                        gTableNumCellsSelected += tableSelectRange(gTableLastSelectedCell, cell);
+                    if (event.shiftKey) {
+                        if (gTableLastSelectedCell) {
+                            gTableNumCellsSelected += tableSelectRange(gTableLastSelectedCell, cell);
+                        } else {
+                            gTableNumCellsSelected += tableToggleCellSelection(cell);
+                        }
                         // Don't update the last selected cell
                         // so that the pivot-point remains
                         // the same for future shift-clicks
@@ -602,7 +559,77 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 /* ----------------------------------------------------------------
- * WEEKLY SCHEDULE STUFF: DATA RETRIEVAL AND TABLE DISPLAY
+ * WEEKLY SCHEDULE STUFF: UNDO/REDO HISTORY FOR THE TABLE
+ * -------------------------------------------------------------- */
+
+// Global record of history.
+let gHistory = [];
+let gHistoryStateIndex = -1;
+
+// Save the currently selected table cells for undo/redo.
+function historySaveState(zero = false) {
+    let selectedState = null;
+    if (!zero) {
+        // Get the current cell selection state
+        const selectedCells = gTable.querySelectorAll('td.selected');
+        selectedState = Array.from(selectedCells).map(cell => ({
+            row: cell.parentElement.rowIndex,
+            col: cell.cellIndex
+        }));
+    }
+
+    // Clear the redo history if a new selection is made after undo
+    if (gHistoryStateIndex < gHistory.length - 1) {
+        gHistory.splice(gHistoryStateIndex + 1);
+    }
+
+    // Add the new state to the history
+    gHistory.push(selectedState);
+    gHistoryStateIndex = gHistory.length - 1;
+}
+
+// Retore the state of table cell selection, used by table undo/redo.
+function historyRestoreSelectionState() {
+    // Clear the current selection
+    tableClearSelection();
+
+    // Restore the selection state from history
+    const selectedState = gHistory[gHistoryStateIndex];
+    gTableLastSelectedCell = null;
+    gTableNumCellsSelected = 0;
+    if (selectedState) {
+        selectedState.forEach(({ row, col }) => {
+            const cell = gTable.rows[row].cells[col];
+            cell.classList.add('selected');
+            gTableNumCellsSelected++;
+        });
+    }
+}
+
+// Clear selection state history.
+function historyStateClear() {
+    gHistory = [];
+    gHistoryStateIndex = -1;
+}
+
+// Undo table cell selection.
+function historyUndo() {
+    if (gHistoryStateIndex > 0) {
+        gHistoryStateIndex--; // Move to the previous state
+        historyRestoreSelectionState();
+    }
+}
+
+// Redo table cell selection.
+function historyRedo() {
+    if (gHistoryStateIndex < gHistory.length - 1) {
+        gHistoryStateIndex++; // Move to the next state
+        historyRestoreSelectionState();
+    }
+}
+
+/* ----------------------------------------------------------------
+ * WEEKLY SCHEDULE STUFF: DATA RETRIEVAL AND DISPLAY OF THE TABLE
  * -------------------------------------------------------------- */
 
 // Dynamic table creator, following the pattern here:
@@ -653,6 +680,101 @@ const gDynamicTable = (function() {
         return row;
     }
 
+    // There is a nice built in JS function for arrays, filter(),
+    // which can be used to remove entries.  However, it
+    // it doesn't work on cell classLists, which are not arrays
+    // at all but are DOMTokenLists; "array like" but they don't
+    // support filter() or push().  Hence this function, which does
+    // the filtering stuff for either, taking this into account.
+    function _listUpdate(sourceList, removeList = null, addList = null) {
+        let newList = sourceList;
+        if (newList) {
+            if (Array.isArray(newList)) {
+                // It is an array, do array things
+                if (removeList) {
+                    removeList.forEach(function(remove) {
+                        newList = newList.filter(value => value !== remove);
+                    });
+                }
+                if (addList) {
+                    addList.forEach(function(add) {
+                        newList.push(add);
+                    });
+                }
+            } else {
+                // Assume it is a DOMTokenList
+                if (removeList) {
+                    removeList.forEach(function(remove) {
+                        newList.remove(remove);
+                    });
+                }
+                if (addList) {
+                    addList.forEach(function(add) {
+                        newList.add(add);
+                    });
+                }
+            }
+        }
+        return newList;
+    }
+
+    // Take a list of classes and filter them according to whether
+    // the thing is "motors" or "lights" and the switchType "off"
+    // or "on".
+    function _classListFilterMotorsLights(classList, thing, switchType) {
+        let removeList = [];
+        let addList = [];
+        if (switchType === 'off') {
+            // Reemove cell-on, as all are no longer on
+            removeList.push('cell-on');
+            if (thing === 'motors') {
+                // Remove any previous motors off, to prevent duplicates,
+                // and add it
+                removeList.push('cell-motors-off');
+                addList.push('cell-motors-off');
+            } else if (thing === 'lights') {
+                // Remove any previous motors off, to prevent duplicates,
+                // and add it
+                removeList.push('cell-lights-off');
+                addList.push('cell-lights-off');
+            }
+        } else if (switchType === 'on') {
+            if (thing === 'motors') {
+                // Remove the motors off class from the list
+                removeList.push('cell-motors-off');
+            } else if (thing === 'lights') {
+                removeList.push('cell-lights-off');
+            }
+        }
+        return _listUpdate(classList, removeList, addList);
+    }
+
+    // Finalise a class list for "motors" and "lights";
+    // classList can be an array or a DOMTokenList.
+    function _classListCompleteMotorsLights(classList) {
+        let newList = classList;
+        let thingOffCount = 0;
+        if (newList) {
+            newList.forEach(function(thisClass) {
+                if (thisClass === 'cell-motors-off' ||
+                    thisClass === 'cell-lights-off') {
+                    thingOffCount++;
+                }
+            });
+            if (thingOffCount == 0) {
+                // All off, so set 'cell-on'
+                if (Array.isArray(newList)) {
+                    // An array, do array things
+                    newList.push('cell-on');
+                } else {
+                    // Assume it is a DOMTokenList
+                    newList.add('cell-on');
+                }
+            }
+        }
+        return newList;
+    }
+
     // Make a class object for all of the cells.
     // An entry in the object, which will be a list of classes
     // that must be applied to the cell, may be accessed by using a key
@@ -670,35 +792,10 @@ const gDynamicTable = (function() {
                         let cellData = dayData[rowTitle];
                         if (cellData) {
                             cellData.forEach(function(item) {
-                                if (item.switchType === 'off') {
-                                    if (item.thing === 'motors') {
-                                        // Remove "on" from the list 'cos they are not both on now
-                                        classList = classList.filter(value => value !== 'cell-on');
-                                        // Prevent duplicates
-                                        classList = classList.filter(value => value !== 'cell-motors-off');
-                                        classList.push('cell-motors-off');
-                                    } else if (item.thing === 'lights') {
-                                        // Remove "on" from the list 'cos they are not both on now
-                                        classList = classList.filter(value => value !== 'cell-on');
-                                        // Prevent duplicates
-                                        classList = classList.filter(value => value !== 'cell-lights-off');
-                                        classList.push('cell-lights-off');
-                                    }
-                                } else if (item.switchType === 'on') {
-                                    if (item.thing === 'motors') {
-                                        // Remove the motors off class from the list
-                                        classList = classList.filter(value => value !== 'cell-motors-off');
-                                    } else if (item.thing === 'lights') {
-                                        // Remove the lights off class from the list
-                                        classList = classList.filter(value => value !== 'cell-lights-off');
-                                    }
-                                }
+                                classList = _classListFilterMotorsLights(classList, item.thing,
+                                                                         item.switchType);
                             })
-                            if (classList.length == 0) {
-                                // If the list is of size 0, we're on
-                                classList = []
-                                classList.push('cell-on');
-                            }
+                            classList = _classListCompleteMotorsLights(classList);
                         }
                     }
                     if (classList.length > 0) {
@@ -709,6 +806,29 @@ const gDynamicTable = (function() {
             })
         }
         return classObject;
+    }
+
+    // Return the appropriate cell contents string given the
+    // classes attached (a string with space separated
+    // classes).
+    function _cellContentsFromClassesMotorsLights(classes) {
+        let contents = '';
+        if (classes) {
+            if (classes.includes('cell-on')) {
+                contents += 'normal';
+            } else {
+                if (classes.includes('cell-motors-off')) {
+                    contents += 'motors off';
+                }
+                if (classes.includes('cell-lights-off')) {
+                    if (contents) {
+                        contents += ', ';
+                    }
+                    contents += 'lights off';
+                }
+            }
+        }
+        return contents;
     }
 
     // Build the headers of the table.
@@ -792,19 +912,7 @@ const gDynamicTable = (function() {
                                 // we can display helpful text on that basis,
                                 // doing it only when the state changes
                                 if (thisClasses) {
-                                    if (thisClasses.includes('cell-on')) {
-                                        contents += 'normal';
-                                    } else {
-                                        if (thisClasses.includes('cell-motors-off')) {
-                                            contents += 'motors off';
-                                        }
-                                        if (thisClasses.includes('cell-lights-off')) {
-                                            if (contents) {
-                                                contents += ', ';
-                                            }
-                                            contents += 'lights off';
-                                        }
-                                    }
+                                    contents += _cellContentsFromClassesMotorsLights(thisClasses);
                                 }
                                 column.push({"contents": contents,
                                              "classList": lastClassList});
@@ -835,6 +943,26 @@ const gDynamicTable = (function() {
                     _setNoItemsInfo();
                 }
             }
+            return this;
+        },
+        // Set a sub-set of cells specifically for motors/lights.
+        // The values of motors and lights may be null or, if not
+        // null, will have a value element that is "on" or "off".
+        setMotorsLights: function(cellList, motors, lights) {
+            cellList.forEach(function(cell) {
+                if (motors) {
+                    cell.classList = _classListFilterMotorsLights(cell.classList,
+                                                                  'motors',
+                                                                  motors.value);
+                }
+                if (lights) {
+                    cell.classList = _classListFilterMotorsLights(cell.classList,
+                                                                  'lights',
+                                                                  lights.value);
+                }
+                cell.classList = _classListCompleteMotorsLights(cell.classList);
+                cell.innerHTML = _cellContentsFromClassesMotorsLights(cell.classList.value);
+            });
             return this;
         },
         // Clear the table body.
