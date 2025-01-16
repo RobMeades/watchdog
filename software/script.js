@@ -118,27 +118,37 @@ function showNotification(message, timeoutMs = 5000) {
 // Grab the IDs of the elements of the schedule change dialogue box.
 const gDialog = document.getElementById('schedule-change');
 const gDialogCloseBtn = document.getElementById('dialog-close-btn');
-const gSubmitBtn = document.getElementById('schedule-change-submit-btn');
+const gScheduleChangeSubmitBtn = document.getElementById('schedule-change-submit-btn');
 const gRadioMotors = document.getElementById('radio-motors');
 const gRadioLights = document.getElementById('radio-lights');
+
+// Close the schedule change dialog: called by event listeners.
+function scheduleChangeDialogClose() {
+    gDialog.style.display = 'none';
+    if (gTableLastFocusedElement) {
+        gTableLastFocusedElement.focus();
+    }
+}
 
 // Event listener: close the schedule-change dialogue box
 // when the close button is clicked.
 gDialogCloseBtn.addEventListener('click', () => {
-    gDialog.style.display = 'none';
-    if (gLastFocusedElement) {
-        gLastFocusedElement.focus();
-    }
+    scheduleChangeDialogClose();
 });
 
 // Event listener: close the schedule-change dialog when
 // clicking outside the dialogue.
 window.addEventListener('click', (event) => {
     if (event.target === gDialog) {
-        gDialog.style.display = 'none';
-        if (gLastFocusedElement) {
-            gLastFocusedElement.focus();
-        }
+        scheduleChangeDialogClose();
+    }
+});
+
+// Event listener: close the schedule-change dialogue box
+// if the escape key is pressed.
+gDialog.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+        scheduleChangeDialogClose();
     }
 });
 
@@ -148,16 +158,48 @@ window.addEventListener('click', (event) => {
 // undo/redo, they have to be accessible to the
 // 'keydown' event listener and hence need to be at
 // the top level.
-let gLastSelectedCell = null;
-let gNumCellsSelected = 0;
-let gSelectionHistory = [];
-let gCurrentStateIndex = -1;
+let gTableLastSelectedCell = null;
+let gTableNumCellsSelected = 0;
+let gTableLastFocusedElement;
+let gHistory = [];
+let gHistoryStateIndex = -1;
 let gTable; // Will be populated by the 'DOMContentLoaded' event listener below
-let gIsCtrlPressed = false;
-let gLastFocusedElement;
+let gKeyIsPressedCtrl = false;
+
+// Select a single cell.
+function tableSelectCell(cell) {
+    cell.classList.add('selected');
+    return 1;
+}
+
+// Select a range of cells.
+function tableSelectRange(startCell, endCell) {
+    let startRow = startCell.parentElement.rowIndex;
+    let startCol = startCell.cellIndex;
+    let endRow = endCell.parentElement.rowIndex;
+    let endCol = endCell.cellIndex;
+    let numCells = 0;
+
+    // Determine the range boundaries
+    let rowStart = Math.min(startRow, endRow);
+    let rowEnd = Math.max(startRow, endRow);
+    let colStart = Math.min(startCol, endCol);
+    let colEnd = Math.max(startCol, endCol);
+
+    // Iterate through the range and select the cells
+    for (let x = rowStart; x <= rowEnd; x++) {
+        let row = gTable.rows[x];
+        for (let y = colStart; y <= colEnd; y++) {
+            let cell = row.cells[y];
+            tableSelectCell(cell);
+            numCells++;
+        }
+    }
+    return numCells;
+}
 
 // Toggle selection of the given cell.
-function toggleCellSelection(cell) {
+function tableToggleCellSelection(cell) {
     let numCells = 0;
     if (cell.classList.contains('selected')) {
         cell.classList.remove('selected');
@@ -170,7 +212,7 @@ function toggleCellSelection(cell) {
 }
 
 // Save the currently selected cells for undo/redo.
-function saveSelectionState(zero = false) {
+function historySaveState(zero = false) {
     let selectedState = null;
     if (!zero) {
         // Get the current cell selection state
@@ -182,24 +224,24 @@ function saveSelectionState(zero = false) {
     }
 
     // Clear the redo history if a new selection is made after undo
-    if (gCurrentStateIndex < gSelectionHistory.length - 1) {
-        gSelectionHistory.splice(gCurrentStateIndex + 1);
+    if (gHistoryStateIndex < gHistory.length - 1) {
+        gHistory.splice(gHistoryStateIndex + 1);
     }
 
     // Add the new state to the history
-    gSelectionHistory.push(selectedState);
-    gCurrentStateIndex = gSelectionHistory.length - 1;
+    gHistory.push(selectedState);
+    gHistoryStateIndex = gHistory.length - 1;
 }
 
 // Clear all selections.
-function clearSelection() {
+function tableClearSelection() {
     let selectedCells = gTable.querySelectorAll('td.selected');
     selectedCells.forEach(cell => cell.classList.remove('selected'));
     return 0;
 }
 
 // Event listener: schedule-change form submission.
-gSubmitBtn.addEventListener('click', () => {
+gScheduleChangeSubmitBtn.addEventListener('click', () => {
     // Remove the dialog box
     gDialog.style.display = 'none';
 
@@ -239,19 +281,19 @@ gSubmitBtn.addEventListener('click', () => {
     if (isConfirmed) {
         // Clear selection and selection state history,
         // adding a new zero state
-        clearSelection();
-        tableSelectionStateHistoryClear();
-        saveSelectionState(true);
-        gLastSelectedCell = null;
-        gNumCellsSelected = 0;
+        tableClearSelection();
+        historyStateClear();
+        historySaveState(true);
+        gTableLastSelectedCell = null;
+        gTableNumCellsSelected = 0;
     }
-    if (gLastFocusedElement) {
-        gLastFocusedElement.focus();
+    if (gTableLastFocusedElement) {
+        gTableLastFocusedElement.focus();
     }
 });
 
 // Engage the schedule-change modal dialog box.
-function scheduleChange() {
+function scheduleChangeDialog() {
     const radioButtons = document.querySelectorAll('input[type="radio"]');
     // Uncheck the radio buttons before displaying them,
     // as a kind of reset mechanism in case the user
@@ -263,80 +305,80 @@ function scheduleChange() {
     // Show the dialog box; event listeners will close it
     gDialog.style.display = 'flex';
     // Since the dialog is a div, we need to move focus manually
-    gLastFocusedElement = document.activeElement;
+    gTableLastFocusedElement = document.activeElement;
     gDialog.focus();
 }
 
 // Retore the state of cell selection, used by table undo/redo.
-function tableRestoreSelectionState() {
+function historyRestoreSelectionState() {
     // Clear the current selection
-    clearSelection();
+    tableClearSelection();
 
     // Restore the selection state from history
-    const selectedState = gSelectionHistory[gCurrentStateIndex];
-    gLastSelectedCell = null;
-    gNumCellsSelected = 0;
+    const selectedState = gHistory[gHistoryStateIndex];
+    gTableLastSelectedCell = null;
+    gTableNumCellsSelected = 0;
     if (selectedState) {
         selectedState.forEach(({ row, col }) => {
             const cell = gTable.rows[row].cells[col];
             cell.classList.add('selected');
-            gNumCellsSelected++;
+            gTableNumCellsSelected++;
         });
     }
 }
 
 // Clear selection state history.
-function tableSelectionStateHistoryClear() {
-    gSelectionHistory = [];
-    gCurrentStateIndex = -1;
+function historyStateClear() {
+    gHistory = [];
+    gHistoryStateIndex = -1;
 }
 
 // Undo table cell selection.
-function tableUndo() {
-    if (gCurrentStateIndex > 0) {
-        gCurrentStateIndex--; // Move to the previous state
-        tableRestoreSelectionState();
+function historyUndo() {
+    if (gHistoryStateIndex > 0) {
+        gHistoryStateIndex--; // Move to the previous state
+        historyRestoreSelectionState();
     }
 }
 
 // Redo table cell selection.
-function tableRedo() {
-    if (gCurrentStateIndex < gSelectionHistory.length - 1) {
-        gCurrentStateIndex++; // Move to the next state
-        tableRestoreSelectionState();
+function historyRedo() {
+    if (gHistoryStateIndex < gHistory.length - 1) {
+        gHistoryStateIndex++; // Move to the next state
+        historyRestoreSelectionState();
     }
 }
 
-// Event listener: undo/redo keys for cell selection,
+// Event listener: undo/redo keys on the whole document,
 // done in a slightly peculiar way as the browser's own
-// undo functionality interferes with the key-presses
-// we receive.
+// undo functionality interferes with the key-presses we
+// receive.
 document.addEventListener('keydown', function(event) {
     if (event.key === 'Control' || event.key === 'Meta') {
-        gIsCtrlPressed = true;
+        gKeyIsPressedCtrl = true;
         // Ctrl-Z (undo)
-    } else if (gIsCtrlPressed && (event.key === 'z' || event.key === 'Z')) {
+    } else if (gKeyIsPressedCtrl && (event.key === 'z' || event.key === 'Z')) {
         event.preventDefault();
-        tableUndo();
+        historyUndo();
         // Ctrl-Y (redo)
-    } else if (gIsCtrlPressed && (event.key === 'y' || event.key === 'Y')) {
+    } else if (gKeyIsPressedCtrl && (event.key === 'y' || event.key === 'Y')) {
         event.preventDefault();
-        tableRedo();
+        historyRedo();
     }
 });
 
-// Event listener: key up for undo/redo key handling.
+// Event listener: key up for CTRL-key handling.
 document.addEventListener('keyup', function(event) {
     if (event.key === 'Control' || event.key === 'Meta') {
-        gIsCtrlPressed = false;
+        gKeyIsPressedCtrl = false;
     }
 });
 
 // A function which is attached to the table via an event listener
 // (see 'DOMContentLoaded') and (a) makes the tab ordering go down
 // the columns rather than across the rows, (b) allows arrow keys
-// to be used for navigation and (c) handles <enter> to select a
-// cell and CTRL-<enter> to submit a change.
+// to be used for navigation and (c) handles <enter>/<space> to
+ // select a cell and CTRL with those to submit a change.
 function tableHandleKeydown(event) {
     if (event.target.tagName === 'TD') {
         if (event.key === 'Tab' || event.key === 'ArrowLeft' ||
@@ -407,16 +449,24 @@ function tableHandleKeydown(event) {
             } else {
                 currentColumn.blur();
             }
-        } else if (event.key === 'Enter') {
+        } else if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            if (!gIsCtrlPressed) {
-                gNumCellsSelected += toggleCellSelection(event.target);
-                saveSelectionState();
-            } else {
-                if (gNumCellsSelected > 0) {
+            if (gKeyIsPressedCtrl) {
+                if (gTableNumCellsSelected > 0) {
                     // Do the schedule change
-                    scheduleChange();
+                    scheduleChangeDialog();
                 }
+            } else {
+                if (event.shiftKey && gTableLastSelectedCell &&
+                    gTableLastSelectedCell != event.target) {
+                    gTableNumCellsSelected +=  tableSelectRange(gTableLastSelectedCell,
+                                                                event.target);
+                } else {
+                    gTableNumCellsSelected += tableToggleCellSelection(event.target);
+                }
+                // Update the last selected cell
+                gTableLastSelectedCell = event.target;
+                historySaveState();
             }
         }
     }
@@ -452,7 +502,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isDragging) {
             const cell = event.target;
             if (cell.tagName === 'TD') {
-                gNumCellsSelected += selectRange(startCell, cell);
+                if (!event.shiftKey) {
+                    gTableNumCellsSelected = tableClearSelection();
+                    gTableLastSelectedCell = null;
+                }
+                gTableNumCellsSelected += tableSelectRange(startCell, cell);
             }
         }
     }
@@ -460,39 +514,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // No more dragging; save state.
     function handleMouseUp() {
         isDragging = false;
-        saveSelectionState();
-    }
-
-    // Select a range of cells.
-    function selectRange(startCell, endCell) {
-        let startRow = startCell.parentElement.rowIndex;
-        let startCol = startCell.cellIndex;
-        let endRow = endCell.parentElement.rowIndex;
-        let endCol = endCell.cellIndex;
-        let numCells = 0;
-
-        // Determine the range boundaries
-        let rowStart = Math.min(startRow, endRow);
-        let rowEnd = Math.max(startRow, endRow);
-        let colStart = Math.min(startCol, endCol);
-        let colEnd = Math.max(startCol, endCol);
-
-        // Iterate through the range and select the cells
-        for (let x = rowStart; x <= rowEnd; x++) {
-            let row = gTable.rows[x];
-            for (let y = colStart; y <= colEnd; y++) {
-                let cell = row.cells[y];
-                selectCell(cell);
-                numCells++;
-            }
-        }
-        return numCells;
-    }
-
-    // Select a single cell.
-    function selectCell(cell) {
-        cell.classList.add('selected');
-        return 1;
+        historySaveState();
     }
 
     // Add event listener to the table that will
@@ -520,43 +542,43 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Single-click
 
                     // Shift
-                    if (event.shiftKey && gLastSelectedCell) {
-                        gNumCellsSelected += selectRange(gLastSelectedCell, cell);
+                    if (event.shiftKey && gTableLastSelectedCell) {
+                        gTableNumCellsSelected += tableSelectRange(gTableLastSelectedCell, cell);
                         // Don't update the last selected cell
                         // so that the pivot-point remains
                         // the same for future shift-clicks
                     // Ctrl
                     } else if (event.ctrlKey || event.metaKey) {
-                        gNumCellsSelected += toggleCellSelection(cell);
+                        gTableNumCellsSelected += tableToggleCellSelection(cell);
                         // Update the last selected cell
-                        gLastSelectedCell = cell;
+                        gTableLastSelectedCell = cell;
                     // Normal
                     } else {
-                        if (gNumCellsSelected > 1) {
+                        if (gTableNumCellsSelected > 1) {
                             // In multi-select mode: clear the selection
                             // and select just this cell
-                            gNumCellsSelected = clearSelection();
-                            gNumCellsSelected += toggleCellSelection(cell);
+                            gTableNumCellsSelected = tableClearSelection();
+                            gTableNumCellsSelected += tableToggleCellSelection(cell);
                             // Update the last selected cell
-                            gLastSelectedCell = cell;
+                            gTableLastSelectedCell = cell;
                         } else {
                             // In single-select mode: toggle any
                             // previous cell and, if we're not on the
                             // same cell, toggle this cell
-                            if (gLastSelectedCell) {
-                                gNumCellsSelected += toggleCellSelection(gLastSelectedCell);
+                            if (gTableLastSelectedCell) {
+                                gTableNumCellsSelected += tableToggleCellSelection(gTableLastSelectedCell);
                             }
-                            if (gLastSelectedCell != cell) {
-                                gNumCellsSelected += toggleCellSelection(cell);
-                                if (gNumCellsSelected > 0) {
-                                    gLastSelectedCell = cell;
+                            if (gTableLastSelectedCell != cell) {
+                                gTableNumCellsSelected += tableToggleCellSelection(cell);
+                                if (gTableNumCellsSelected > 0) {
+                                    gTableLastSelectedCell = cell;
                                 }
                             } else {
                                 // Clear the last selected cell or
                                 // we will have a spurious pivot
                                 // point the next time we enter
                                 // multi-select mode
-                                gLastSelectedCell = null;
+                                gTableLastSelectedCell = null;
                             }
                         }
                     }
@@ -572,9 +594,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Cancel any single-click timers
         clickTimerList.forEach(timerId => clearTimeout(timerId));
         clickTimerList = [];
-        if (gNumCellsSelected > 0) {
+        if (gTableNumCellsSelected > 0) {
             // Do the schedule change
-            scheduleChange();
+            scheduleChangeDialog();
         }
     });
 });
@@ -673,14 +695,15 @@ const gDynamicTable = (function() {
                                 }
                             })
                             if (classList.length == 0) {
-                                // If the list is of size 0, both must be off
+                                // If the list is of size 0, we're on
                                 classList = []
                                 classList.push('cell-on');
                             }
                         }
                     }
                     if (classList.length > 0) {
-                        classObject[columnTitle + rowTitle] = Array.from(classList);
+                        // Sort the array before pushing so that it can be used in comparisons
+                        classObject[columnTitle + rowTitle] = Array.from(classList.sort());
                     }
                 })
             })
@@ -749,30 +772,59 @@ const gDynamicTable = (function() {
                     // We want to colour the cells based on the state
                     // of the motors and the lights but we can't do
                     // that as we go as the order of the table is
-                    // wrong: get a list of cell colours that we 
+                    // wrong: get a list of cell classes that we 
                     // can apply as we go.
                     const classes = _cellClasses(data);
+                    let previousClasses = null;
+                    let lastClassList = [];
                     _rowTitles.forEach(function(rowTitle) {
                         let column = [];
                         _columnTitles.forEach(function(columnTitle) {
                             let contents = '';
-                            let dayData = data[columnTitle];
-                            if (dayData) {
-                                let cellData = dayData[rowTitle];
-                                if (cellData) {
-                                    cellData.forEach(function(item, index) {
-                                        if (index > 0) {
-                                            contents += ', ';
-                                        }
-                                        contents += item.thing + ' ' + item.switchType;
-                                    });
-                                }
-                            }
+                            let thisClasses = previousClasses;
                             let classList = classes[columnTitle + rowTitle];
                             if (classList) {
+                                thisClasses = JSON.stringify(classList);
+                                lastClassList =  Array.from(classList);
+                            }
+                            if (thisClasses) {
+                                // If there are classLists for this data,
+                                // we can display helpful text on that basis,
+                                // doing it only when the state changes
+                                if (thisClasses) {
+                                    if (thisClasses.includes('cell-on')) {
+                                        contents += 'normal';
+                                    } else {
+                                        if (thisClasses.includes('cell-motors-off')) {
+                                            contents += 'motors off';
+                                        }
+                                        if (thisClasses.includes('cell-lights-off')) {
+                                            if (contents) {
+                                                contents += ', ';
+                                            }
+                                            contents += 'lights off';
+                                        }
+                                    }
+                                }
                                 column.push({"contents": contents,
-                                             "classList": classList});
+                                             "classList": lastClassList});
+                                if (thisClasses) {
+                                    previousClasses = thisClasses;
+                                }
                             } else {
+                                // No classList, just use the data directly
+                                let dayData = data[columnTitle];
+                                if (dayData) {
+                                    let cellData = dayData[rowTitle];
+                                    if (cellData) {
+                                        cellData.forEach(function(item, index) {
+                                            if (index > 0) {
+                                                contents += ', ';
+                                            }
+                                            contents += item.thing + ' ' + item.switchType;
+                                        });
+                                    }
+                                }
                                 column.push(contents);
                             }
                         });
@@ -908,7 +960,7 @@ function loadTable(cfgData) {
     const cfgData = await dataFetch('watchdog.cfg');
     loadTable(cfgData);
     // Store a zeroeth selected state for table undo/redo
-    saveSelectionState(true);
+    historySaveState(true);
 })();
 
 // End of file

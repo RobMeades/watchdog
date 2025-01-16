@@ -57,6 +57,8 @@ tbody td:not(:first-child) {
     cursor: pointer;
     /* Make the font size small enough that we can fit in "motors off, lights off" */
     font-size: 12px;
+    /* A light/transparent font colour: the text is intended for screen readers, meaning is through the background colour */
+    color: rgba(230, 230, 230, 0.2);
 }
 th, td {
     /* 12% leaves us with even column widths for 7 days of the week plus room for a narrower left-hand column with hours */
@@ -70,33 +72,34 @@ td:first-child {
     width: 7%;
 }
 td.selected {
-    /* The !important markers stops the "selected" colour from disappearing in the blended colour below. */
-    background-color: rgb(51, 204, 51) !important;
-    background-image: none !important;
-    color: white;
+    /* The !important markers stops the "selected" colour from disappearing beneath othres. */
+    background-color: rgb(0, 153, 255) !important;
+    color: rgba(255, 255, 255, 0.8) !important;;
 }
 td:focus {
   outline: 2px solid blue;
 }
+.key {
+    width: 950px;
+    text-align: center;
+    font-size: 12px;
+}
 
 /* Colours for the cells of the table */
 .cell-on {
-    background-color: white;
+    background-color: rgb(179, 255, 179);
 }
 .cell-motors-off {
     /* Must be the same as the blended version below */
-    background-color: rgba(102, 204, 255, 0.5);
+    background-color: rgb(255, 153, 51);
 }
 .cell-lights-off {
     /* Must be the same as the blended version below */
-    background-color: rgba(204, 204, 255, 0.5);
+    background-color: rgb(255, 51, 0);
 }
 /* Blended */
 .cell-lights-off.cell-motors-off {
-  background:
-    linear-gradient(rgba(204, 204, 255, 0.5), rgba(204, 204, 255, 0.5)),
-    linear-gradient(rgba(102, 204, 255, 0.5), rgba(102, 204, 255, 0.5));
-  background-blend-mode: multiply;
+    background-color: black;
 }
 
 /* Modal dialog styles */
