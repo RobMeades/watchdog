@@ -243,6 +243,10 @@ gScheduleChangeSubmitBtn.addEventListener('click', () => {
         // Get the selected cells and update the table
         const selectedCells = gTable.querySelectorAll('td.selected');
         gDynamicTable.setMotorsLights(selectedCells, selectedMotors, selectedLights);
+        let data = {};
+        gDynamicTable.getMotorsLights(data);
+
+        console.log(JSON.stringify(data));
 
         // Clear selection and selection state history,
         // adding a new zero state
@@ -265,15 +269,11 @@ gScheduleChangeSubmitBtn.addEventListener('click', () => {
  * WEEKLY SCHEDULE STUFF: NAVIGATING THE TABLE
  * -------------------------------------------------------------- */
 
-// These variables and the functions that follow should really be
-// inside the 'DOMContentLoaded' table manipulation event listener
-// below; however, in order to support undo/redo, they have to be
-// accessible to the 'keydown' event listener and hence need to be
-// at the top level.
+// Variables related to navigating the table
+let gTable = document.getElementById('week');
 let gTableLastSelectedCell = null;
 let gTableNumCellsSelected = 0;
 let gTableLastFocusedElement;
-let gTable; // Will be populated by the 'DOMContentLoaded' event listener below
 
 // Select a single cell.
 function tableSelectCell(cell) {
@@ -328,10 +328,10 @@ function tableClearSelection() {
 }
 
 // A function which is attached to the table via an event listener
-// (see 'DOMContentLoaded') and (a) makes the tab ordering go down
-// the columns rather than across the rows, (b) allows arrow keys
-// to be used for navigation and (c) handles <enter>/<space> to
- // select a cell and CTRL with those to submit a change.
+// and (a) makes the tab ordering go down the columns rather than
+// across the rows, (b) allows arrow keys to be used for navigation
+// and (c) handles <enter>/<space> to select a cell and CTRL with
+// those to submit a change.
 function tableHandleKeydown(event) {
     if (event.target.tagName === 'TD') {
         if (event.key === 'Tab' || event.key === 'ArrowLeft' ||
@@ -427,14 +427,10 @@ function tableHandleKeydown(event) {
 
 // Event listener: handle cells of the table being selected.
 document.addEventListener('DOMContentLoaded', function() {
-    const table = document.getElementById('week');
     let clickTimerList = [];
     let delayMs = 300;
     let isDragging = false;
     let startCell = null;
-
-    // Unfortunately has to be global (for undo/redo stuff)
-    gTable = document.getElementById('week');
 
     // Event listeners: for mouse-based cell selection
     gTable.addEventListener('mousedown', handleMouseDown);
@@ -633,7 +629,11 @@ function historyRedo() {
  * -------------------------------------------------------------- */
 
 // Dynamic table creator, following the pattern here:
-// https://jsfiddle.net/onury/kBQdS/.
+// https://jsfiddle.net/onury/kBQdS/.  This should still
+// work with genericish data but has neem heavily enhanced to
+// work purely with the exact data from here, vix "motors" and
+// "lights" being switched "on" and "off" across a weekly
+// schedule.
 const gDynamicTable = (function() {
     let _tableId, _table, _columnTitles, _rowTitles, _defaultText;
 
@@ -681,11 +681,12 @@ const gDynamicTable = (function() {
     }
 
     // There is a nice built in JS function for arrays, filter(),
-    // which can be used to remove entries.  However, it
-    // it doesn't work on cell classLists, which are not arrays
-    // at all but are DOMTokenLists; "array like" but they don't
+    // which can be used to remove entries.  However, it does
+    // not work on cell classLists, which are not arrays at all
+    // but are DOMTokenLists which are "array like" but don't
     // support filter() or push().  Hence this function, which does
-    // the filtering stuff for either, taking this into account.
+    // the filtering stuff for either, taking the data type into
+    // account.
     function _listUpdate(sourceList, removeList = null, addList = null) {
         let newList = sourceList;
         if (newList) {
@@ -965,6 +966,111 @@ const gDynamicTable = (function() {
             });
             return this;
         },
+        // Get the motors/lights data out of the table, doing the
+        // opposite of set().
+        getMotorsLights: function(data) {
+            // Get the rows and columns from the DOM
+            let trList = gTable.querySelectorAll('tr');
+            if (trList.length > 0 && _rowTitles) {
+                let rowList = [];
+                trList.forEach(function(tr) {
+                    rowList.push(Array.from(tr.querySelectorAll('td')));
+                });
+                // Make a list of the days (ignoring the empty column)
+                // in lower case
+                let dayList = [];
+                if (rowList.length > 0) {
+                    rowList[0].forEach(function(column, index) {
+                        if (index > 0) {
+                            dayList.push(column.innerHTML.toLowerCase())
+                        }
+                    });
+                }
+                // Work down the rows of each day looking for changes
+                // in the classes that represent motors/lights state
+                // TODO: resolve starting condition
+                let motorsOff = false;
+                let lightsOff = false;
+                let dayData = {};
+                dayList.forEach(function(day, columnIndex) {
+                    // Increment the columnIndex so that we can use
+                    // it to index into the table-based arrays
+                    columnIndex++;
+                    let motorsOffTimeList = [];
+                    let motorsOnTimeList = [];
+                    let lightsOffTimeList = [];
+                    let lightsOnTimeList = [];
+                    _rowTitles.forEach(function(rowTitle, rowIndex) {
+                        // Increment row index for the same reason
+                        // as column index was incremented
+                        rowIndex++;
+                        if (rowIndex < rowList.length) {
+                            let columnList = rowList[rowIndex];
+                            if (columnIndex < columnList.length) {
+                                // Add to our lists for the day based
+                                // on the classes attached to the cell
+                                let cell = columnList[columnIndex];
+                                let classes = cell.classList.value;
+                                if (motorsOff) {
+                                    if (classes.includes('cell-on')) {
+                                        motorsOnTimeList.push(rowTitle);
+                                        motorsOff = false;
+                                    }
+                                } else {
+                                    if (classes.includes('cell-motors-off')) {
+                                        motorsOffTimeList.push(rowTitle);
+                                        motorsOff = true;
+                                    }
+                                }
+                                if (lightsOff) {
+                                    if (classes.includes('cell-on')) {
+                                        lightsOnTimeList.push(rowTitle);
+                                        lightsOff = false;
+                                    }
+                                } else {
+                                    if (classes.includes('cell-lights-off')) {
+                                        lightsOffTimeList.push(rowTitle);
+                                        lightsOff = true;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    // We now have the on and off times for the day;
+                    // put them into the dayData object.
+                    let switchType = {};
+                    let things = {};
+                    if (motorsOnTimeList.length > 0) {
+                        switchType['on'] = Array.from(motorsOnTimeList);
+                    }
+                    if (motorsOffTimeList.length > 0) {
+                        switchType['off'] = Array.from(motorsOffTimeList);
+                    }
+                    if (Object.keys(switchType).length !== 0) {
+                        things['motors'] = switchType;
+                    }
+                    switchType = {};
+                    if (lightsOnTimeList.length > 0) {
+                        switchType['on'] = Array.from(lightsOnTimeList);
+                    }
+                    if (lightsOffTimeList.length > 0) {
+                        switchType['off'] = Array.from(lightsOffTimeList);
+                    }
+                    if (Object.keys(switchType).length !== 0) {
+                        things['lights'] = switchType;
+                    }
+                    if (Object.keys(things).length !== 0) {
+                        dayData[day] = things;
+                    }
+                });
+                // All changes of motors/lights should now
+                // be in dayData: attach it to data as a week.
+                if (Object.keys(dayData).length !== 0) {
+                    data['week'] = dayData;
+                }
+            }
+            return this;
+        },
         // Clear the table body.
         clear: function() {
             _setNoItemsInfo();
@@ -1067,7 +1173,7 @@ function loadTable(cfgData) {
                     }
                 });
                 // Add the day to the days object, if anything happened then
-                if (timesObject) {
+                if (Object.keys(timesObject).length !== 0) {
                     daysObject[day] = timesObject;
                 }
             }
