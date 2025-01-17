@@ -25,6 +25,10 @@
  * MISC
  * -------------------------------------------------------------- */
 
+// The name of the configuration file on the server, which contains
+// the weekly schedule.
+let gCfgFileName = 'watchdog.cfg';
+
 // Track the state of the control key.
 let gKeyIsPressedCtrl = false;
 
@@ -204,7 +208,10 @@ gScheduleChangeDialog.addEventListener('keydown', (event) => {
 });
 
 // Event listener: schedule-change form submission.
-gScheduleChangeSubmitBtn.addEventListener('click', () => {
+// Note: this needs to be marked as async since it
+// ends up calling fetch() to write the data to the
+// server.
+gScheduleChangeSubmitBtn.addEventListener('click', async () => {
     // Remove the dialog box
     gScheduleChangeDialog.style.display = 'none';
 
@@ -230,11 +237,6 @@ gScheduleChangeSubmitBtn.addEventListener('click', () => {
         // Display an "are you sure" dialog box using the browser's
         // native confirm() mechanism
         isConfirmed = confirm('Set ' + notification + ': are you sure?');
-        if (isConfirmed) {
-            notification = 'Changes successfully written';
-        } else {
-            notification = 'Cancelled';
-        }
     } else {
         notification = 'Nothing to do';
     }
@@ -245,8 +247,29 @@ gScheduleChangeSubmitBtn.addEventListener('click', () => {
         gDynamicTable.setMotorsLights(selectedCells, selectedMotors, selectedLights);
         let data = {};
         gDynamicTable.getMotorsLights(data);
-
-        console.log(JSON.stringify(data));
+        // Send the data to the server
+        notification = null;
+        if (Object.keys(data).length !== 0) {
+            let success = false;
+            try {
+                const response = await dataFetchPost(data, gCfgFileName);
+                if (response.ok) {
+                    notification = 'Changes successfully written';
+                    success = true;
+                } else {
+                    notification = 'Error from server "' + response.status + '"';
+                }
+            } catch (error) {
+                notification = 'Error "' + error + '" sending data';
+            }
+ 
+            if (!success) {
+                notification += '; the table is now out of sync with the server,' +
+                                ' please refresh this page'
+            }
+        } else {
+            notification = 'Internal error: no data read from the table';
+        }
 
         // Clear selection and selection state history,
         // adding a new zero state
@@ -255,7 +278,10 @@ gScheduleChangeSubmitBtn.addEventListener('click', () => {
         historySaveState(true);
         gTableLastSelectedCell = null;
         gTableNumCellsSelected = 0;
+    } else {
+        notification = 'Cancelled';
     }
+
     if (gTableLastFocusedElement) {
         gTableLastFocusedElement.focus();
     }
@@ -1087,18 +1113,36 @@ function timeStrToSeconds(timeStr) {
 }
 
 // Fetch a data file from the server.
-async function dataFetch(file) {
+async function dataFetchGet(file) {
     let json = {};
 
     try {
         let object = await fetch(file);
         let rawContents = await object.text();
         json = await JSON.parse(rawContents);
-    } catch {
-        console.log("unable to fetch " + file);
+    } catch (error) {
+        console.log('unable to fetch ' + file + ', error "' + error + '"');
     }
 
     return json;
+}
+
+// Post JSON data to a file on the server.
+async function dataFetchPost(json, file) {
+    const headers = new Headers();
+    headers.append("Content-Type", "application/json");
+
+    try {
+        const response = await fetch(file, {
+            method: "POST",
+            body: json,
+            headers: headers,
+        });
+        return response; // Return the response object
+    } catch (error) {
+        console.log('Unable to post JSON data to ' + file + ', error "' + error + '"');
+        throw error; // Throw the error to the caller
+    }
 }
 
 // Populate the weekly schedule table.
@@ -1191,7 +1235,7 @@ function loadTable(cfgData) {
 // to load the weekly schedule table.
 (async () => {
     // Fetch the configuration data from the server
-    const cfgData = await dataFetch('watchdog.cfg');
+    const cfgData = await dataFetchGet(gCfgFileName);
     loadTable(cfgData);
     // Store a zeroeth selected state for table undo/redo
     historySaveState(true);
