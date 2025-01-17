@@ -40,7 +40,6 @@ sudo apt upgrade
 ```
 
 ## Camera
-
 Power the Pi down again and plug in the V3 camera.  Power-up the Pi once more, log in over `ssh` and check that an image can be captured from the camera with:
 
 ```
@@ -97,7 +96,6 @@ cam -c 1 -I
 ...displays the pixel formats supported, etc.
 
 ## OpenCV
-
 Install [OpenCV](https://opencv.org/) and its development libraries with:
 
 ```
@@ -105,7 +103,6 @@ sudo apt install python3-opencv libopencv-dev
 ```
 
 ## FFmpeg
-
 Install the dependencies for [FFmpeg](https://www.ffmpeg.org/) as follows; you probably don't actually need half of these but it does no harm to have them:
 
 ```
@@ -126,7 +123,6 @@ sudo make install
 Note: for the PiZero2W replace `--arch=arm64` with `--arch=armel`.
 
 ## GPIO
-
 To read and write GPIOs we need `libgpiod` (v1.6); install the development libraries with:
 
 ```
@@ -134,7 +130,6 @@ sudo apt install libgpiod-dev
 ```
 
 ## cJSON
-
 The web interface configures the operation of the executable by writing a JSON file, for which [cJSON](https://github.com/DaveGamble/cJSON) is used.
 
 Fetch, compile and install it with:
@@ -151,7 +146,6 @@ sudo make install
 ```
 
 ## Apache
-
 To provide a browser interface, being ancient, I would suggest installing Apache with:
 
 ```
@@ -170,20 +164,34 @@ sudo systemctl enable apache2
 sudo a2enmod headers
 ```
 
-...to enable the headers module of Apache and see the additional `Header set` lines in the Apache configuration file below.
+...to enable the headers module of Apache; see also the additional `Header set` lines in the Apache configuration file below.
+
+You will also need `mod_wsgi` to allow POST requests to be handled from the web client (to update the operating schedule); install and enable it with
+
+```
+sudo apt install libapache2-mod-wsgi-py3
+```
 
 Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.
 
-You probably also need to add, in the same Apache configuration file:
+To configure `mod_wsgi` to send requests to `cfg.wsgi`, add the following to the top of the same file, just below the `DocumentRoot` stuff (noting that the full path is needed to the `.wsgi` file and the file must be in the same folder as the file `watchdog.cfg`, which should be your `DocumentRoot`):
 
 ```
-        <Directory your_document_root>
-            AllowOverride none
-            Require all granted
-            Header set Access-Control-Allow-Origin "*"
-            Header set Access-Control-Allow-Headers "*"
-            Header set Access-Control-Allow-Methods "PUT, GET, POST, DELETE, OPTIONS"
-        </Directory>
+# Call the script cfg.wsgi when a POST request is made to the file /watchdog.cfg
+WSGIScriptAlias /watchdog.cfg <your_folder>/cfg.wsgi
+```
+
+You also need to add, after the above, in the same Apache configuration file:
+
+```
+<Directory your_document_root>
+    AllowOverride none
+    Require all granted
+    # CORS headers that may or may not be needed for correct HLS operation
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Headers "*"
+    Header set Access-Control-Allow-Methods "PUT, GET, POST, DELETE, OPTIONS"
+</Directory>
 ```
 
 Whatever directory you choose, to make it accessible to the default Apache user, "`www-data`":
@@ -204,6 +212,14 @@ Restart Apache for the changes to take effect:
 ```
 sudo systemctl restart apache2
 ```
+
+If Apache fails to restart, run:
+
+```
+journalctl -xe
+```
+
+...and stare long and hard at the output to find the buried error cause.  You might need to set `LogLevel` in the Apache configuration file to `debug` for the more subtle errors.
 
 # Increasing SD Card Life
 In order to increase the life of the SD card in the Pi, what with all of this video streaming activity, it is a good idea to create a RAM disk.  Edit `/etc/fstab` to append the following line, replacing `your_document_root` with wherever you put your Apache document root above; this will put the `video` sub-directory into RAM:
@@ -251,6 +267,15 @@ systemctl status log2ram
 
 ...and if it isn't working, take a look at the [troubleshooting section](https://github.com/azlux/log2ram?tab=readme-ov-file#troubleshooting).
 
+You might also want to edit the Apache configuration file and re-direct its logging to the system log (following [this advice](https://www.loggly.com/ultimate-guide/centralizing-apache-logs/)) by changing the `ErrorLog` and `CustomLog` lines to be:
+
+```
+ErrorLog  "| /usr/bin/logger -thttpd -plocal6.err"
+CustomLog "| /usr/bin/logger -thttpd -plocal6.notice" extended_ncsa
+ ```
+
+Obviously restart Apache afterwards for the change to take effect.
+
 # Build/Run
 Clone this repo to the Pi, `cd` to the directory where you cloned it, then `cd` to this sub-directory and build/run the application with:
 
@@ -270,7 +295,11 @@ LIBCAMERA_LOG_LEVELS=0 sudo ./watchdog
 Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
 # Serve
-To serve video, copy `*.png` and `*.html` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.
+To serve video, copy `*.png`, `*.html`, `.cfg` and `*.wsgi` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.  You will also need to modify the permissions on `watchdog.cfg` so that it is writeable by the group that Apache belongs to (so that the schedule can be written b by the web API): do this with:
+
+```
+chmod -R g+rw watchdog.cfg
+```
 
 # Watchdog Service
 To start the watchdog at boot, copy the file [watchdog.service](watchdog.service) from this directory, replacing `/home/http` with whatever you have chosen as `your_document_root`, into `/etc/systemd/system/`, then do:

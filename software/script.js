@@ -241,6 +241,7 @@ gScheduleChangeSubmitBtn.addEventListener('click', async () => {
         notification = 'Nothing to do';
     }
 
+    let isSuccessful = false;
     if (isConfirmed) {
         // Get the selected cells and update the table
         const selectedCells = gTable.querySelectorAll('td.selected');
@@ -250,12 +251,11 @@ gScheduleChangeSubmitBtn.addEventListener('click', async () => {
         // Send the data to the server
         notification = null;
         if (Object.keys(data).length !== 0) {
-            let success = false;
             try {
-                const response = await dataFetchPost(data, gCfgFileName);
+                const response = await fetchPost(JSON.stringify(data, null, 2), gCfgFileName);
                 if (response.ok) {
                     notification = 'Changes successfully written';
-                    success = true;
+                    isSuccessful = true;
                 } else {
                     notification = 'Error from server "' + response.status + '"';
                 }
@@ -263,7 +263,7 @@ gScheduleChangeSubmitBtn.addEventListener('click', async () => {
                 notification = 'Error "' + error + '" sending data';
             }
  
-            if (!success) {
+            if (!isSuccessful) {
                 notification += '; the table is now out of sync with the server,' +
                                 ' please refresh this page'
             }
@@ -287,7 +287,11 @@ gScheduleChangeSubmitBtn.addEventListener('click', async () => {
     }
 
     if (notification != null) {
-        showNotification(notification);
+        if (isSuccessful != isConfirmed) {
+            alert(notification);
+        } else {
+            showNotification(notification);
+        }
     }
 });
 
@@ -547,17 +551,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (gTableLastSelectedCell) {
                                 gTableNumCellsSelected += tableToggleCellSelection(gTableLastSelectedCell);
                             }
-                            if (gTableLastSelectedCell != cell) {
-                                gTableNumCellsSelected += tableToggleCellSelection(cell);
-                                if (gTableNumCellsSelected > 0) {
-                                    gTableLastSelectedCell = cell;
-                                }
-                            } else {
-                                // Clear the last selected cell or
-                                // we will have a spurious pivot
-                                // point the next time we enter
-                                // multi-select mode
-                                gTableLastSelectedCell = null;
+                            gTableNumCellsSelected += tableToggleCellSelection(cell);
+                            if (gTableNumCellsSelected > 0) {
+                                gTableLastSelectedCell = cell;
                             }
                         }
                     }
@@ -691,15 +687,16 @@ const gDynamicTable = (function() {
                         classes += _class;
                     });
                     classes += '"';
-                    // Adding tabIndex="0" allows the cell to be tabbed-to
-                    tabIndex = ' tabindex="0"'
                     contents = column.contents;
                 }
                 let ariaLabel = '';
                 if (ariaLabelPrefix != null) {
                     ariaLabel = ariaLabelPrefix + rowTitle + ' on ' + _columnTitles[index] + '"';
                 }
-                row += columnPrefix + classes + ariaLabel + tabIndex + '>' + contents + columnPostfix;
+                // Adding tabIndex="0" allows the cell to be tabbed-to,
+                // adding a title engages hover
+                row += columnPrefix + classes + ariaLabel + ' tabindex="0"' +
+                       'title="' + contents + '">' + contents + columnPostfix;
             });
         }
         row += '</tr>';
@@ -752,7 +749,7 @@ const gDynamicTable = (function() {
         let removeList = [];
         let addList = [];
         if (switchType === 'off') {
-            // Reemove cell-on, as all are no longer on
+            // Remove cell-on, as all are no longer on
             removeList.push('cell-on');
             if (thing === 'motors') {
                 // Remove any previous motors off, to prevent duplicates,
@@ -760,7 +757,7 @@ const gDynamicTable = (function() {
                 removeList.push('cell-motors-off');
                 addList.push('cell-motors-off');
             } else if (thing === 'lights') {
-                // Remove any previous motors off, to prevent duplicates,
+                // Remove any previous lights off, to prevent duplicates,
                 // and add it
                 removeList.push('cell-lights-off');
                 addList.push('cell-lights-off');
@@ -809,8 +806,8 @@ const gDynamicTable = (function() {
     function _cellClasses(data) {
         let classObject = {};
         if (data && _rowTitles && _columnTitles) {
-            // TODO: deal with starting condition
             let classList = [];
+            // TODO: deal with starting condition
             classList.push('cell-on');
             _columnTitles.forEach(function(columnTitle) {
                 let dayData = data[columnTitle];
@@ -989,6 +986,7 @@ const gDynamicTable = (function() {
                 }
                 cell.classList = _classListCompleteMotorsLights(cell.classList);
                 cell.innerHTML = _cellContentsFromClassesMotorsLights(cell.classList.value);
+                cell.title = cell.innerHTML;
             });
             return this;
         },
@@ -1038,7 +1036,7 @@ const gDynamicTable = (function() {
                                 let cell = columnList[columnIndex];
                                 let classes = cell.classList.value;
                                 if (motorsOff) {
-                                    if (classes.includes('cell-on')) {
+                                    if (!classes.includes('cell-motors-off')) {
                                         motorsOnTimeList.push(rowTitle);
                                         motorsOff = false;
                                     }
@@ -1049,7 +1047,7 @@ const gDynamicTable = (function() {
                                     }
                                 }
                                 if (lightsOff) {
-                                    if (classes.includes('cell-on')) {
+                                    if (!classes.includes('cell-lights-off')) {
                                         lightsOnTimeList.push(rowTitle);
                                         lightsOff = false;
                                     }
@@ -1113,7 +1111,7 @@ function timeStrToSeconds(timeStr) {
 }
 
 // Fetch a data file from the server.
-async function dataFetchGet(file) {
+async function fetchGet(file) {
     let json = {};
 
     try {
@@ -1128,7 +1126,7 @@ async function dataFetchGet(file) {
 }
 
 // Post JSON data to a file on the server.
-async function dataFetchPost(json, file) {
+async function fetchPost(json, file) {
     const headers = new Headers();
     headers.append("Content-Type", "application/json");
 
@@ -1235,7 +1233,7 @@ function loadTable(cfgData) {
 // to load the weekly schedule table.
 (async () => {
     // Fetch the configuration data from the server
-    const cfgData = await dataFetchGet(gCfgFileName);
+    const cfgData = await fetchGet(gCfgFileName);
     loadTable(cfgData);
     // Store a zeroeth selected state for table undo/redo
     historySaveState(true);

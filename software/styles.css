@@ -18,6 +18,17 @@
  * @brief Style sheet for index.html.
  */
 
+/* Common variables */
+:root {
+  --cell-on-color: rgb(179, 255, 179);
+  --cell-motors-off-color: rgb(255, 153, 51);
+  --cell-lights-off-color: rgb(255, 51, 0);
+  --cell-off-color: black;
+  --key-font-family: Lucida Console, Courier New, monospace;
+  /* Transparent font so that the name of the colour in the key is only announced by a screen reader */
+  --key-font-color: transparent;
+}
+
 /* Use a nice plain font throughout */
 body {
     font-family: Arial, Helvetica, sans-serif;
@@ -72,9 +83,9 @@ td:first-child {
     width: 7%;
 }
 td.selected {
-    /* The !important markers stops the "selected" colour from disappearing beneath othres. */
+    /* The !important markers stops the "selected" colour from disappearing beneath othres */
     background-color: rgb(0, 153, 255) !important;
-    color: rgba(255, 255, 255, 0.8) !important;;
+    color: rgba(255, 255, 255, 0.7) !important;;
 }
 td:focus {
   outline: 2px solid blue;
@@ -83,23 +94,41 @@ td:focus {
     width: 950px;
     text-align: center;
     font-size: 12px;
+    padding: 2px;
 }
 
-/* Colours for the cells of the table */
+/* Colours for the cells of the table and their entries in the key */
 .cell-on {
-    background-color: rgb(179, 255, 179);
+    background-color: var(--cell-on-color);
+}
+.key-cell-on {
+    background-color: var(--cell-on-color);
+    font-family: var(--key-font-family);
+    color: var(--key-font-color);
 }
 .cell-motors-off {
-    /* Must be the same as the blended version below */
-    background-color: rgb(255, 153, 51);
+    background-color: var(--cell-motors-off-color);
+}
+.key-cell-motors-off {
+    background-color: var(--cell-motors-off-color);
+    font-family: var(--key-font-family);
+    color: var(--key-font-color);
 }
 .cell-lights-off {
-    /* Must be the same as the blended version below */
-    background-color: rgb(255, 51, 0);
+    background-color: var(--cell-lights-off-color);
 }
-/* Blended */
+.key-cell-lights-off {
+    background-color: var(--cell-lights-off-color);
+    font-family: var(--key-font-family);
+    color: var(--key-font-color);
+}
 .cell-lights-off.cell-motors-off {
-    background-color: black;
+    background-color: var(--cell-off-color);
+}
+.key-cell-lights-off.key-cell-motors-off {
+    background-color: var(--cell-off-color);
+    font-family: var(--key-font-family);
+    color: var(--key-font-color);
 }
 
 /* Modal dialog styles */
@@ -191,10 +220,10 @@ td:focus {
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    background-color: rgba(255, 255, 255, 0.8);
+    background-color: rgba(255, 255, 255, 0.9);
     color: black;
     padding: 5px;
-    border: 1px solid rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 0, 0, 0.9);
     border-radius: 4px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
     z-index: 1000;
@@ -202,7 +231,7 @@ td:focus {
     transition: opacity 0.5s;
 }
 
-/* Note: these have to be #notification.blah as otherwise they won't overried the settings in #notification. */
+/* Note: these have to be #notification.blah as otherwise they won't override the settings in #notification. */
 #notification.show {
     display: block;
     opacity: 1;
