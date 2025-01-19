@@ -43,8 +43,16 @@ limitations under the License.
         <p class="label">Override</p>
         <div class="override">
             <span class="override-group-hours">
-                <span class="override-hours">Motors off next <input type="number" min="0" max="24" id="override-motors" size="2" class="override-number">hours</span>
-                <span class="override-hours">Lights off next <input type="number" min="0" max="24" id="override-lights" size="2" class="override-number">hours</span>
+                <span class="override-hours">
+                    <span>Motors</span>
+                    <span><button id="override-type-motors-button" class="override-type-button">off</button></span>
+                    <span>next<input type="number" min="0" max="24" id="override-motors" size="2" class="override-number">hours</span>
+                </span>
+                <span class="override-hours">
+                    <span>Lights</span>
+                    <span><button id="override-type-lights-button" class="override-type-button">off</button></span>
+                    <span>next<input type="number" min="0" max="24" id="override-lights" size="2" class="override-number">hours</span>
+                </span>
             </span>
             <span class="override-group-submit-button">
                 <span><button id="override-submit-button">Submit</button></span>

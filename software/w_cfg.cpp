@@ -259,13 +259,13 @@ static int parseJson(const char *buffer, unsigned int sizeBytes)
                 // Check for override date/times for the motors and the lights
                 for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gThingOff); x++) {
                     const wCfgThingOff_t *thing = &(gThingOff[x]);
-                    // Check for the first "stopUntil" override for this thing
+                    // Check for the first "overrideOffUntil" override for this thing
                     // at the top level
                     const cJSON *thingJson = cJSON_GetObjectItemCaseSensitive(json, thing->key);
                     if (cJSON_IsObject(thingJson)) {
-                        time_t time = parseJsonDateTime(thingJson, "stopUntil");
+                        time_t time = parseJsonDateTime(thingJson, "overrideOffUntil");
                         if (time > timeNow) {
-                            // There is a "stopUntil" date/time and it is greater
+                            // There is an "overrideOffUntil" date/time and it is greater
                             // than the time now, so the thing must be off
                             *(thing->offNotOn) = true;
                         }

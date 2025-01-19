@@ -53,15 +53,16 @@
 #ifndef W_CFG_FILE_DEFAULT
 /** The default contents of a configuration file.
  *
- * The standalone "motors" and "lights" fields can be used to
- * stop those things for a period.  The format for the "stopUntil"
- * fields is ISO8601 except that anything smaller than seconds,
- * and any marker on the end, if present, will be ignored.  Only
- * the first "motors"/"lights" item, and the first "stopUntil" item
- * within each, matters (duplicates will be ignored).  The default
- * configuration file contents below are intended to show the format
- * but don't do anything of use, i.e. the lights and motors will remain
- * on.
+ * The "override" field can be used to stop or start "motors" and/or
+ * "lights" until a given time.  The format for "offUntil" and
+ * "onUntil" is ISO8601 except that anything smaller than seconds,
+ * and any marker on the end, if present, will be ignored.
+ * Only the first "motors"/"lights" item, and the first "offUntil"
+ * or "onUntil" item within each, matters (duplicates, and an "offUntil"
+ * if there is an "onUntil", and vice-versa, will be ignored).
+ * The default configuration file contents below are intended to show
+ * the format but don't do anything of use, i.e. the lights and motors
+ * will remain on.
  *
  * "week" represents a weekly schedule (overridden by the standalone
  * "motors" and "lights" fields), in which the time format is
@@ -81,11 +82,15 @@
  */
 # define W_CFG_FILE_DEFAULT "\
 {\n\
-    \"motors\": {\n\
-        \"stopUntil\": \"2025-01-10T23:07:55\"\n\
-    },\n\
-    \"lights\": {\n\
-        \"stopUntil\": \"2025-01-10T23:07:55\"\n\
+    \"override\": {\n\
+        \"motors\": {\n\
+            \"offUntil\": \"2025-01-10T23:07:55\",\n\
+            \"onUntil\": \"2025-01-10T23:07:55\"\n\
+        },\n\
+        \"lights\": {\n\
+            \"offUntil\": \"2025-01-10T23:07:55\",\n\
+            \"onUntil\": \"2025-01-10T23:07:55\"\n\
+        }\n\
     },\n\
     \"week\": {\n\
         \"monday\": {\n\

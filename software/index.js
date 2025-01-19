@@ -160,38 +160,43 @@ function showNotification(message, timeoutMs = 5000) {
 const gStatusMotors = document.getElementById('status-motors');
 const gStatusLights = document.getElementById('status-lights');
 
-// A local cache of overrides and next scheduled change times;
+// A local cache of override and next scheduled change times;
 // This may contain (all times in millis):
-// "motors"/"lights"->"overrideOff"->time, meaning an override off is set,
+// "motors"/"lights"->"offUntil"-> time, meaning an override off is set,
 // "motors"/"lights"->"onNextOff"->time, meaning on with a scheduled off time,
-// "motors"/"lights"->"offNextOn"->time, meaning off a scheduled on time,
+// "motors"/"lights"->"offNextOn"->time, meaning off with a scheduled on time,
+// "motors"/"lights"->"onUntil"->time, meaning an override on is set,
 // "updateNeeded"->true/false: statusCacheSet() needs to be called if true.
 let gStatusCache = {};
 
-// Set the first "stopUntil" time for the first instance of thing
+// Set the first "offUntil" or "onUntil" time for the first instance of thing
 // in the status cache,
-function statusCacheOverrideOffSet(cfgData, statusCache, timeNowMillis, thing) {
+function statusCacheOverrideSet(thingObject, statusCache, timeNowMillis, thing) {
     let overridden = false;
-    if (cfgData) {
-        let thingObject = cfgData[thing];
-        if (thingObject && statusCache) {
-            let timeStr = thingObject['stopUntil'];
-            let overrideObject = {};
-            if (timeStr) {
+    if (thingObject) {
+        // thingObject may contain "motors" or "lights",
+        // i.e. a thing
+        let untilObject = thingObject[thing];
+        if (untilObject && statusCache) {
+            // untilObject may contain "offUntil" or "onUntil",
+            for (const until in untilObject) {
+                let timeStr = untilObject[until]
+                let overrideObject = {};
                 let timeMillis = Date.parse(timeStr);
                 if (timeMillis > timeNowMillis) {
-                    overrideObject['overrideOff'] = timeMillis;
+                    overrideObject[until] = timeMillis;
                     overridden = true;
                 }
-            }
-            if (Object.keys(overrideObject).length !== 0) {
-                statusCache[thing] = overrideObject;
-            } else {
-                let cacheObject = statusCache[thing];
-                if (cacheObject) {
-                    // Delete any override off time for this
-                    // thing that might already be there
-                    delete cacheObject['overrideOff'];
+                if (Object.keys(overrideObject).length !== 0) {
+                    statusCache[thing] = overrideObject;
+                } else {
+                    let cacheObject = statusCache[thing];
+                    if (cacheObject) {
+                        // Delete any override for this
+                        // thing that might already be there
+                        delete cacheObject['offUntil'];
+                        delete cacheObject['onUntil'];
+                    }
                 }
             }
         }
@@ -222,8 +227,8 @@ function timeListCompare(a, b) {
 // Set the next scheduled time for a thing based on a time list,
 // called by statusCacheScheduleSet().
 function statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, thing) {
-    // Only do this if there is not already and override-off for the thing
-    if (!statusCache[thing] || !statusCache[thing]['overrideOff']) {
+    // Only do this if there is not already an override for the thing
+    if (!statusCache[thing] || !(statusCache[thing]['offUntil'] || statusCache[thing]['onUntil'])) {
         // Go through the list until we reach a time that is at or beyond
         // the current time
         let nextTimeObject = {};
@@ -339,18 +344,22 @@ function statusCacheScheduleSet(weekObject, statusCache, timeNowMillis)
     return nextSwitchTimeMillis
 }
 
-// Update the status cache; cfgData may contain "motors" and/or
-// "lights" and/or "week" (see the top of w_cfg.h).
+// Update the status cache; cfgData may contain "override" and/or
+// "week" (see the top of w_cfg.h).
 function statusCacheSet(cfgData) {
     if (cfgData) {
         const date = new Date();
         let timeNowMillis = date.getTime();
-        let overridden = statusCacheOverrideOffSet(cfgData, gStatusCache,
+        let allOverridden = false;
+        let thingObject = cfgData['override'];
+        if (thingObject) {
+            allOverridden = statusCacheOverrideSet(thingObject, gStatusCache,
                                                    timeNowMillis, 'motors');
-        overridden &= statusCacheOverrideOffSet(cfgData, gStatusCache,
-                                                timeNowMillis, 'lights');
-        if (!overridden) {
-            // If there is no override for either thing,
+            allOverridden &= statusCacheOverrideSet(thingObject, gStatusCache,
+                                                    timeNowMillis, 'lights');
+        }
+        if (!allOverridden) {
+            // If there is no override for any thing,
             // need to go through the week to check
             statusCacheScheduleSet(cfgData["week"], gStatusCache, timeNowMillis);
         }
@@ -358,22 +367,43 @@ function statusCacheSet(cfgData) {
     gStatusCache['updateNeeded'] = false;
 }
 
+// Return a string describing the given override duration, null if there is none.
+function statusOverrideStr(untilMillis, timeNowMillis)
+{
+    let str = null;
+    if (untilMillis) {
+        let overrideDurationMillis = untilMillis - timeNowMillis;
+        if (overrideDurationMillis > 0) {
+            // Round to minutes if more than a minute left, otherwise seconds
+            let round = 60000;
+            if (overrideDurationMillis < 60000) {
+                round = 1000;
+            }
+            overrideDurationMillis = Math.trunc(overrideDurationMillis / round) * round;
+            let luxonDuration = new luxon.Duration.fromMillis(overrideDurationMillis);
+            str = luxonDuration.rescale().toHuman({unitDisplay: "short"});
+        }
+    }
+    return str;
+}
+
+
 // Return the status string for a thing ("lights" or "motors"),
 // called by statusDisplay().
 function statusStr(timeNowMillis, statusCache, thing) {
     let str = null;
     let thingObject = statusCache[thing];
     if (thingObject) {
-        let stopUntilMillis = thingObject['overrideOff'];
-        if (stopUntilMillis) {
-            let overrideDurationMillis = stopUntilMillis - timeNowMillis;
-            if (overrideDurationMillis > 0) {
-                // Minutes is good enough
-                overrideDurationMillis = Math.trunc(overrideDurationMillis / 60000) * 60000;
-                let luxonDuration = new luxon.Duration.fromMillis(overrideDurationMillis);
-                str = 'override off for ' + luxonDuration.rescale().toHuman({unitDisplay: "short"});
+        str = statusOverrideStr(thingObject['offUntil'], timeNowMillis);
+        if (str) {
+            str = "overridden, off for " + str;
+        } else {
+            str = statusOverrideStr(thingObject['onUntil'], timeNowMillis);
+            if (str) {
+                str = "overridden, on for " + str;
             }
         }
+
         if (!str) {
             // If there is no override for the thing,
             // get the next scheduled on or off time
@@ -409,8 +439,9 @@ function statusStr(timeNowMillis, statusCache, thing) {
 function statusDisplay(statusCache) {
     const date = new Date();
     let timeNowMillis = date.getTime();
-    if (statusCache['updateNeeded']) {
-        statusCacheSet(statusCache);
+    let updateNeeded = statusCache['updateNeeded'];
+    if (updateNeeded) {
+        statusCacheSet(gCfgData);
     }
     let motorsStr = statusStr(timeNowMillis, statusCache, 'motors');
     let lightsStr = statusStr(timeNowMillis, statusCache, 'lights');
@@ -437,10 +468,13 @@ window.setInterval(() => {
  * OVERRIDE STUFF
  * -------------------------------------------------------------- */
 
-// Grab the ID of the override submit button and the two input fields.
+// Grab the ID of the override submit button, the type of override,
+// and the two input fields.
 const gOverrideSubmitButton = document.getElementById('override-submit-button');
 const gOverrideMotors = document.getElementById('override-motors');
 const gOverrideLights = document.getElementById('override-lights');
+const gOverrideTypeMotorsButton = document.getElementById('override-type-motors-button');
+const gOverrideTypeLightsButton = document.getElementById('override-type-lights-button');
 
 // Keep track of whether the user has done anything with either
 // of the input fields, otherwise we have no way of ignoring
@@ -452,20 +486,54 @@ let gOverrideLightsChanged = false;
 // Event listener so that we can tell that the user has entered
 // something (as opposed to the field just having a default
 // value of zero).
-gOverrideMotors.addEventListener("input", () => {
+gOverrideMotors.addEventListener('input', () => {
     gOverrideMotorsChanged = true;
 });
 
 // Event listener so that we can tell that the user has entered
 // something (as opposed to the field just having a default
 // value of zero).
-gOverrideLights.addEventListener("input", () => {
+gOverrideLights.addEventListener('input', () => {
     gOverrideLightsChanged = true;
 });
 
-// Set the overrides values in the cfgData.
-function overrideSet(cfgData, timeNowMillis, valueHours, thing) {
-    if (cfgData) {
+// Function called by the override type button event listeners
+// to change the text on the button.
+function overrideTypeButtonTextToggle(overrideTypeButton) {
+    if (overrideTypeButton.innerHTML === 'off') {
+        overrideTypeButton.innerHTML = 'on';
+    } else {
+        overrideTypeButton.innerHTML = 'off';
+    }
+}
+
+// Event listener: motors override type button, just toggle the label.
+gOverrideTypeMotorsButton.addEventListener('click', function (e) {
+    overrideTypeButtonTextToggle(e.currentTarget);
+});
+
+// Event listener: lights override type button, just toggle the label.
+gOverrideTypeLightsButton.addEventListener('click', function (e) {
+    overrideTypeButtonTextToggle(e.currentTarget);
+});
+
+// Reset the override input boxes and type buttons.
+function overrideInputReset() {
+    // Setting the value to a space will cause a warning In
+    // the console log as these are number fields but there
+    // doesn't seem to be any other way to reset the button
+    // to a "there has been no input" state.
+    gOverrideMotors.value = ' ';
+    gOverrideMotorsChanged = false;
+    gOverrideTypeMotorsButton.innerHTML = 'off';
+    gOverrideLights.value = ' ';
+    gOverrideLightsChanged = false;
+    gOverrideTypeLightsButton.innerHTML = 'off';
+}
+
+// Set an override value in thingObject.
+function overrideSet(thingObject, timeNowMillis, valueHours, typeStr, thing) {
+    if (thingObject) {
         timeNowMillis += valueHours * 60 * 60 * 1000;
         // Since the date string we want is almost ISO8601 it
         // is simplest to get that and trim the end off it
@@ -473,8 +541,15 @@ function overrideSet(cfgData, timeNowMillis, valueHours, thing) {
         let timeStr = time.toISOString();
         let dotPos = timeStr.lastIndexOf('.');
         timeStr = timeStr.substring(0, dotPos);
-        let stopUntilObject = {'stopUntil': timeStr};
-        cfgData[thing] = stopUntilObject;
+        let untilObject = {};
+        if (typeStr === 'off') {
+            untilObject = {'offUntil': timeStr};
+        } else if (typeStr === 'on') {
+            untilObject = {'onUntil': timeStr};
+        }
+        if (Object.keys(untilObject).length !== 0) {
+            thingObject[thing] = untilObject;
+        }
     }
 }
 
@@ -486,38 +561,33 @@ gOverrideSubmitButton.addEventListener('click', async () => {
     const date = new Date();
     let timeNowMillis = date.getTime();
 
-    // Get the new override off times
-    let data = {};
+    // Get the new override on or off until times
+    let thingObject = {};
     if (gOverrideMotorsChanged) {
-        overrideSet(data, timeNowMillis, gOverrideMotors.value, "motors");
+        overrideSet(thingObject, timeNowMillis, gOverrideMotors.value,
+                    gOverrideTypeMotorsButton.innerHTML, "motors");
     }
     if (gOverrideLightsChanged) {
-        overrideSet(data, timeNowMillis, gOverrideLights.value, "lights");
+        overrideSet(thingObject, timeNowMillis, gOverrideLights.value,
+                    gOverrideTypeLightsButton.innerHTML, "lights");
     }
 
-    if (data['motors'] || data['lights']) {
-        // Make a copy of gCfgData and add the overrides there
-        let newCfgData = gCfgData;
-        if (data['motors']) {
-            newCfgData['motors'] = data['motors'];
-        }
-        if (data['lights']) {
-            newCfgData['lights'] = data['lights'];
-        }
+    if (Object.keys(thingObject).length !== 0) {
+        // Make a copy of gCfgData and merge the override there
+        let overrideObject = {}
+        overrideObject['override'] = thingObject;
+        let newCfgData = {...gCfgData, ...overrideObject};
         let notification = null;
         try {
             const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
             if (response.ok) {
-                notification = 'Overrides successfully written';
+                notification = 'Override successfully written';
                 // Update our stored configuration to match
                 gCfgData = newCfgData;
                 // Update the status cache
                 statusCacheSet(gCfgData);
                 // Reset the values to make it clear they've been done
-                gOverrideMotors.value = ' ';
-                gOverrideMotorsChanged = false;
-                gOverrideLights.value = ' ';
-                gOverrideLightsChanged = false;
+                overrideInputReset();
             } else {
                 notification = 'Error from server "' + response.status + '"';
             }
