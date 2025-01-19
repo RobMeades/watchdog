@@ -20,13 +20,16 @@
 
 /* Common variables */
 :root {
+  --width: 950px;
   --cell-on-color: rgb(179, 255, 179);
   --cell-motors-off-color: rgb(255, 153, 51);
   --cell-lights-off-color: rgb(255, 51, 0);
   --cell-off-color: black;
-  --key-font-family: Lucida Console, Courier New, monospace;
+  --font-fixed-width: Lucida Console, Courier New, monospace;
+  --key-font-family: var(--font-fixed-width);
   /* Transparent font so that the name of the colour in the key is only announced by a screen reader */
   --key-font-color: transparent;
+  --border: solid 1px #ccc;
 }
 
 /* Use a nice plain font throughout */
@@ -34,16 +37,23 @@ body {
     font-family: Arial, Helvetica, sans-serif;
 }
 
+/* A label */
+.label {
+    /* The meaning of the thing being labelled should be pretty obvious, this is only a hint so keep it small */
+    font-size: 12px;
+    margin-bottom: 1px;
+}
+
 /* Container to hold the video image with a button placed on top of it */
-.btn {
-    width: 950px;
+.button {
+    width: var(--width);
     height: 540px;
     background-image: url(play.png);
     background-repeat: no-repeat;
     background-color: transparent;
     border:0
 }
-.container .btn {
+.container .button {
     /* This puts the button image on top of the video */
     position: absolute;
     top: 0px;
@@ -54,11 +64,58 @@ body {
     width: 100%;
 }
 
+/* Status area */
+.status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--width);
+    text-align: center;
+    border:var(--border);
+    padding: 5px 0px;
+}
+.status-item {
+    margin-left: 50px;
+    margin-right: 50px;
+}
+
+/* Override area */
+.override {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--width);
+    text-align: center;
+    border:var(--border);
+    padding: 5px 0px;
+}
+.override-group-hours {
+    margin-left: 100px;
+    margin-right: 100px;
+}
+.override-hours {
+    margin-left: 50px;
+    margin-right: 50px;
+}
+.override-group-submit-button {
+    display: flex;
+    justify-content:right;
+    width: 10%;
+}
+.override-number {
+    font-family: var(--font-fixed-width);
+    font-size: 20px;
+    padding-top: 4px;
+    padding-bottom: 2px;
+    padding-left: 5px;
+    padding-right: 5px;
+    margin-left: 5px;
+    margin-right: 5px;
+}
+
 /* Table to show the weekly schedule */
 .table, th, td, tr {
-    border-bottom: solid 1px #ccc;
-    border-right: solid 1px #ccc; 
-    border-left: solid 1px #ccc;
+    border: var(--border);
     border-collapse: collapse;
     /* Disable text selection or cell selection looks weird */
     user-select: none;
@@ -91,7 +148,7 @@ td:focus {
   outline: 2px solid blue;
 }
 .key {
-    width: 950px;
+    width: var(--width);
     text-align: center;
     font-size: 12px;
     padding: 2px;

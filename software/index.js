@@ -29,6 +29,9 @@
 // the weekly schedule.
 let gCfgFileName = 'watchdog.cfg';
 
+// Our local copy of the configuration data from the server.
+let gCfgData = {};
+
 // Track the state of the control key.
 let gKeyIsPressedCtrl = false;
 
@@ -150,13 +153,391 @@ function showNotification(message, timeoutMs = 5000) {
 }
 
 /* ----------------------------------------------------------------
+ * STATUS STUFF
+ * -------------------------------------------------------------- */
+
+// Grab the IDs of the status boxes.
+const gStatusMotors = document.getElementById('status-motors');
+const gStatusLights = document.getElementById('status-lights');
+
+// A local cache of overrides and next scheduled change times;
+// This may contain (all times in millis):
+// "motors"/"lights"->"overrideOff"->time, meaning an override off is set,
+// "motors"/"lights"->"onNextOff"->time, meaning on with a scheduled off time,
+// "motors"/"lights"->"offNextOn"->time, meaning off a scheduled on time,
+// "updateNeeded"->true/false: statusCacheSet() needs to be called if true.
+let gStatusCache = {};
+
+// Set the first "stopUntil" time for the first instance of thing
+// in the status cache,
+function statusCacheOverrideOffSet(cfgData, statusCache, timeNowMillis, thing) {
+    let overridden = false;
+    if (cfgData) {
+        let thingObject = cfgData[thing];
+        if (thingObject && statusCache) {
+            let timeStr = thingObject['stopUntil'];
+            let overrideObject = {};
+            if (timeStr) {
+                let timeMillis = Date.parse(timeStr);
+                if (timeMillis > timeNowMillis) {
+                    overrideObject['overrideOff'] = timeMillis;
+                    overridden = true;
+                }
+            }
+            if (Object.keys(overrideObject).length !== 0) {
+                statusCache[thing] = overrideObject;
+            } else {
+                let cacheObject = statusCache[thing];
+                if (cacheObject) {
+                    // Delete any override off time for this
+                    // thing that might already be there
+                    delete cacheObject['overrideOff'];
+                }
+            }
+        }
+    }
+    return overridden;
+}
+
+// Get the time in milliseconds at midnight of the previous Sunday.
+function midnightLastSundayTimeMillisGet(timeNowMillis) {
+    const timeNow = new Date(timeNowMillis);
+    const dayOfWeek = timeNow.getDay();
+    // dayOfWeek has Sunday as day zero, so need to adjust
+    // to derive the number of days to subtract to get to
+    // Monday
+    const daysToSubtract = (dayOfWeek - 1 + 7) % 7;
+    const lastMonday = new Date();
+    lastMonday.setDate(timeNow.getDate() - daysToSubtract);
+    lastMonday.setHours(0, 0, 0, 0);
+    return lastMonday.getTime();
+}
+
+// Compare function for time list sorting, used by statusCacheScheduleSet(),
+// sort in ascending order.
+function timeListCompare(a, b) {
+    return a['timeMillis'] - b['timeMillis'];
+}
+
+// Set the next scheduled time for a thing based on a time list,
+// called by statusCacheScheduleSet().
+function statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, thing) {
+    // Only do this if there is not already and override-off for the thing
+    if (!statusCache[thing] || !statusCache[thing]['overrideOff']) {
+        // Go through the list until we reach a time that is at or beyond
+        // the current time
+        let nextTimeObject = {};
+        let switchType = '';
+        let thingOff = false;
+        for (let x = 0; x < timeList.length; x++) {
+            let object = timeList[x];
+            switchType = object[thing];
+            if (object[thing] && object['timeMillis'] >= timeNowMillis) {
+                // If the switched-to state is different to the
+                // current state, we have a weener.
+                if ((switchType === 'off') && !thingOff) {
+                    nextTimeObject = object;
+                    break;
+                } else if ((switchType === 'on') && thingOff) {
+                    nextTimeObject = object;
+                    break;
+                }
+            }
+            if (switchType === 'off') {
+                thingOff = true;
+            } else if (switchType === 'on') {
+                thingOff = false;
+            }
+        }
+        if (Object.keys(nextTimeObject).length !== 0) {
+            let eventObject = {};
+            if (switchType === 'off') {
+                eventObject['onNextOff'] = nextTimeObject['timeMillis'];
+            } else if (switchType === 'on') {
+                eventObject['offNextOn'] = nextTimeObject['timeMillis'];
+            }
+            if (Object.keys(eventObject).length !== 0) {
+                statusCache[thing] = eventObject;
+                let cacheObject = statusCache[thing];
+                if (eventObject['onNextOff']) {
+                    // If we've set an onNextOff value,
+                    // delete any offNextOn value that might
+                    // be lying around
+                    delete cacheObject['offNextOn'];
+                } else if (eventObject['offNextOn']) {
+                    // Vice-versa
+                    delete cacheObject['onNextOff'];
+                }
+            } else {
+                let cacheObject = statusCache[thing];
+                if (cacheObject) {
+                    // Got nothing: delete anything that might
+                    // have been there
+                    delete cacheObject['onNextOff'];
+                    delete cacheObject['offNextOn'];
+                }
+            }
+        }
+    }
+}
+
+// Update the status cache based on the weekly schedule.
+function statusCacheScheduleSet(weekObject, statusCache, timeNowMillis)
+{
+    let nextSwitchTimeMillis = 0;
+    const dayStrList = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+    if (weekObject && statusCache) {
+        // We will create a list of time objects, each of
+        // which is something like "timeMillis": time, "motors": "off"
+        // or "timeMillis": time, "lights": "on", etc.
+        let timeList = [];
+        // Work out what the time in millis would be at midnight
+        // of the previous Sunday (i.e. the start of this week).
+        let startOfWeekMillis = midnightLastSundayTimeMillisGet(timeNowMillis);
+        dayStrList.forEach(function(dayStr, dayIndex) {
+            // weekObject should contain the days of the week
+            let dayObject = weekObject[dayStr];
+            if (dayObject) {
+                // Work out what the start of this day is in millis
+                let dayMillis = startOfWeekMillis + (dayIndex * 60 * 60 * 24 * 1000);
+                // dayObject should contain "motors" or "lights",
+                // i.e. a thing
+                for (const thing in dayObject) {
+                    let thingObject = dayObject[thing];
+                    // Beneath "motors" or "lights" should be "off" or "on",
+                    // i.e. a switch type
+                    for (const switchType in thingObject) {
+                        let timeStrList = thingObject[switchType];
+                        // The "off" or "on" object should contain a list of HH:MM:SS strings
+                        timeStrList.forEach(function(timeStr) {
+                            // Convert each HH:MM:SS string into millis and create
+                            // a time object with all of the bits in it
+                            let timeMillis = dayMillis + (timeStrToSeconds(timeStr) * 1000);
+                            // We do this for two weeks since we might currently be on Sunday or
+                            // the like, i.e. with all switches in the past
+                            for (let x = 0; x < 2; x++) {
+                                let timeObject = {}
+                                timeObject['timeMillis'] = timeMillis;
+                                timeObject[thing] = switchType;
+                                timeList.push(timeObject);
+                                // Add a week in milliseconds
+                                timeMillis += 60 * 60 * 24 * 7 * 1000;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        // Should now have a timeList[]: sort it in increasing order of time
+        timeList.sort(timeListCompare);
+        // Set the next thing for the motors and lights based on the list of times
+        statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, "motors");
+        statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, "lights");
+    }
+
+    return nextSwitchTimeMillis
+}
+
+// Update the status cache; cfgData may contain "motors" and/or
+// "lights" and/or "week" (see the top of w_cfg.h).
+function statusCacheSet(cfgData) {
+    if (cfgData) {
+        const date = new Date();
+        let timeNowMillis = date.getTime();
+        let overridden = statusCacheOverrideOffSet(cfgData, gStatusCache,
+                                                   timeNowMillis, 'motors');
+        overridden &= statusCacheOverrideOffSet(cfgData, gStatusCache,
+                                                timeNowMillis, 'lights');
+        if (!overridden) {
+            // If there is no override for either thing,
+            // need to go through the week to check
+            statusCacheScheduleSet(cfgData["week"], gStatusCache, timeNowMillis);
+        }
+    }
+    gStatusCache['updateNeeded'] = false;
+}
+
+// Return the status string for a thing ("lights" or "motors"),
+// called by statusDisplay().
+function statusStr(timeNowMillis, statusCache, thing) {
+    let str = null;
+    let thingObject = statusCache[thing];
+    if (thingObject) {
+        let stopUntilMillis = thingObject['overrideOff'];
+        if (stopUntilMillis) {
+            let overrideDurationMillis = stopUntilMillis - timeNowMillis;
+            if (overrideDurationMillis > 0) {
+                // Minutes is good enough
+                overrideDurationMillis = Math.trunc(overrideDurationMillis / 60000) * 60000;
+                let luxonDuration = new luxon.Duration.fromMillis(overrideDurationMillis);
+                str = 'override off for ' + luxonDuration.rescale().toHuman({unitDisplay: "short"});
+            }
+        }
+        if (!str) {
+            // If there is no override for the thing,
+            // get the next scheduled on or off time
+            let onOrOffTimeMillis = thingObject['onNextOff'];
+            if (onOrOffTimeMillis) {
+                if (onOrOffTimeMillis - timeNowMillis > 0) {
+                    let luxonDateTime = new luxon.DateTime.fromMillis(onOrOffTimeMillis);
+                    str = 'on, next off ' + luxonDateTime.toRelative();
+                } else {
+                    statusCache['updateNeeded'] = true;
+                    // Assume off
+                    str = 'off';
+                }
+            } else {
+                onOrOffTimeMillis = thingObject['offNextOn'];
+                if (onOrOffTimeMillis) {
+                    if (onOrOffTimeMillis - timeNowMillis > 0) {
+                        let luxonDateTime = new luxon.DateTime.fromMillis(onOrOffTimeMillis);
+                        str = 'off, next on ' + luxonDateTime.toRelative();
+                    } else {
+                        statusCache['updateNeeded'] = true;
+                        // Assume on
+                        str = 'on';
+                    }
+                }
+            }
+        }
+    }
+    return str;
+}
+
+// Display the status of the motors/lights.
+function statusDisplay(statusCache) {
+    const date = new Date();
+    let timeNowMillis = date.getTime();
+    if (statusCache['updateNeeded']) {
+        statusCacheSet(statusCache);
+    }
+    let motorsStr = statusStr(timeNowMillis, statusCache, 'motors');
+    let lightsStr = statusStr(timeNowMillis, statusCache, 'lights');
+    if (!motorsStr) {
+        motorsStr = 'status unknown';
+    }
+    if (!lightsStr) {
+        lightsStr = 'status unknown';
+    }
+    if (gStatusMotors) {
+        gStatusMotors.innerHTML = 'Motors ' + motorsStr;
+    }
+    if (gStatusLights) {
+        gStatusLights.innerHTML = 'Lights ' + lightsStr;
+    }
+}
+
+// Status update timer.
+window.setInterval(() => {
+    statusDisplay(gStatusCache);
+}, 1000);
+
+/* ----------------------------------------------------------------
+ * OVERRIDE STUFF
+ * -------------------------------------------------------------- */
+
+// Grab the ID of the override submit button and the two input fields.
+const gOverrideSubmitButton = document.getElementById('override-submit-button');
+const gOverrideMotors = document.getElementById('override-motors');
+const gOverrideLights = document.getElementById('override-lights');
+
+// Keep track of whether the user has done anything with either
+// of the input fields, otherwise we have no way of ignoring
+// a submit button press when they've done nothing and _also_
+// allowing the override to be reset back to zero by the user.
+let gOverrideMotorsChanged = false;
+let gOverrideLightsChanged = false;
+
+// Event listener so that we can tell that the user has entered
+// something (as opposed to the field just having a default
+// value of zero).
+gOverrideMotors.addEventListener("input", () => {
+    gOverrideMotorsChanged = true;
+});
+
+// Event listener so that we can tell that the user has entered
+// something (as opposed to the field just having a default
+// value of zero).
+gOverrideLights.addEventListener("input", () => {
+    gOverrideLightsChanged = true;
+});
+
+// Set the overrides values in the cfgData.
+function overrideSet(cfgData, timeNowMillis, valueHours, thing) {
+    if (cfgData) {
+        timeNowMillis += valueHours * 60 * 60 * 1000;
+        // Since the date string we want is almost ISO8601 it
+        // is simplest to get that and trim the end off it
+        let time = new Date(timeNowMillis);
+        let timeStr = time.toISOString();
+        let dotPos = timeStr.lastIndexOf('.');
+        timeStr = timeStr.substring(0, dotPos);
+        let stopUntilObject = {'stopUntil': timeStr};
+        cfgData[thing] = stopUntilObject;
+    }
+}
+
+// Event listener: override submit button.
+// Note: this needs to be marked as async since it
+// ends up calling fetch() to write the data to the
+// server.
+gOverrideSubmitButton.addEventListener('click', async () => {
+    const date = new Date();
+    let timeNowMillis = date.getTime();
+
+    // Get the new override off times
+    let data = {};
+    if (gOverrideMotorsChanged) {
+        overrideSet(data, timeNowMillis, gOverrideMotors.value, "motors");
+    }
+    if (gOverrideLightsChanged) {
+        overrideSet(data, timeNowMillis, gOverrideLights.value, "lights");
+    }
+
+    if (data['motors'] || data['lights']) {
+        // Make a copy of gCfgData and add the overrides there
+        let newCfgData = gCfgData;
+        if (data['motors']) {
+            newCfgData['motors'] = data['motors'];
+        }
+        if (data['lights']) {
+            newCfgData['lights'] = data['lights'];
+        }
+        let notification = null;
+        try {
+            const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
+            if (response.ok) {
+                notification = 'Overrides successfully written';
+                // Update our stored configuration to match
+                gCfgData = newCfgData;
+                // Update the status cache
+                statusCacheSet(gCfgData);
+                // Reset the values to make it clear they've been done
+                gOverrideMotors.value = ' ';
+                gOverrideMotorsChanged = false;
+                gOverrideLights.value = ' ';
+                gOverrideLightsChanged = false;
+            } else {
+                notification = 'Error from server "' + response.status + '"';
+            }
+        } catch (error) {
+            notification = 'Error "' + error + '" sending data';
+        } 
+        if (notification != null) {
+            showNotification(notification);
+        }
+    }
+});
+
+/* ----------------------------------------------------------------
  * WEEKLY SCHEDULE STUFF: THE SCHEDULE CHANGE DIALOG
  * -------------------------------------------------------------- */
 
 // Grab the IDs of the elements of the schedule change dialogue box.
 const gScheduleChangeDialog = document.getElementById('schedule-change');
-const gScheduleChangeDialogCloseBtn = document.getElementById('dialog-close-btn');
-const gScheduleChangeSubmitBtn = document.getElementById('schedule-change-submit-btn');
+const gScheduleChangeDialogCloseButton = document.getElementById('dialog-close-button');
+const gScheduleChangeSubmitButton = document.getElementById('schedule-change-submit-button');
 const gScheduleChangeRadioMotors = document.getElementById('radio-motors');
 const gScheduleChangeRadioLights = document.getElementById('radio-lights');
 
@@ -187,7 +568,7 @@ function scheduleChangeDialogClose() {
 
 // Event listener: close the schedule-change dialogue box
 // when the close button is clicked.
-gScheduleChangeDialogCloseBtn.addEventListener('click', () => {
+gScheduleChangeDialogCloseButton.addEventListener('click', () => {
     scheduleChangeDialogClose();
 });
 
@@ -211,7 +592,7 @@ gScheduleChangeDialog.addEventListener('keydown', (event) => {
 // Note: this needs to be marked as async since it
 // ends up calling fetch() to write the data to the
 // server.
-gScheduleChangeSubmitBtn.addEventListener('click', async () => {
+gScheduleChangeSubmitButton.addEventListener('click', async () => {
     // Remove the dialog box
     gScheduleChangeDialog.style.display = 'none';
 
@@ -246,15 +627,23 @@ gScheduleChangeSubmitBtn.addEventListener('click', async () => {
         // Get the selected cells and update the table
         const selectedCells = gTable.querySelectorAll('td.selected');
         gDynamicTable.setMotorsLights(selectedCells, selectedMotors, selectedLights);
+        // Get the new data
         let data = {};
         gDynamicTable.getMotorsLights(data);
-        // Send the data to the server
-        notification = null;
         if (Object.keys(data).length !== 0) {
+            // Make a copy of gCfgData and add the week data there
+            let newCfgData = gCfgData;
+            newCfgData['week'] = data['week'];
+            // Send the data to the server
+            notification = null;
             try {
-                const response = await fetchPost(JSON.stringify(data, null, 2), gCfgFileName);
+                const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
                 if (response.ok) {
                     notification = 'Changes successfully written';
+                    // Update our stored configuration to match
+                    gCfgData = newCfgData;
+                    // Update the status cache
+                    statusCacheSet(gCfgData);
                     isSuccessful = true;
                 } else {
                     notification = 'Error from server "' + response.status + '"';
@@ -458,7 +847,6 @@ function tableHandleKeydown(event) {
 // Event listener: handle cells of the table being selected.
 document.addEventListener('DOMContentLoaded', function() {
     let clickTimerList = [];
-    let delayMs = 300;
     let isDragging = false;
     let startCell = null;
 
@@ -518,6 +906,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // so that we don't mix it up with a double-click
                 // action
                 const clickTimer = setTimeout(() => {
+                    // Make sure there's only ever one
+                    clickTimerList = [];
                     // Single-click
 
                     // Shift
@@ -550,14 +940,20 @@ document.addEventListener('DOMContentLoaded', function() {
                             // same cell, toggle this cell
                             if (gTableLastSelectedCell) {
                                 gTableNumCellsSelected += tableToggleCellSelection(gTableLastSelectedCell);
+                                if (gTableLastSelectedCell != cell) {
+                                    gTableNumCellsSelected += tableToggleCellSelection(cell);
+                                }
+                            } else {
+                                gTableNumCellsSelected += tableToggleCellSelection(cell);
                             }
-                            gTableNumCellsSelected += tableToggleCellSelection(cell);
                             if (gTableNumCellsSelected > 0) {
                                 gTableLastSelectedCell = cell;
+                            } else {
+                                gTableLastSelectedCell = null;
                             }
                         }
                     }
-                }, delayMs);
+                }, 300);
                 clickTimerList.push(clickTimer);
             }
         }
@@ -673,11 +1069,15 @@ const gDynamicTable = (function() {
                 ariaLabelPrefix = ' aria-label="';
             }
         }
+        let tabIndex = '';
+        if (rowTitle.trim().length > 0) {
+            // Allow a "titled" item to be tabbed-to
+            tabIndex = ' tabindex="0"';
+        }
         if (data) {
             data.forEach(function(column, index) {
                 let classes = '';
                 let contents = column;
-                let tabIndex = ''
                 if (column['classList']) {
                     classes = ' class ="';
                     column['classList'].forEach(function(_class, index) {
@@ -693,10 +1093,8 @@ const gDynamicTable = (function() {
                 if (ariaLabelPrefix != null) {
                     ariaLabel = ariaLabelPrefix + rowTitle + ' on ' + _columnTitles[index] + '"';
                 }
-                // Adding tabIndex="0" allows the cell to be tabbed-to,
-                // adding a title engages hover
-                row += columnPrefix + classes + ariaLabel + ' tabindex="0"' +
-                       'title="' + contents + '">' + contents + columnPostfix;
+                row += columnPrefix + classes + ariaLabel + tabIndex + '>' +
+                       contents + columnPostfix;
             });
         }
         row += '</tr>';
@@ -807,7 +1205,7 @@ const gDynamicTable = (function() {
         let classObject = {};
         if (data && _rowTitles && _columnTitles) {
             let classList = [];
-            // TODO: deal with starting condition
+            // All things are on at the start of the week
             classList.push('cell-on');
             _columnTitles.forEach(function(columnTitle) {
                 let dayData = data[columnTitle];
@@ -823,8 +1221,10 @@ const gDynamicTable = (function() {
                         }
                     }
                     if (classList.length > 0) {
-                        // Sort the array before pushing so that it can be used in comparisons
-                        classObject[columnTitle + rowTitle] = Array.from(classList.sort());
+                        // Sort the array before pushing so that it can be
+                        // used in comparisons when converted to a space-separated
+                        // set of classes
+                        classObject[columnTitle + rowTitle] = classList.sort();
                     }
                 })
             })
@@ -1012,7 +1412,6 @@ const gDynamicTable = (function() {
                 }
                 // Work down the rows of each day looking for changes
                 // in the classes that represent motors/lights state
-                // TODO: resolve starting condition
                 let motorsOff = false;
                 let lightsOff = false;
                 let dayData = {};
@@ -1111,7 +1510,7 @@ function timeStrToSeconds(timeStr) {
 }
 
 // Fetch a data file from the server.
-async function fetchGet(file) {
+async function fetchHttpGet(file) {
     let json = {};
 
     try {
@@ -1126,7 +1525,7 @@ async function fetchGet(file) {
 }
 
 // Post JSON data to a file on the server.
-async function fetchPost(json, file) {
+async function fetchHttpPost(json, file) {
     const headers = new Headers();
     headers.append("Content-Type", "application/json");
 
@@ -1143,8 +1542,8 @@ async function fetchPost(json, file) {
     }
 }
 
-// Populate the weekly schedule table.
-function loadTable(cfgData) {
+// Populate the weekly schedule table; cfgData should contain "week".
+function tableLoad(cfgData) {
     // The days of the week, which are our column titles and will be the
     // same as the days of the week returned in the configuration file
     // from the server (ignoring case)
@@ -1230,11 +1629,13 @@ function loadTable(cfgData) {
 }
 
 // Wait for the asynchronous function to complete before continuing
-// to load the weekly schedule table.
+// to load the weekly schedule table and update the status boxes.
 (async () => {
     // Fetch the configuration data from the server
-    const cfgData = await fetchGet(gCfgFileName);
-    loadTable(cfgData);
+    gCfgData = await fetchHttpGet(gCfgFileName);
+    tableLoad(gCfgData);
+    statusCacheSet(gCfgData);
+    statusDisplay(gStatusCache);
     // Store a zeroeth selected state for table undo/redo
     historySaveState(true);
 })();

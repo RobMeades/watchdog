@@ -19,22 +19,42 @@ limitations under the License.
 
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- For human-readable durations/times, since moments.js is now deprecated --!>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.5.0/build/global/luxon.min.js"></script>
+
     <head>
         <meta http-equiv="content-type" content="text/html; charset=UTF-8">
         <link rel="stylesheet" href="styles.css">
     </head>
     <body>
 
-        <!-- Main page -->
+        <!-- Video -->
         <div class="container">
             <video width="950" height="540" id="video"></video>
-            <button class="btn" id="play" hidden />
+            <button class="button" id="play" hidden />
         </div>
-        <br>
-        <table id="week" width="950" cellspacing="0" cellpadding="0"></table>
-        <br>
+        <!-- Status -->
+        <p class="label">Status</p>
+        <div class="status">
+            <span id="status-motors" class="status-item"></span>
+            <span id="status-lights" class="status-item"></span>
+        </div>
+        <!-- Override -->
+        <p class="label">Override</p>
+        <div class="override">
+            <span class="override-group-hours">
+                <span class="override-hours">Motors off next <input type="number" min="0" max="24" id="override-motors" size="2" class="override-number">hours</span>
+                <span class="override-hours">Lights off next <input type="number" min="0" max="24" id="override-lights" size="2" class="override-number">hours</span>
+            </span>
+            <span class="override-group-submit-button">
+                <span><button id="override-submit-button">Submit</button></span>
+            </span>
+        </div>
+        <!-- Weekly schedule -->
+        <p class="label">Schedule</p>
         <div class="key">
             <span>normal: </span>
+            <!-- &nbsp; below to ensure that the [fixed-width font] key colour bars are the same width -->
             <span class="key-cell-on">green&nbsp;</span>
             <span>&nbsp;&nbsp;motors off: </span>
             <span class="key-cell-motors-off">orange</span>
@@ -43,14 +63,15 @@ limitations under the License.
             <span>&nbsp;&nbsp;both off: </span>
             <span class="key-cell-motors-off key-cell-lights-off">black&nbsp;</span>
         </div>
+        <table id="week" width="950" cellspacing="0" cellpadding="0"></table>
         <div class="key">
-            <span class="key">Select cells and double-click or CTRL-&#60;enter&#62;&#47;CTRL-&#60;space&#62; to change.</span>
+            <span>Select cells and double-click or CTRL-&#60;enter&#62;&#47;CTRL-&#60;space&#62; to change</span>
         </div>
         <!-- Modal dialog box for weekly schedule modifications  -->
         <div id="schedule-change" class="dialog" tabindex="-1">
             <div class="dialog-content">
                 <div class="dialog-header">
-                    <span id="dialog-close-btn" class="dialog-close" tabindex="0"role="button" title="Close" aria-label="Close">&times;</span>
+                    <span id="dialog-close-button" class="dialog-close" tabindex="0"role="button" title="Close" aria-label="Close">&times;</span>
                     <h2>Modify Schedule</h2>
                 </div>
                 <div class="dialog-body">
@@ -77,7 +98,7 @@ limitations under the License.
                     </div>
                 </div>
                 <div class="dialog-footer">
-                    <button id="schedule-change-submit-btn">Submit</button>
+                    <button id="schedule-change-submit-button">Submit</button>
                 </div>
             </div>
         </div>
@@ -86,7 +107,7 @@ limitations under the License.
         <div id="notification" aria-live="polite" aria-atomic="true">empty</div>
 
         <!-- Load the script last so that the document is loaded before the script refers to it -->
-        <script src="script.js"></script>
+        <script src="index.js"></script>
     </body>
 </html>
 
