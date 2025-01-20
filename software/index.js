@@ -156,9 +156,11 @@ function showNotification(message, timeoutMs = 5000) {
  * STATUS STUFF
  * -------------------------------------------------------------- */
 
-// Grab the IDs of the status boxes.
-const gStatusMotors = document.getElementById('status-motors');
-const gStatusLights = document.getElementById('status-lights');
+// Grab the IDs of the status text boxes and indcators.
+const gStatusTextMotors = document.getElementById('status-text-motors');
+const gStatusTextLights = document.getElementById('status-text-lights');
+const gStatusIndicatorMotors = document.getElementById('status-indicator-motors');
+const gStatusIndicatorLights = document.getElementById('status-indicator-lights');
 
 // A local cache of override and next scheduled change times;
 // This may contain (all times in millis):
@@ -169,26 +171,38 @@ const gStatusLights = document.getElementById('status-lights');
 // "updateNeeded"->true/false: statusCacheSet() needs to be called if true.
 let gStatusCache = {};
 
+// Given an object intended for the cache entry of a thing
+// (e.g. "offUntil": time or "onNextOff": time, etc), merge that
+// entry into the cache
+function statusCacheMergeObject(statusCache, object, thing) {
+    if (statusCache && object) {
+        let thingObject = statusCache[thing];
+        if (thingObject) {
+            // Merge object into thingObject, object overriding
+            Object.assign(thingObject, thingObject, object);
+        } else {
+            statusCache[thing] = object;
+        }
+    }
+}
+
 // Set the first "offUntil" or "onUntil" time for the first instance of thing
-// in the status cache,
-function statusCacheOverrideSet(thingObject, statusCache, timeNowMillis, thing) {
+// in the status cache.
+function statusCacheOverrideSet(overrideObject, statusCache, timeNowMillis, thing) {
     let overridden = false;
-    if (thingObject) {
-        // thingObject may contain "motors" or "lights",
+    if (overrideObject) {
+        // overrideObject may contain "motors" or "lights",
         // i.e. a thing
-        let untilObject = thingObject[thing];
-        if (untilObject && statusCache) {
-            // untilObject may contain "offUntil" or "onUntil",
-            for (const until in untilObject) {
-                let timeStr = untilObject[until]
-                let overrideObject = {};
+        let thingObject = overrideObject[thing];
+        if (thingObject && statusCache) {
+            // thingObject, for an override, may contain "offUntil" or "onUntil",
+            for (const until in thingObject) {
+                let timeStr = thingObject[until]
+                let untilObject = {};
                 let timeMillis = Date.parse(timeStr);
                 if (timeMillis > timeNowMillis) {
-                    overrideObject[until] = timeMillis;
-                    overridden = true;
-                }
-                if (Object.keys(overrideObject).length !== 0) {
-                    statusCache[thing] = overrideObject;
+                    untilObject[until] = timeMillis;
+                    statusCacheMergeObject(statusCache, untilObject, thing);
                 } else {
                     let cacheObject = statusCache[thing];
                     if (cacheObject) {
@@ -204,8 +218,8 @@ function statusCacheOverrideSet(thingObject, statusCache, timeNowMillis, thing) 
     return overridden;
 }
 
-// Get the time in milliseconds at midnight of the previous Sunday.
-function midnightLastSundayTimeMillisGet(timeNowMillis) {
+// Get the time in milliseconds at the start of the week.
+function startWeekTimeMillisGet(timeNowMillis) {
     const timeNow = new Date(timeNowMillis);
     const dayOfWeek = timeNow.getDay();
     // dayOfWeek has Sunday as day zero, so need to adjust
@@ -227,60 +241,57 @@ function timeListCompare(a, b) {
 // Set the next scheduled time for a thing based on a time list,
 // called by statusCacheScheduleSet().
 function statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, thing) {
-    // Only do this if there is not already an override for the thing
-    if (!statusCache[thing] || !(statusCache[thing]['offUntil'] || statusCache[thing]['onUntil'])) {
-        // Go through the list until we reach a time that is at or beyond
-        // the current time
-        let nextTimeObject = {};
-        let switchType = '';
-        let thingOff = false;
-        for (let x = 0; x < timeList.length; x++) {
-            let object = timeList[x];
-            switchType = object[thing];
-            if (object[thing] && object['timeMillis'] >= timeNowMillis) {
-                // If the switched-to state is different to the
-                // current state, we have a weener.
-                if ((switchType === 'off') && !thingOff) {
-                    nextTimeObject = object;
-                    break;
-                } else if ((switchType === 'on') && thingOff) {
-                    nextTimeObject = object;
-                    break;
-                }
-            }
-            if (switchType === 'off') {
-                thingOff = true;
-            } else if (switchType === 'on') {
-                thingOff = false;
+    // Go through the list until we reach a time that is at or beyond
+    // the current time
+    let nextTimeObject = {};
+    let switchType = '';
+    let thingOff = false;
+    for (let x = 0; x < timeList.length; x++) {
+        let object = timeList[x];
+        switchType = object[thing];
+        if (object[thing] && object['timeMillis'] >= timeNowMillis) {
+            // If the switched-to state is different to the
+            // current state, we have a weener.
+            if ((switchType === 'off') && !thingOff) {
+                nextTimeObject = object;
+                break;
+            } else if ((switchType === 'on') && thingOff) {
+                nextTimeObject = object;
+                break;
             }
         }
-        if (Object.keys(nextTimeObject).length !== 0) {
-            let eventObject = {};
-            if (switchType === 'off') {
-                eventObject['onNextOff'] = nextTimeObject['timeMillis'];
-            } else if (switchType === 'on') {
-                eventObject['offNextOn'] = nextTimeObject['timeMillis'];
+        if (switchType === 'off') {
+            thingOff = true;
+        } else if (switchType === 'on') {
+            thingOff = false;
+        }
+    }
+    if (Object.keys(nextTimeObject).length !== 0) {
+        let calenderObject = {};
+        if (switchType === 'off') {
+            calenderObject['onNextOff'] = nextTimeObject['timeMillis'];
+        } else if (switchType === 'on') {
+            calenderObject['offNextOn'] = nextTimeObject['timeMillis'];
+        }
+        if (Object.keys(calenderObject).length !== 0) {
+            statusCacheMergeObject(statusCache, calenderObject, thing);
+            let cacheObject = statusCache[thing];
+            if (calenderObject['onNextOff']) {
+                // If we've set an onNextOff value,
+                // delete any offNextOn value that might
+                // be lying around
+                delete cacheObject['offNextOn'];
+            } else if (calenderObject['offNextOn']) {
+                // Vice-versa
+                delete cacheObject['onNextOff'];
             }
-            if (Object.keys(eventObject).length !== 0) {
-                statusCache[thing] = eventObject;
-                let cacheObject = statusCache[thing];
-                if (eventObject['onNextOff']) {
-                    // If we've set an onNextOff value,
-                    // delete any offNextOn value that might
-                    // be lying around
-                    delete cacheObject['offNextOn'];
-                } else if (eventObject['offNextOn']) {
-                    // Vice-versa
-                    delete cacheObject['onNextOff'];
-                }
-            } else {
-                let cacheObject = statusCache[thing];
-                if (cacheObject) {
-                    // Got nothing: delete anything that might
-                    // have been there
-                    delete cacheObject['onNextOff'];
-                    delete cacheObject['offNextOn'];
-                }
+        } else {
+            let cacheObject = statusCache[thing];
+            if (cacheObject) {
+                // Got nothing: delete anything that might
+                // have been there
+                delete cacheObject['onNextOff'];
+                delete cacheObject['offNextOn'];
             }
         }
     }
@@ -299,7 +310,7 @@ function statusCacheScheduleSet(weekObject, statusCache, timeNowMillis)
         let timeList = [];
         // Work out what the time in millis would be at midnight
         // of the previous Sunday (i.e. the start of this week).
-        let startOfWeekMillis = midnightLastSundayTimeMillisGet(timeNowMillis);
+        let startOfWeekMillis = startWeekTimeMillisGet(timeNowMillis);
         dayStrList.forEach(function(dayStr, dayIndex) {
             // weekObject should contain the days of the week
             let dayObject = weekObject[dayStr];
@@ -351,18 +362,14 @@ function statusCacheSet(cfgData) {
         const date = new Date();
         let timeNowMillis = date.getTime();
         let allOverridden = false;
-        let thingObject = cfgData['override'];
-        if (thingObject) {
-            allOverridden = statusCacheOverrideSet(thingObject, gStatusCache,
-                                                   timeNowMillis, 'motors');
-            allOverridden &= statusCacheOverrideSet(thingObject, gStatusCache,
-                                                    timeNowMillis, 'lights');
+        let overrideObject = cfgData['override'];
+        if (overrideObject) {
+            statusCacheOverrideSet(overrideObject, gStatusCache,
+                                   timeNowMillis, 'motors');
+            statusCacheOverrideSet(overrideObject, gStatusCache,
+                                   timeNowMillis, 'lights');
         }
-        if (!allOverridden) {
-            // If there is no override for any thing,
-            // need to go through the week to check
-            statusCacheScheduleSet(cfgData["week"], gStatusCache, timeNowMillis);
-        }
+        statusCacheScheduleSet(cfgData["week"], gStatusCache, timeNowMillis);
     }
     gStatusCache['updateNeeded'] = false;
 }
@@ -374,9 +381,9 @@ function statusOverrideStr(untilMillis, timeNowMillis)
     if (untilMillis) {
         let overrideDurationMillis = untilMillis - timeNowMillis;
         if (overrideDurationMillis > 0) {
-            // Round to minutes if more than a minute left, otherwise seconds
-            let round = 60000;
-            if (overrideDurationMillis < 60000) {
+            // Round to minutes if more than five minutes left, otherwise seconds
+            let round = 300000;
+            if (overrideDurationMillis < 300000) {
                 round = 1000;
             }
             overrideDurationMillis = Math.trunc(overrideDurationMillis / round) * round;
@@ -388,19 +395,23 @@ function statusOverrideStr(untilMillis, timeNowMillis)
 }
 
 
-// Return the status string for a thing ("lights" or "motors"),
-// called by statusDisplay().
-function statusStr(timeNowMillis, statusCache, thing) {
-    let str = null;
+// Update the text and indicator elements associated with the status of the
+// lights or motors, called by statusDisplay().
+function statusDisplayThing(timeNowMillis, statusCache, thingName,
+                            textElement, indicatorElement) {
+    let str = '';
+    let offNotOn = false;
+    let thing = thingName.toLowerCase();
     let thingObject = statusCache[thing];
     if (thingObject) {
         str = statusOverrideStr(thingObject['offUntil'], timeNowMillis);
         if (str) {
-            str = "overridden, off for " + str;
+            str = 'overridden, off for ' + str;
+            offNotOn = true;
         } else {
             str = statusOverrideStr(thingObject['onUntil'], timeNowMillis);
             if (str) {
-                str = "overridden, on for " + str;
+                str = 'overridden, on for ' + str;
             }
         }
 
@@ -416,6 +427,7 @@ function statusStr(timeNowMillis, statusCache, thing) {
                     statusCache['updateNeeded'] = true;
                     // Assume off
                     str = 'off';
+                    offNotOn = true;
                 }
             } else {
                 onOrOffTimeMillis = thingObject['offNextOn'];
@@ -423,6 +435,7 @@ function statusStr(timeNowMillis, statusCache, thing) {
                     if (onOrOffTimeMillis - timeNowMillis > 0) {
                         let luxonDateTime = new luxon.DateTime.fromMillis(onOrOffTimeMillis);
                         str = 'off, next on ' + luxonDateTime.toRelative();
+                        offNotOn = true;
                     } else {
                         statusCache['updateNeeded'] = true;
                         // Assume on
@@ -432,31 +445,40 @@ function statusStr(timeNowMillis, statusCache, thing) {
             }
         }
     }
-    return str;
+
+    if (indicatorElement) {
+        // Remove any existing colour classes from the indicator
+        let colourClassOff = 'status-indicator-' + thing + '-off';
+        let colourClassOn = 'status-indicator-on';
+        indicatorElement.classList.remove(colourClassOn, colourClassOff);
+        if (str) {
+            // Have a status, so update the indicator
+            let colourClass = colourClassOn;
+            if (offNotOn) {
+                colourClass = colourClassOff;
+            }
+            indicatorElement.classList.add(colourClass);
+        }
+    }
+    if (textElement) {
+        if (!str) {
+            str = 'status unknown';
+        }
+        textElement.innerHTML = thingName + ' ' + str;
+    }
 }
 
 // Display the status of the motors/lights.
 function statusDisplay(statusCache) {
     const date = new Date();
     let timeNowMillis = date.getTime();
-    let updateNeeded = statusCache['updateNeeded'];
-    if (updateNeeded) {
+
+    if (statusCache['updateNeeded']) {
         statusCacheSet(gCfgData);
     }
-    let motorsStr = statusStr(timeNowMillis, statusCache, 'motors');
-    let lightsStr = statusStr(timeNowMillis, statusCache, 'lights');
-    if (!motorsStr) {
-        motorsStr = 'status unknown';
-    }
-    if (!lightsStr) {
-        lightsStr = 'status unknown';
-    }
-    if (gStatusMotors) {
-        gStatusMotors.innerHTML = 'Motors ' + motorsStr;
-    }
-    if (gStatusLights) {
-        gStatusLights.innerHTML = 'Lights ' + lightsStr;
-    }
+    // Note: upper case initial letter below since that's how we want the name displayed
+    statusDisplayThing(timeNowMillis, statusCache, 'Motors', gStatusTextMotors, gStatusIndicatorMotors);
+    statusDisplayThing(timeNowMillis, statusCache, 'Lights', gStatusTextLights, gStatusIndicatorLights);
 }
 
 // Status update timer.
@@ -1216,27 +1238,16 @@ const gDynamicTable = (function() {
     function _classListFilterMotorsLights(classList, thing, switchType) {
         let removeList = [];
         let addList = [];
+        let colourOff = 'cell-' + thing + '-off';
         if (switchType === 'off') {
-            // Remove cell-on, as all are no longer on
-            removeList.push('cell-on');
-            if (thing === 'motors') {
-                // Remove any previous motors off, to prevent duplicates,
-                // and add it
-                removeList.push('cell-motors-off');
-                addList.push('cell-motors-off');
-            } else if (thing === 'lights') {
-                // Remove any previous lights off, to prevent duplicates,
-                // and add it
-                removeList.push('cell-lights-off');
-                addList.push('cell-lights-off');
-            }
+            // Remove cell-on, and any previous offs (to prevent
+            // duplicates)
+            removeList.push('cell-on', colourOff);
+            // Add this off
+            addList.push(colourOff);
         } else if (switchType === 'on') {
-            if (thing === 'motors') {
-                // Remove the motors off class from the list
-                removeList.push('cell-motors-off');
-            } else if (thing === 'lights') {
-                removeList.push('cell-lights-off');
-            }
+            // Remove the off class from the list
+            removeList.push(colourOff);
         }
         return _listUpdate(classList, removeList, addList);
     }

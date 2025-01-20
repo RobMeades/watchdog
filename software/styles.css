@@ -21,10 +21,10 @@
 /* Common variables */
 :root {
   --width: 950px;
-  --cell-on-color: rgb(179, 255, 179);
-  --cell-motors-off-color: rgb(255, 153, 51);
-  --cell-lights-off-color: rgb(255, 51, 0);
-  --cell-off-color: black;
+  --color-on: rgb(179, 255, 179);
+  --color-off-motors: rgb(255, 153, 51);
+  --color-off-lights: rgb(255, 51, 0);
+  --color-off: black;
   --font-fixed-width: Lucida Console, Courier New, monospace;
   --key-font-family: var(--font-fixed-width);
   /* Transparent font so that the name of the colour in the key is only announced by a screen reader */
@@ -51,7 +51,7 @@ body {
     background-image: url(play.png);
     background-repeat: no-repeat;
     background-color: transparent;
-    border:0
+    border: 0;
 }
 .container .button {
     /* This puts the button image on top of the video */
@@ -74,9 +74,28 @@ body {
     border:var(--border);
     padding: 5px 0px;
 }
-.status-item {
+.status-group {
+    display: flex;
+    align-items: center;
     margin-left: 50px;
     margin-right: 50px;
+}
+.status-indicator {
+    display: block;
+    height: 20px;
+    width: 20px;
+    margin: 5px;
+    border-radius: 50%;
+}
+/* Note: status-indicator-on and status-indicator-xxx-off are referred to by index.js so must remain unchanged */
+.status-indicator-on {
+    background-color: var(--color-on);
+}
+.status-indicator-motors-off {
+    background-color: var(--color-off-motors);
+}
+.status-indicator-lights-off {
+    background-color: var(--color-off-lights);
 }
 
 /* Override area */
@@ -159,35 +178,36 @@ td:focus {
 }
 
 /* Colours for the cells of the table and their entries in the key */
+/* Note: the 'cell-xxx' names are referred to by index.js so must remain unchanged */
 .cell-on {
-    background-color: var(--cell-on-color);
+    background-color: var(--color-on);
 }
 .key-cell-on {
-    background-color: var(--cell-on-color);
+    background-color: var(--color-on);
     font-family: var(--key-font-family);
     color: var(--key-font-color);
 }
 .cell-motors-off {
-    background-color: var(--cell-motors-off-color);
+    background-color: var(--color-off-motors);
 }
 .key-cell-motors-off {
-    background-color: var(--cell-motors-off-color);
+    background-color: var(--color-off-motors);
     font-family: var(--key-font-family);
     color: var(--key-font-color);
 }
 .cell-lights-off {
-    background-color: var(--cell-lights-off-color);
+    background-color: var(--color-off-lights);
 }
 .key-cell-lights-off {
-    background-color: var(--cell-lights-off-color);
+    background-color: var(--color-off-lights);
     font-family: var(--key-font-family);
     color: var(--key-font-color);
 }
 .cell-lights-off.cell-motors-off {
-    background-color: var(--cell-off-color);
+    background-color: var(--color-off);
 }
 .key-cell-lights-off.key-cell-motors-off {
-    background-color: var(--cell-off-color);
+    background-color: var(--color-off);
     font-family: var(--key-font-family);
     color: var(--key-font-color);
 }
