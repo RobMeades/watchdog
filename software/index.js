@@ -15,8 +15,8 @@
  */
 
 /** @file
- * @brief Javascript for index.html.  This code requires jquery.js
- * and hls.js.
+ * @brief Javascript for index.html.  This code requires jquery.js,
+ * hls.js and moment.js.
  */
 
 'use strict';
@@ -26,16 +26,16 @@
  * -------------------------------------------------------------- */
 
 // The name of the configuration file on the server, which contains
-// the weekly schedule.
+// the weekly schedule and the overrides.
 let gCfgFileName = 'watchdog.cfg';
 
 // Our local copy of the configuration data from the server.
 let gCfgData = {};
 
-// Track the state of the control key.
+// Track the state of the CTRL key.
 let gKeyIsPressedCtrl = false;
 
-// Event listener: for CTRL-key handling.
+// Event listener: for CTRL key handling.
 document.addEventListener('keyup', function(event) {
     if (event.key === 'Control' || event.key === 'Meta') {
         gKeyIsPressedCtrl = false;
@@ -43,9 +43,9 @@ document.addEventListener('keyup', function(event) {
 });
 
 // Event listener: for undo/redo keys on the whole document,
-// done in a slightly peculiar way as the browser's own
-// undo functionality interferes with the key-presses we
-// receive.
+// done in a slightly peculiar way, employing gKeyIsPressedCtrl,
+// as the browser's own undo functionality interferes with the
+// key-presses we receive.
 document.addEventListener('keydown', function(event) {
     if (event.key === 'Control' || event.key === 'Meta') {
         gKeyIsPressedCtrl = true;
@@ -163,16 +163,17 @@ const gStatusIndicatorMotors = document.getElementById('status-indicator-motors'
 const gStatusIndicatorLights = document.getElementById('status-indicator-lights');
 
 // A local cache of override and next scheduled change times;
-// This may contain (all times in millis):
-// "motors"/"lights"->"offUntil"-> time, meaning an override off is set,
+// this may contain (all times in millis):
+// "motors"/"lights"->"offUntil"->time, meaning an override off is set,
 // "motors"/"lights"->"onNextOff"->time, meaning on with a scheduled off time,
 // "motors"/"lights"->"offNextOn"->time, meaning off with a scheduled on time,
 // "motors"/"lights"->"onUntil"->time, meaning an override on is set,
 // "updateNeeded"->true/false: statusCacheSet() needs to be called if true.
+// "lastHourInTheDay"->hour, the hour of the day, 0 to 23.
 let gStatusCache = {};
 
 // Given an object intended for the cache entry of a thing
-// (e.g. "offUntil": time or "onNextOff": time, etc), merge that
+// (e.g. "offUntil": time or "onNextOff": time, etc.), merge that
 // entry into the cache
 function statusCacheMergeObject(statusCache, object, thing) {
     if (statusCache && object) {
@@ -195,22 +196,20 @@ function statusCacheOverrideSet(overrideObject, statusCache, timeNowMillis, thin
         // i.e. a thing
         let thingObject = overrideObject[thing];
         if (thingObject && statusCache) {
+            // Delete any override for this thing that might already be there
+            let cacheObject = statusCache[thing];
+            if (cacheObject) {
+                delete cacheObject['offUntil'];
+                delete cacheObject['onUntil'];
+            }
             // thingObject, for an override, may contain "offUntil" or "onUntil",
             for (const until in thingObject) {
-                let timeStr = thingObject[until]
+                let timeStr = thingObject[until];
                 let untilObject = {};
                 let timeMillis = Date.parse(timeStr);
                 if (timeMillis > timeNowMillis) {
                     untilObject[until] = timeMillis;
                     statusCacheMergeObject(statusCache, untilObject, thing);
-                } else {
-                    let cacheObject = statusCache[thing];
-                    if (cacheObject) {
-                        // Delete any override for this
-                        // thing that might already be there
-                        delete cacheObject['offUntil'];
-                        delete cacheObject['onUntil'];
-                    }
                 }
             }
         }
@@ -232,7 +231,7 @@ function startWeekTimeMillisGet(timeNowMillis) {
     return lastMonday.getTime();
 }
 
-// Compare function for time list sorting, used by statusCacheScheduleSet(),
+// Compare function for time list sorting, used by statusCacheScheduleSet();
 // sort in ascending order.
 function timeListCompare(a, b) {
     return a['timeMillis'] - b['timeMillis'];
@@ -251,7 +250,7 @@ function statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, thing)
         switchType = object[thing];
         if (object[thing] && object['timeMillis'] >= timeNowMillis) {
             // If the switched-to state is different to the
-            // current state, we have a weener.
+            // current state, we have a weiner.
             if ((switchType === 'off') && !thingOff) {
                 nextTimeObject = object;
                 break;
@@ -267,21 +266,21 @@ function statusCacheScheduleTimeSet(timeList, statusCache, timeNowMillis, thing)
         }
     }
     if (Object.keys(nextTimeObject).length !== 0) {
-        let calenderObject = {};
+        let scheduleObject = {};
         if (switchType === 'off') {
-            calenderObject['onNextOff'] = nextTimeObject['timeMillis'];
+            scheduleObject['onNextOff'] = nextTimeObject['timeMillis'];
         } else if (switchType === 'on') {
-            calenderObject['offNextOn'] = nextTimeObject['timeMillis'];
+            scheduleObject['offNextOn'] = nextTimeObject['timeMillis'];
         }
-        if (Object.keys(calenderObject).length !== 0) {
-            statusCacheMergeObject(statusCache, calenderObject, thing);
+        if (Object.keys(scheduleObject).length !== 0) {
+            statusCacheMergeObject(statusCache, scheduleObject, thing);
             let cacheObject = statusCache[thing];
-            if (calenderObject['onNextOff']) {
+            if (scheduleObject['onNextOff']) {
                 // If we've set an onNextOff value,
                 // delete any offNextOn value that might
                 // be lying around
                 delete cacheObject['offNextOn'];
-            } else if (calenderObject['offNextOn']) {
+            } else if (scheduleObject['offNextOn']) {
                 // Vice-versa
                 delete cacheObject['onNextOff'];
             }
@@ -374,26 +373,22 @@ function statusCacheSet(cfgData) {
     gStatusCache['updateNeeded'] = false;
 }
 
-// Return a string describing the given override duration, null if there is none.
-function statusOverrideStr(untilMillis, timeNowMillis)
+// Return a string describing the given duration, null if there is none.
+// IMPORTANT: returns null if untilMillis is null, returns an empty
+// string (i.e. '') if untilMillis is present but has expired.
+function statusDurationStr(untilMillis, timeNowMillis)
 {
     let str = null;
     if (untilMillis) {
-        let overrideDurationMillis = untilMillis - timeNowMillis;
-        if (overrideDurationMillis > 0) {
-            // Round to minutes if more than five minutes left, otherwise seconds
-            let round = 300000;
-            if (overrideDurationMillis < 300000) {
-                round = 1000;
-            }
-            overrideDurationMillis = Math.trunc(overrideDurationMillis / round) * round;
-            let luxonDuration = new luxon.Duration.fromMillis(overrideDurationMillis);
-            str = luxonDuration.rescale().toHuman({unitDisplay: "short"});
+        str = '';
+        let durationMillis = untilMillis - timeNowMillis;
+        if (durationMillis > 0) {
+            let momentDuration = new moment.duration(durationMillis);
+            str = momentDuration.humanize();
         }
     }
     return str;
 }
-
 
 // Update the text and indicator elements associated with the status of the
 // lights or motors, called by statusDisplay().
@@ -404,12 +399,12 @@ function statusDisplayThing(timeNowMillis, statusCache, thingName,
     let thing = thingName.toLowerCase();
     let thingObject = statusCache[thing];
     if (thingObject) {
-        str = statusOverrideStr(thingObject['offUntil'], timeNowMillis);
+        str = statusDurationStr(thingObject['offUntil'], timeNowMillis);
         if (str) {
             str = 'overridden, off for ' + str;
             offNotOn = true;
         } else {
-            str = statusOverrideStr(thingObject['onUntil'], timeNowMillis);
+            str = statusDurationStr(thingObject['onUntil'], timeNowMillis);
             if (str) {
                 str = 'overridden, on for ' + str;
             }
@@ -418,29 +413,27 @@ function statusDisplayThing(timeNowMillis, statusCache, thingName,
         if (!str) {
             // If there is no override for the thing,
             // get the next scheduled on or off time
-            let onOrOffTimeMillis = thingObject['onNextOff'];
-            if (onOrOffTimeMillis) {
-                if (onOrOffTimeMillis - timeNowMillis > 0) {
-                    let luxonDateTime = new luxon.DateTime.fromMillis(onOrOffTimeMillis);
-                    str = 'on, next off ' + luxonDateTime.toRelative();
-                } else {
-                    statusCache['updateNeeded'] = true;
-                    // Assume off
-                    str = 'off';
-                    offNotOn = true;
-                }
+            str = statusDurationStr(thingObject['onNextOff'], timeNowMillis);
+            if (str) {
+                str = 'on, next off in ' + str;
+            } else if (str === '') {
+                // There was an 'onNextOff' but its duration has expired,
+                // cache needs updating
+                statusCache['updateNeeded'] = true;
+                // Assume off
+                str = 'off';
+                offNotOn = true;
             } else {
-                onOrOffTimeMillis = thingObject['offNextOn'];
-                if (onOrOffTimeMillis) {
-                    if (onOrOffTimeMillis - timeNowMillis > 0) {
-                        let luxonDateTime = new luxon.DateTime.fromMillis(onOrOffTimeMillis);
-                        str = 'off, next on ' + luxonDateTime.toRelative();
-                        offNotOn = true;
-                    } else {
-                        statusCache['updateNeeded'] = true;
-                        // Assume on
-                        str = 'on';
-                    }
+                // No onNextOff present, try 'offNextOn'
+                str = statusDurationStr(thingObject['offNextOn'], timeNowMillis);
+                if (str) {
+                    str = 'off, next on in ' + str;
+                    offNotOn = true;
+                } else if (str === '') {
+                    // Duration has expired, cache needs updating
+                    statusCache['updateNeeded'] = true;
+                    // Assume on
+                    str = 'on';
                 }
             }
         }
@@ -479,6 +472,15 @@ function statusDisplay(statusCache) {
     // Note: upper case initial letter below since that's how we want the name displayed
     statusDisplayThing(timeNowMillis, statusCache, 'Motors', gStatusTextMotors, gStatusIndicatorMotors);
     statusDisplayThing(timeNowMillis, statusCache, 'Lights', gStatusTextLights, gStatusIndicatorLights);
+    if (gDynamicTable) {
+        let hourInTheDay = date.getHours();
+        if (!statusCache['lastHourInTheDay'] ||
+            (hourInTheDay != statusCache['lastHourInTheDay'])) {
+            // Let the table update the cell marked as being "now"
+            gDynamicTable.setNowMotorsLights(timeNowMillis);
+            statusCache['lastHourInTheDay'] = hourInTheDay;
+        }
+    }
 }
 
 // Status update timer.
@@ -543,8 +545,8 @@ gOverrideTypeLightsButton.addEventListener('click', function (e) {
 function overrideInputReset() {
     // Setting the value to a space will cause a warning In
     // the console log as these are number fields but there
-    // doesn't seem to be any other way to reset the button
-    // to a "there has been no input" state.
+    // doesn't seem to be any other way to visually reset
+    // the button to a "there has been no input" state.
     gOverrideMotors.value = ' ';
     gOverrideMotorsChanged = false;
     gOverrideTypeMotorsButton.innerHTML = 'off';
@@ -554,8 +556,9 @@ function overrideInputReset() {
 }
 
 // Set an override value in thingObject.
-function overrideSet(thingObject, timeNowMillis, valueHours, typeStr, thing) {
-    if (thingObject) {
+function overrideSet(overrideObject, timeNowMillis, valueHours, typeStr, thing) {
+    let thingObject = overrideObject[thing];
+    if (valueHours > 0) {
         timeNowMillis += valueHours * 60 * 60 * 1000;
         // Since the date string we want is almost ISO8601 it
         // is simplest to get that and trim the end off it
@@ -566,11 +569,26 @@ function overrideSet(thingObject, timeNowMillis, valueHours, typeStr, thing) {
         let untilObject = {};
         if (typeStr === 'off') {
             untilObject = {'offUntil': timeStr};
+            // Remove any "onUntil"s, there can be only one override
+            if (thingObject) {
+                delete thingObject['onUntil'];
+            }
         } else if (typeStr === 'on') {
             untilObject = {'onUntil': timeStr};
+            if (thingObject) {
+                // Ditto
+                delete thingObject['offUntil'];
+            }
         }
         if (Object.keys(untilObject).length !== 0) {
-            thingObject[thing] = untilObject;
+            overrideObject[thing] = untilObject;
+        }
+    } else {
+        if (thingObject) {
+            // If the value is 0 that means no override, so
+            // just delete any that exist
+            delete thingObject['onUntil'];
+            delete thingObject['offUntil'];
         }
     }
 }
@@ -584,21 +602,21 @@ gOverrideSubmitButton.addEventListener('click', async () => {
     let timeNowMillis = date.getTime();
 
     // Get the new override on or off until times
-    let thingObject = {};
+    let overrideObject = structuredClone(gCfgData['override']);
     if (gOverrideMotorsChanged) {
-        overrideSet(thingObject, timeNowMillis, gOverrideMotors.value,
+        overrideSet(overrideObject, timeNowMillis, gOverrideMotors.value,
                     gOverrideTypeMotorsButton.innerHTML, "motors");
     }
     if (gOverrideLightsChanged) {
-        overrideSet(thingObject, timeNowMillis, gOverrideLights.value,
+        overrideSet(overrideObject, timeNowMillis, gOverrideLights.value,
                     gOverrideTypeLightsButton.innerHTML, "lights");
     }
 
-    if (Object.keys(thingObject).length !== 0) {
+    if (Object.keys(overrideObject).length !== 0) {
+        let newOverrideObject = {};
+        newOverrideObject['override'] = overrideObject;
         // Make a copy of gCfgData and merge the override there
-        let overrideObject = {}
-        overrideObject['override'] = thingObject;
-        let newCfgData = {...gCfgData, ...overrideObject};
+        let newCfgData = {...structuredClone(gCfgData), ...newOverrideObject};
         let notification = null;
         try {
             const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
@@ -638,7 +656,7 @@ function scheduleChangeDialog() {
     const radioButtons = document.querySelectorAll('input[type="radio"]');
     // Uncheck the radio buttons before displaying them,
     // as a kind of reset mechanism in case the user
-    // ticks one they didn't intend to
+    // previously ticked one they did not intend to
     radioButtons.forEach(radio => {
         radio.checked = false;
     });
@@ -724,7 +742,7 @@ gScheduleChangeSubmitButton.addEventListener('click', async () => {
         gDynamicTable.getMotorsLights(data);
         if (Object.keys(data).length !== 0) {
             // Make a copy of gCfgData and add the week data there
-            let newCfgData = gCfgData;
+            let newCfgData = structuredClone(gCfgData);
             newCfgData['week'] = data['week'];
             // Send the data to the server
             notification = null;
@@ -1140,8 +1158,8 @@ function historyRedo() {
 
 // Dynamic table creator, following the pattern here:
 // https://jsfiddle.net/onury/kBQdS/.  This should still
-// work with genericish data but has neem heavily enhanced to
-// work purely with the exact data from here, vix "motors" and
+// work with genericish data but has been heavily enhanced to
+// work purely with the exact data from here, viz "motors" and
 // "lights" being switched "on" and "off" across a weekly
 // schedule.
 const gDynamicTable = (function() {
@@ -1574,6 +1592,57 @@ const gDynamicTable = (function() {
                 }
             }
             return this;
+        },
+        // Set the cell of the table that is "now".
+        setNowMotorsLights: function(timeNowMillis) {
+            // The days of the week, with Sunday at zero as that's
+            // what Date() expects
+            const dayList = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+            const date = new Date(timeNowMillis);
+            // Get the day of the week, where zero is Sunday
+            let dayOfWeek = date.getDay();
+            let dayOfWeekStr = dayList[dayOfWeek];
+            // Get all of the rows of the table
+            let trList = gTable.querySelectorAll('tr');
+            let rowList = [];
+            if (trList.length > 0) {
+                trList.forEach(function(tr) {
+                    rowList.push(Array.from(tr.querySelectorAll('td')));
+                });
+            }
+            // Find the correct column for our day
+            if (rowList.length > 0) {
+                let columnList = rowList[0];
+                let columnIndex = -1;
+                for (let x = 0; x < columnList.length; x++) {
+                    if (columnList[x].innerHTML.toLowerCase() === dayOfWeekStr) {
+                        columnIndex = x;
+                        break;
+                    }
+                }
+                if (columnIndex > 0) {
+                    // Find the correct row for our time
+                    let timeOfDaySeconds = date.getHours() * 60 * 60;
+                    let rowIndex = -1;
+                    for (let x = 0; x < rowList.length; x++) {
+                        if (timeStrToSeconds(rowList[x][0].innerHTML) >= timeOfDaySeconds) {
+                            rowIndex = x;
+                            break;
+                        }
+                    }
+                    if (rowIndex > 0) {
+                        // Got the row and column, first clear out any
+                        // existing "now"
+                        rowList.forEach(function(row) {
+                            row.forEach(function(cell) {
+                                cell.classList.remove('now');
+                            });
+                        });
+                        // Add the new "now"
+                        rowList[rowIndex][columnIndex].classList.add('now');
+                    }
+                }
+            }
         },
         // Clear the table body.
         clear: function() {

@@ -35,7 +35,7 @@
 #endif
 
 #ifndef W_LED_TICK_TIMER_PERIOD_MS
-/** The LED tick timer period in milliseconds.  If you change
+/** The LED tick-timer period in milliseconds.  If you change
  * this you may also need to change W_LED_MORSE_DURATION_UNIT_MS
  * below.
  */

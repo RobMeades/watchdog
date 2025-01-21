@@ -78,8 +78,9 @@ typedef struct {
 
 /** A structure to hold a JSON key and where its "off" entry is
  * stored in wCfg_t.
+ *
  * Note: everything in here uses "offNotOn" rather than the more
- * conventional "onNotOff" since the motors are by default on,
+ * conventional "onNotOff" since the motors are by default on;
  * creating a variable left at zero will give it the default state
  * of "on" automatically, "off" is the exceptional state.
  */
@@ -88,9 +89,9 @@ typedef struct {
     bool *offNotOn;
 } wCfgThingOff_t;
 
-/** A structure to hold a JSON key that can appear on a day of the week
- * for the motors or for the lights, and what it means in terms of
- * the offNotOn state of that thing.
+/** A structure to hold a JSON key that can appear on a day of the
+ * week or in an override for the motors or the lights, and
+ * what it means in terms of the offNotOn state of that thing.
  */
 typedef struct {
     const char *key;
@@ -115,7 +116,7 @@ static std::mutex gMutex;
 static int gCfgFd = -1;
 
 // Storage for the outcome of parsing the configuration file.
-static wCfg_t gCfg = {0};
+static wCfg_t gCfg = {};
 
 // The JSON elements to switch things off: their JSON keys and where
 // the offNotOn values are stored in wCfg_t.
@@ -131,6 +132,13 @@ static const wCfgThingOff_t gThingOff[] = {{.key = "motors",
 static const char *gDaysOfWeek[] = {"monday", "tuesday", "wednesday",
                                     "thursday", "friday", "saturday",
                                     "sunday"};
+
+// The types of time entry an override can have for a thing, i.e.
+// for the motors or the lights.
+static const wCfgOffOnItem_t gUntilItem[] = {{.key = "onUntil",
+                                              .offNotOn = false},
+                                             {.key = "offUntil",
+                                              .offNotOn = true}};
 
 // The types of time entry each day can have for a thing, i.e.
 // for the motors or the lights.
@@ -253,27 +261,38 @@ static int parseJson(const char *buffer, unsigned int sizeBytes)
             errorCode = 0;
             // Get the first "week" item, if present, in case we need to use it
             const cJSON *weekJson = cJSON_GetObjectItemCaseSensitive(json, "week");
+            // Get the first "override" item, if present, in case we need to use it
+            const cJSON *overrideJson = cJSON_GetObjectItemCaseSensitive(json, "override");
             // And work out the Unix time that corresponds to the start of this week
             time_t startOfWeek = startOfWeekDateTime(timeNow);
             if (startOfWeek >= 0) {
-                // Check for override date/times for the motors and the lights
+                // Check for on/off date/times for the motors and the lights
                 for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gThingOff); x++) {
                     const wCfgThingOff_t *thing = &(gThingOff[x]);
-                    // Check for the first "overrideOffUntil" override for this thing
-                    // at the top level
-                    const cJSON *thingJson = cJSON_GetObjectItemCaseSensitive(json, thing->key);
-                    if (cJSON_IsObject(thingJson)) {
-                        time_t time = parseJsonDateTime(thingJson, "overrideOffUntil");
-                        if (time > timeNow) {
-                            // There is an "overrideOffUntil" date/time and it is greater
-                            // than the time now, so the thing must be off
-                            *(thing->offNotOn) = true;
+                    const cJSON *thingJson = nullptr;
+                    // Check for an "override" for this thing
+                    bool overridden = false;
+                    if (cJSON_IsObject(overrideJson)) {
+                        thingJson = cJSON_GetObjectItemCaseSensitive(overrideJson, thing->key);
+                        // Note: cJSON_GetArraySize() also returns the number of items in an object
+                        if (cJSON_IsObject(thingJson) && (cJSON_GetArraySize(thingJson) > 0)) {
+                            for (unsigned int until = 0; (until < W_UTIL_ARRAY_COUNT(gUntilItem)) &&
+                                                         !overridden; until++) {
+                                // Get the first xxxUntil item for this thing
+                                const wCfgOffOnItem_t *untilItem = &(gUntilItem[until]);
+                                time_t time = parseJsonDateTime(thingJson, untilItem->key);
+                                if (time > timeNow) {
+                                    // There is an "offUntil"/"onUntil" date/time and it is
+                                    // greater than the time now, so set the thing's state
+                                    *(thing->offNotOn) = untilItem->offNotOn;
+                                    overridden = true;
+                                }
+                            }
                         }
                     }
-                    if (!*(thing->offNotOn) && weekJson) {
-                        // If the thing is still on, make a list of the
-                        // times of every off/on entry for the same thing
-                        // during the week
+                    if (!overridden && weekJson) {
+                        // If there was no override for the thing, make a list of the
+                        // times of every off/on entry for the same thing during the week
                         std::vector<wCfgSwitchTime_t> switchTimeList;
                         for (unsigned int day = 0; day < W_UTIL_ARRAY_COUNT(gDaysOfWeek); day++) {
                             // Find the first occurrence of this day in the week

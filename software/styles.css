@@ -53,7 +53,7 @@ body {
     background-color: transparent;
     border: 0;
 }
-.container .button {
+.container .button { /* The space here _is_ required */
     /* This puts the button image on top of the video */
     position: absolute;
     top: 0px;
@@ -87,7 +87,7 @@ body {
     margin: 5px;
     border-radius: 50%;
 }
-/* Note: status-indicator-on and status-indicator-xxx-off are referred to by index.js so must remain unchanged */
+/* Note: status-indicator-on and status-indicator-xxx-off are referred to by index.js; if you change the names, change them there also */
 .status-indicator-on {
     background-color: var(--color-on);
 }
@@ -162,13 +162,18 @@ td:first-child {
     /* The first column's HH:MM:SS fits into a 7% column width nicely */
     width: 7%;
 }
+/* Note: this style is referred to by index.js; if you change the names, change them there also */
 td.selected {
-    /* The !important markers stops the "selected" colour from disappearing beneath othres */
+    /* The !important markers stops the "selected" colour from disappearing beneath others */
     background-color: rgb(0, 153, 255) !important;
     color: rgba(255, 255, 255, 0.7) !important;;
 }
 td:focus {
-  outline: 2px solid blue;
+    outline: 2px solid blue;
+}
+/* Note: this style is referred to by index.js; if you change the names, change them there also */
+td.now {
+    outline: 2px solid white;
 }
 .key {
     width: var(--width);
@@ -178,7 +183,7 @@ td:focus {
 }
 
 /* Colours for the cells of the table and their entries in the key */
-/* Note: the 'cell-xxx' names are referred to by index.js so must remain unchanged */
+/* Note: the 'cell-xxx' names are referred to by index.js; if you change the names, change them there also */
 .cell-on {
     background-color: var(--color-on);
 }

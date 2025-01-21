@@ -27,17 +27,19 @@
  * -------------------------------------------------------------- */
 
 #ifndef W_MSG_QUEUE_TRY_LOCK_WAIT
-// How long to wait for a mutex lock when pulling a message off a
-// a queue (see also W_MSG_QUEUE_TICK_TIMER_PERIOD below).  This
-// should be relatively long, we only need the timeout to go
-// check if the loop should exit.
+/** How long to wait for a mutex lock when pulling a message off a
+ * a queue (see also W_MSG_QUEUE_TICK_TIMER_PERIOD below).  This
+ * should be relatively long, we only need the timeout to go
+ * check if the loop should exit.
+ */
 # define W_MSG_QUEUE_TRY_LOCK_WAIT std::chrono::seconds(1)
 #endif
 
-#ifndef W_MSG_QUEUE_TICK_TIMER_PERIOD_US
-// The interval between polls for a lock on the mutex of a queue
-// in microseconds.
-# define W_MSG_QUEUE_TICK_TIMER_PERIOD_US 1000
+#ifndef W_MSG_QUEUE_TICK_TIMER_PERIOD_MS
+/** The interval between polls for a lock on the mutex of a queue
+ * in milliseconds.
+ */
+# define W_MSG_QUEUE_TICK_TIMER_PERIOD_MS 1
 #endif
 
 #ifndef W_MSG_QUEUE_MAX_SIZE

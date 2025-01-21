@@ -26,19 +26,16 @@
 #include <list>
 
 // The Linux/Posix stuff.
-#include <sys/timerfd.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <poll.h>
 #include <assert.h>
 
 // The OpenCV stuff (for cv::Point).
 #include <opencv2/core/types.hpp>
 
 // Other parts of watchdog.
+#include <w_common.h>
 #include <w_util.h>
 #include <w_log.h>
+#include <w_cfg.h>
 #include <w_msg.h>
 #include <w_image_processing.h>
 #include <w_video_encode.h>
@@ -81,6 +78,7 @@ typedef struct {
     std::thread thread;
     std::mutex mutex;
     std::atomic<bool> staticCamera;
+    std::atomic<bool> cfgIgnore;
     std::atomic<bool> moving;
     std::atomic<int> intervalCountTicks;
     wControlPointView_t focus;
@@ -178,6 +176,42 @@ static int64_t msToTicks(int64_t milliseconds)
 static int ticksToMs(int ticks)
 {
     return ticks * W_CONTROL_TICK_TIMER_PERIOD_MS;
+}
+
+// Return whether motors are allowed to be on or not.
+static bool motorsAllowed()
+{
+    return gContext.cfgIgnore || wCfgMotorsOn();
+}
+
+// Return whether lights are allowed to be on or not.
+static bool lightsAllowed()
+{
+    return gContext.cfgIgnore || wCfgLightsOn();
+}
+
+// Switch all motors off, e.g. because we've been told to.
+// This will also return them to the rest position.
+// steps, if present, must be a pointer to an array
+// of size W_MOTOR_TYPE_MAX_NUM.
+static int motorsOff(wControlSteps_t *steps = nullptr)
+{
+    int errorCode = 0;
+
+    for (unsigned int m = 0; m < W_MOTOR_TYPE_MAX_NUM; m++) {
+        int x = wMotorMoveToRest((wMotorType_t) m);
+        // Don't exit the loop if there's an error, move
+        // on to the next, but do return the error
+        if (x != 0) {
+            errorCode = x;
+        }
+        // Clear any steps that might be on-going
+        if (steps) {
+            (steps + m)->durationTicksList.clear();
+        }
+    }
+
+    return errorCode;
 }
 
 // Calibrate a motor and return it to the rest position; used by
@@ -518,21 +552,14 @@ static bool timedMotorMove(int *tickCount, int limitTicks,
 }
 
 // The control loop.
-static void controlLoop()
+static void controlLoop(int timerFd, bool *keepGoing, void *context)
 {
-    if (gTimerFd >= 0) {
-        uint64_t numExpiries;
-        struct pollfd pollFd[1] = {};
-        struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-        sigset_t sigMask;
+    (void) context;
 
-        pollFd[0].fd = gTimerFd;
-        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-        sigemptyset(&sigMask);
-        sigaddset(&sigMask, SIGINT);
-
+    if (timerFd >= 0) {
         W_LOG_DEBUG("control loop has started.");
 
+        int refreshCfgTicks = 0;
         int returnToRestCountTicks = 0;
         int inactivityReturnToRestCountTicks = 0;
         int motorRecalibrateCountTicks = 0;
@@ -552,118 +579,145 @@ static void controlLoop()
             W_LOG_ERROR("unable to get initial range for motors!");
         }
 
-        while (gKeepGoing && wUtilKeepGoing()) {
-            // Block waiting for our tick timer to go off or for
+        while (keepGoing && wUtilKeepGoing()) {
+            // Block waiting for our tick-timer to go off or for
             // CTRL-C to land
-            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-                (read(gTimerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
-
-                // Check for the need to return to the rest position
-                // or recalibrate the motors.  It is done this way so that
-                // both checks are always carried out and then, if the motor
-                // recalibration timer is a multiple of the return to
-                // rest timer, they will both expire but will cause
-                // only a single interval count
-                bool motorRecalibrate = timedMotorMove(&motorRecalibrateCountTicks,
-                                                       msToTicks(W_CONTROL_MOTOR_RECALIBRATE_SECONDS * 1000),
-                                                       motorCalibrateAndMoveToRest,
-                                                       &calibrationAttemptFailureCount,
-                                                       &(gContext.intervalCountTicks), steps);
-                bool returnToRest = timedMotorMove(&returnToRestCountTicks,
-                                                   msToTicks(W_CONTROL_RETURN_TO_REST_SECONDS * 1000),
-                                                   motorMoveToRest,
-                                                   &calibrationAttemptFailureCount,
-                                                   &(gContext.intervalCountTicks), steps);
-                if (!motorRecalibrate && !returnToRest) {
-                    // No enforced rest/calibration: if there are steps to complete, do them.
-                    gContext.moving = step(steps, gContext.staticCamera,
-                                           &(gContext.intervalCountTicks),
-                                           &motorRecalibrateCountTicks,
-                                           &calibrationAttemptFailureCount);
-                    if (motorRecalibrateCountTicks == 0) {
-                        // If stepping resulted in a recalibration (i.e.
-                        // motorRecalibrateCountTicks has been reset to zero),
-                        // remember that so that we can update the step to 
-                        // pixel ratio later.
-                        motorRecalibrate = true;
-                    }
-                    if (gContext.moving) {
-                        // Remove the focus point from the image while we move
-                        wImageProcessingFocusSet(nullptr);
-                        inactivityReturnToRestCountTicks = 0;
-                        activityFlag = true;
+            int numExpiries = wUtilBlockTimer(timerFd);
+            if (numExpiries > 0) {
+                // Refresh the configuration so that calls to wCfgMotorsOn()
+                // and wCfgLightsOn() return the truth
+                // While the control loop is busy the number of timer expiries may pile
+                // up so here we update refreshCfgTicks with numExpiries as we don't
+                // want to ignore a configuration change
+                refreshCfgTicks += numExpiries;
+                if (refreshCfgTicks >= msToTicks(W_CONTROL_CFG_REFRESH_SECONDS * 1000)) {
+                    // Before we do the refresh, check if motors were allowed
+                    bool motorsWereAllowed = motorsAllowed();
+                    wCfgRefresh();
+                    if (motorsAllowed()) {
+                        if (!motorsWereAllowed) {
+                            // Motors are now allowed but didn't used to be
+                            W_LOG_INFO("CONFIGURATION CHANGE motors on.");
+                        }
                     } else {
-                        if (activityFlag) {
-                            // If there has been activity, check for the need to return to
-                            // the rest position due to inactivity
-                            if (timedMotorMove(&inactivityReturnToRestCountTicks,
-                                               msToTicks(W_CONTROL_INACTIVITY_RETURN_TO_REST_SECONDS * 1000),
-                                               motorMoveToRest,
-                                               &calibrationAttemptFailureCount,
-                                               &(gContext.intervalCountTicks), steps)) {
-                                activityFlag = false;
-                            }
+                        if (motorsWereAllowed) {
+                            // Motors are no longer allowed, do an organised stop
+                            W_LOG_INFO("CONFIGURATION CHANGE motors off.");
+                            motorsOff(steps);
                         }
-                        // Take a copy of the current focus point with the
-                        // context locked; all the other context parameters
-                        // we use in here are marked as atomic
-                        gContext.mutex.lock();
-                        cv::Point focusPointView = gContext.focus.averagePointView;
-                        gContext.mutex.unlock();
-
-                        // Not moving, check the interval counter
-                        if (gContext.intervalCountTicks >= msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
-                            // If there is no interval to wait,
-                            // create a new step list if required
-                            if (stepListSet(&focusPointView, stepsPerPixelX100, steps)) {
-                                wLedModeConstantSet(W_LED_BOTH, 0, 100, 500);
-                            }
-                        } else {
-                            if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_GUARD_MS)) {
-                                // Reset the motion detection in the image processing code
-                                wImageProcessingResetMotionDetect();
-                                // Restart averaging, otherwise we
-                                // will end up moving towards something
-                                // we have already moved towards, IYSWIM
-                                gContext.mutex.lock();
-                                wControlPointView_t *focus = &(gContext.focus);
-                                focus->number = 0;
-                                focus->totalPointView = {0, 0};
-                                focus->oldestPointView = nullptr;
-                                focus->averagePointView = {0, 0};
-                                gContext.mutex.unlock();
-                                focusPointView = focus->averagePointView;
-                                W_LOG_DEBUG("focus point reset.");
-                            }
-                            // Increment the interval count
-                            gContext.intervalCountTicks++;
-                            if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
-                                W_LOG_DEBUG("inter-movement wait (%d ms) now over.",
-                                            W_CONTROL_MOTOR_MOVE_INTERVAL_MS);
-                                wLedModeConstantSet(W_LED_BOTH, 0, 10, 500);
-                            }
-                        }
-
-                        // Write the focus point on the image
-                        wImageProcessingFocusSet(&focusPointView);
                     }
-                } else {
-                    // Returning to rest or recalibrating counts as activity
-                    inactivityReturnToRestCountTicks = 0;
+                    refreshCfgTicks = 0;
                 }
 
-                // Catch-all: if wMotorMoveToRest() failed anywhere it is called
-                // above it is possible that stepsPerPixelX100Get(), and
-                // hence stepsPerPixelX100Set(), will fail, so make sure
-                // that all is good
-                motorRecalibrate |= motorEnsureCalibration(&calibrationAttemptFailureCount);
+                // All the other stuff in here requires the motors
+                if (motorsAllowed()) {
+                    // Check for the need to return to the rest position
+                    // or recalibrate the motors.  It is done this way so that
+                    // both checks are always carried out and then, if the motor
+                    // recalibration timer is a multiple of the return to
+                    // rest timer, they will both expire but will cause
+                    // only a single interval count
+                    bool motorRecalibrate = timedMotorMove(&motorRecalibrateCountTicks,
+                                                           msToTicks(W_CONTROL_MOTOR_RECALIBRATE_SECONDS * 1000),
+                                                           motorCalibrateAndMoveToRest,
+                                                           &calibrationAttemptFailureCount,
+                                                           &(gContext.intervalCountTicks), steps);
+                    bool returnToRest = timedMotorMove(&returnToRestCountTicks,
+                                                       msToTicks(W_CONTROL_RETURN_TO_REST_SECONDS * 1000),
+                                                       motorMoveToRest,
+                                                       &calibrationAttemptFailureCount,
+                                                       &(gContext.intervalCountTicks), steps);
+                    if (!motorRecalibrate && !returnToRest) {
+                        // No enforced rest/calibration: if there are steps to complete, do them.
+                        gContext.moving = step(steps, gContext.staticCamera,
+                                               &(gContext.intervalCountTicks),
+                                               &motorRecalibrateCountTicks,
+                                               &calibrationAttemptFailureCount);
+                        if (motorRecalibrateCountTicks == 0) {
+                            // If stepping resulted in a recalibration (i.e.
+                            // motorRecalibrateCountTicks has been reset to zero),
+                            // remember that so that we can update the step to 
+                            // pixel ratio later.
+                            motorRecalibrate = true;
+                        }
+                        if (gContext.moving) {
+                            // Remove the focus point from the image while we move
+                            wImageProcessingFocusSet(nullptr);
+                            inactivityReturnToRestCountTicks = 0;
+                            activityFlag = true;
+                        } else {
+                            if (activityFlag) {
+                                // If there has been activity, check for the need to return to
+                                // the rest position due to inactivity
+                                if (timedMotorMove(&inactivityReturnToRestCountTicks,
+                                                   msToTicks(W_CONTROL_INACTIVITY_RETURN_TO_REST_SECONDS * 1000),
+                                                   motorMoveToRest,
+                                                   &calibrationAttemptFailureCount,
+                                                   &(gContext.intervalCountTicks), steps)) {
+                                    activityFlag = false;
+                                }
+                            }
+                            // Take a copy of the current focus point with the
+                            // context locked; all the other context parameters
+                            // we use in here are marked as atomic
+                            gContext.mutex.lock();
+                            cv::Point focusPointView = gContext.focus.averagePointView;
+                            gContext.mutex.unlock();
 
-                if (motorRecalibrate) {
-                    // If a motor was recalibrated, re-compute the step to pixel ratio
-                    // Don't flag an error here as there's little we can do about it,
-                    // if the failure is due to calibration it wiil be caught next time
-                    // around
-                    stepsPerPixelX100Set(stepsPerPixelX100);
+                            // Not moving, check the interval counter
+                            if (gContext.intervalCountTicks >= msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
+                                // If there is no interval to wait,
+                                // create a new step list if required
+                                if (stepListSet(&focusPointView, stepsPerPixelX100, steps)) {
+                                    wLedModeConstantSet(W_LED_BOTH, 0, 100, 500);
+                                }
+                            } else {
+                                if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_GUARD_MS)) {
+                                    // Reset the motion detection in the image processing code
+                                    wImageProcessingResetMotionDetect();
+                                    // Restart averaging, otherwise we
+                                    // will end up moving towards something
+                                    // we have already moved towards, IYSWIM
+                                    gContext.mutex.lock();
+                                    wControlPointView_t *focus = &(gContext.focus);
+                                    focus->number = 0;
+                                    focus->totalPointView = {0, 0};
+                                    focus->oldestPointView = nullptr;
+                                    focus->averagePointView = {0, 0};
+                                    gContext.mutex.unlock();
+                                    focusPointView = focus->averagePointView;
+                                    W_LOG_DEBUG("focus point reset.");
+                                }
+                                // Increment the interval count
+                                gContext.intervalCountTicks++;
+                                if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
+                                    W_LOG_DEBUG("inter-movement wait (%d ms) now over.",
+                                                W_CONTROL_MOTOR_MOVE_INTERVAL_MS);
+                                    wLedModeConstantSet(W_LED_BOTH, 0, 10, 500);
+                                }
+                            }
+
+                            // Write the focus point on the image
+                            wImageProcessingFocusSet(&focusPointView);
+                        }
+                    } else {
+                        // Returning to rest or recalibrating counts as activity
+                        inactivityReturnToRestCountTicks = 0;
+                    }
+
+                    // Catch-all: if wMotorMoveToRest() failed anywhere it is called
+                    // above it is possible that stepsPerPixelX100Get(), and
+                    // hence stepsPerPixelX100Set(), will fail, so make sure
+                    // that all is good
+                    motorRecalibrate |= motorEnsureCalibration(&calibrationAttemptFailureCount);
+
+                    if (motorRecalibrate) {
+                        // If a motor was recalibrated, re-compute the step to pixel ratio
+                        // Don't flag an error here as there's little we can do about it,
+                        // if the failure is due to calibration it wiil be caught next time
+                        // around
+                        stepsPerPixelX100Set(stepsPerPixelX100);
+                    }
                 }
             }
         }
@@ -682,17 +736,10 @@ static void controlLoop()
     W_LOG_DEBUG("control loop has exited.");
 }
 
-// Stop the control loop, close the timer and release the message queue.
+// Stop the control loop/timer and release the message queue.
 static void cleanUp()
 {
-    if (gTimerFd >= 0) {
-        gKeepGoing = false;
-        if (gContext.thread.joinable()) {
-            gContext.thread.join();
-        }
-        close(gTimerFd);
-        gTimerFd = -1;
-    }
+    wUtilThreadTickedStop(&gTimerFd, &(gContext.thread), &gKeepGoing);
     if (gMsgQueueId >= 0) {
         wMsgQueueStop(gMsgQueueId);
         gMsgQueueId = -1;
@@ -788,36 +835,15 @@ int wControlInit()
             }
         }
         if (errorCode == 0) {
-            // Set up a tick to drive controlLoop()
-            errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+            // Set up the thread and tick-timer to drive controlLoop()
+            errorCode = wUtilThreadTickedStart(W_COMMON_THREAD_PRIORITY_CONTROL,
+                                               W_CONTROL_TICK_TIMER_PERIOD_MS,
+                                               &gKeepGoing,
+                                               controlLoop, "controlLoop",
+                                               &(gContext.thread));
             if (errorCode >= 0) {
                 gTimerFd = errorCode;
                 errorCode = 0;
-                struct itimerspec timerSpec = {};
-                timerSpec.it_value.tv_nsec = W_CONTROL_TICK_TIMER_PERIOD_MS * 1000000;
-                timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-                if (timerfd_settime(gTimerFd, 0, &timerSpec, nullptr) == 0) {
-                    errorCode = 0;
-                    // Start the control loop
-                    try {
-                        // This will go bang if the thread cannot be created
-                        gKeepGoing = true;
-                        gContext.thread = std::thread(controlLoop);
-                    }
-                    catch (int x) {
-                        errorCode = -x;
-                        W_LOG_ERROR("unable to start control tick thread, error code %d.",
-                                    errorCode);
-                    }
-                } else {
-                    errorCode = -errno;
-                    W_LOG_ERROR("unable to set control tick timer, error code %d.",
-                                errorCode);
-                }
-            } else {
-                errorCode = -errno;
-                W_LOG_ERROR("unable to create control tick timer, error code %d.",
-                            errorCode);
             }
         }
 
@@ -830,12 +856,13 @@ int wControlInit()
 }
 
 // Start control operations.
-int wControlStart(bool staticCamera)
+int wControlStart(bool staticCamera, bool cfgIgnore)
 {
     int errorCode = -EBADF;
 
     if (gTimerFd >= 0) {
         gContext.staticCamera = staticCamera;
+        gContext.cfgIgnore = cfgIgnore;
         gContext.intervalCountTicks = INT_MAX;
         // Set ourselves up as a consumer of focus from the image processing
         errorCode = wImageProcessingFocusConsume(focusCallback);
@@ -844,8 +871,10 @@ int wControlStart(bool staticCamera)
             errorCode = wVideoEncodeStart();
             if (errorCode == 0) {
                 // We're up
-                wLedModeConstantSet(W_LED_BOTH, 0, 10, 1000);
-                wLedOverlayRandomBlinkSet(5);
+                if (lightsAllowed()) {
+                    wLedModeConstantSet(W_LED_BOTH, 0, 10, 1000);
+                    wLedOverlayRandomBlinkSet(5);
+                }
             } else {
                  wImageProcessingFocusConsume(nullptr);
             }

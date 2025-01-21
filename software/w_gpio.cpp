@@ -29,14 +29,12 @@
 
 // The Linux/Posix stuff.
 #include <sys/mman.h>
-#include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <signal.h>
-#include <poll.h>
 #include <gpiod.h>
 
 // Other parts of watchdog.
+#include <w_common.h>
 #include <w_util.h>
 #include <w_log.h>
 
@@ -116,16 +114,16 @@ static gpiod_chip *gChip = nullptr;
 
 // The file handle of the timer that drives the GPIO read loop for
 // debouncing.
-static int gTimerFd = -1;
+static int gTimerReadFd = -1;
 
 // The file handle of the timer that drives the GPIO PWM loop.
-static int gPwmFd = -1;
+static int gTimerPwmFd = -1;
 
 // The handle of the GPIO read thread.
-static std::thread gReadThread;
+static std::thread gThreadRead;
 
 // The handle of the GPIO PWM thread.
-static std::thread gPwmThread;
+static std::thread gThreadPwm;
 
 // Array of GPIO input pins.
 static wGpioInput_t gInputPin[] = {{.pin = W_GPIO_PIN_INPUT_LOOK_LEFT_LIMIT,
@@ -328,34 +326,30 @@ static int rawGet(unsigned int pin)
 // the GPIOs in this thread, triggered from that timer.  This loop
 // should be run at max priority; any timer ticks that are missed are
 // monitored in gInputReadSlipCount.
-static void readLoop(int timerFd)
+static void readLoop(int timerFd, bool *keepGoing, void *context)
 {
     unsigned int x = 0;
     unsigned int level;
-    uint64_t numExpiriesSaved = 0;
-    uint64_t numExpiries;
-    uint64_t numExpiriesPassed;
-    struct pollfd pollFd[1] = {0};
-    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-    sigset_t sigMask;
+    int numExpiriesSaved = 0;
+    int numExpiriesPassed;
 
-    pollFd[0].fd = timerFd;
-    pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-    sigemptyset(&sigMask);
-    sigaddset(&sigMask, SIGINT);
+    (void) context;
+
     gInputReadStart = std::chrono::system_clock::now();
     W_LOG_DEBUG("GPIO read loop has started");
-    while (gKeepGoing && wUtilKeepGoing()) {
-        // Block waiting for the tick timer to go off for up to a time,
-        // or for CTRL-C to land; when the timer goes off the number
-        // of times it has expired is returned in numExpiries
-        if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-            (read(timerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
-            gInputReadCount++;
+    while (keepGoing && wUtilKeepGoing()) {
+
+        // Block waiting for the tick-timer to go off for up to a time,
+        // or for CTRL-C to land
+        int numExpiries = wUtilBlockTimer(timerFd);
+        if (numExpiries > 0) {
+            // Track the number of times we've missed a timer
+            // expiry, for debug purposes.
             numExpiriesPassed = numExpiries - numExpiriesSaved;
             if (numExpiriesPassed > 1) {
                 gInputReadSlipCount += numExpiriesPassed - 1;
             }
+            gInputReadCount++;
             // Read the level from the next input pin in the array
             wGpioInput_t *gpioInput = &(gInputPin[x]);
             level = gpiod_line_get_value(gpioInput->debounce.line);
@@ -387,29 +381,23 @@ static void readLoop(int timerFd)
 }
 
 // Task/thread/thing to drive the PWM output of the pins in gPwmPin[].
-static void pwmLoop(int pwmFd)
+static void pwmLoop(int timerFd, bool *keepGoing, void *context)
 {
     unsigned int pwmCount = 0;
-    uint64_t numExpiries;
-    struct pollfd pollFd[1] = {0};
-    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-    sigset_t sigMask;
     wGpioPwm_t *gpioPwmPinCopy = (wGpioPwm_t *) malloc(sizeof(gPwmPin));
 
+    (void) context;
+
     if (gpioPwmPinCopy) {
-        pollFd[0].fd = pwmFd;
-        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-        sigemptyset(&sigMask);
-        sigaddset(&sigMask, SIGINT);
         W_LOG_DEBUG("GPIO PWM loop has started");
-        while (gKeepGoing && wUtilKeepGoing()) {
+        while (keepGoing && wUtilKeepGoing()) {
             // Block waiting for the PWM timer to go off for up to a time,
             // or for CTRL-C to land
             // Change the level of a PWM pin only at the end of a PWM period
             // to avoid any chance of flicker
             memcpy((void *) gpioPwmPinCopy, gPwmPin, sizeof(gPwmPin));
-            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-                (read(pwmFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+            int numExpiries = wUtilBlockTimer(timerFd);
+            for (int x = 0; x < numExpiries; x++) {
                 // Progress all of the PWM pins
                 wGpioPwm_t *gpioPwm = gpioPwmPinCopy;
                 for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gPwmPin); x++) {
@@ -454,7 +442,7 @@ int wGpioInit()
 {
     int errorCode = 0;
 
-    if ((gTimerFd < 0) && (gPwmFd < 0)) {
+    if ((gTimerReadFd < 0) && (gTimerPwmFd < 0)) {
         gKeepGoing = true;
         // Configure all of the input pins and get their initial states
         for (unsigned int x = 0; (x < W_UTIL_ARRAY_COUNT(gInputPin)) &&
@@ -489,90 +477,49 @@ int wGpioInit()
         }
 
         if (errorCode == 0) {
-            // Set up a tick to drive gpioInputLoop()
-            errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
-            if (errorCode >= 0) {
-                struct itimerspec timerSpec = {0};
-                timerSpec.it_value.tv_nsec = W_GPIO_TICK_TIMER_PERIOD_US * 1000;
-                timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-                if (timerfd_settime(errorCode, 0, &timerSpec, nullptr) == 0) {
-                    gTimerFd = errorCode;
-                    errorCode = 0;
-                } else {
-                    // Tidy up the read loop timer we opened on error
-                    close(errorCode);
-                    errorCode = -errno;
-                    W_LOG_ERROR("unable to set GPIO read timer, error code %d.",
-                                errorCode);
+            // Populate gPwmPin
+            for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gPwmPin); x++) {
+                wGpioPwm_t *gpioPwm = &(gPwmPin[x]);
+                gpioPwm->line = lineGet(gpioPwm->pin);
+                gpioPwm->levelPercent = 0;
+                for (unsigned int y = 0; y < W_UTIL_ARRAY_COUNT(gOutputPin); y++) {
+                    wGpioOutput_t *gpioOutput = &(gOutputPin[y]);
+                    if (gpioPwm->pin == gpioOutput->pin) {
+                        gpioPwm->levelPercent = gpioOutput->initialLevel * 100;
+                        break;
+                    }
                 }
-            } else {
-                errorCode = -errno;
-                W_LOG_ERROR("unable to create GPIO read timer, error code %d.",
-                            errorCode);
             }
         }
 
         if (errorCode == 0) {
-            // Set up a tick to drive PWM
-            errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+            // Set up the thread and tick-timer to drive readLoop()
+            errorCode = wUtilThreadTickedStart(W_COMMON_THREAD_PRIORITY_GPIO_READ,
+                                               W_GPIO_PWM_TICK_TIMER_PERIOD_MS,
+                                               &gKeepGoing,
+                                               readLoop, "readLoop",
+                                               &gThreadRead);
             if (errorCode >= 0) {
-                struct itimerspec timerSpec = {0};
-                timerSpec.it_value.tv_nsec = W_GPIO_PWM_TIMER_PERIOD_US * 1000;
-                timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-                if (timerfd_settime(errorCode, 0, &timerSpec, nullptr) == 0) {
-                    gPwmFd = errorCode;
-                    errorCode = 0;
-                    // Now that the timer is set, populate gPwmPin
-                    for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gPwmPin); x++) {
-                        wGpioPwm_t *gpioPwm = &(gPwmPin[x]);
-                        gpioPwm->line = lineGet(gpioPwm->pin);
-                        gpioPwm->levelPercent = 0;
-                        for (unsigned int y = 0; y < W_UTIL_ARRAY_COUNT(gOutputPin); y++) {
-                            wGpioOutput_t *gpioOutput = &(gOutputPin[y]);
-                            if (gpioPwm->pin == gpioOutput->pin) {
-                                gpioPwm->levelPercent = gpioOutput->initialLevel * 100;
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    // Tidy up the PWM loop timer we opened, and the read loop timer,
-                    // on error
-                    close(errorCode);
-                    close(gTimerFd);
-                    gTimerFd = -1;
-                    errorCode = -errno;
-                    W_LOG_ERROR("unable to set GPIO PWM timer, error code %d.",
-                                errorCode);
-                }
-            } else {
-                // Tidy up the read loop timer on error
-                close(gTimerFd);
-                gTimerFd = -1;
-                errorCode = -errno;
-                W_LOG_ERROR("unable to create PWM timer, error code %d.", errorCode);
+                gTimerReadFd = errorCode;
+                errorCode = 0;
             }
         }
-    }
+        if (errorCode == 0) {
+            // Set up the thread and tick-timer to drive pwmLoop()
+            errorCode = wUtilThreadTickedStart(W_COMMON_THREAD_PRIORITY_GPIO_READ,
+                                              W_GPIO_READ_TICK_TIMER_PERIOD_MS,
+                                              &gKeepGoing,
+                                              pwmLoop, "pwmLoop",
+                                              &gThreadPwm);
+            if (errorCode >= 0) {
+                gTimerPwmFd = errorCode;
+                errorCode = 0;
+            }
+        }
 
-    if (errorCode == 0) {
-        // Start the PWM thread
-        gPwmThread = std::thread(pwmLoop, gPwmFd);
-        pthread_setname_np(gPwmThread.native_handle(), "pwmLoop");
-        // Start the read thread
-        gReadThread = std::thread(readLoop, gTimerFd);
-        pthread_setname_np(gReadThread.native_handle(), "readLoop");
-        // Set the thread priority for GPIO reads
-        // to maximum as we never want to miss one
-        struct sched_param scheduling;
-        scheduling.sched_priority = sched_get_priority_max(SCHED_FIFO);
-        errorCode = pthread_setschedparam(gReadThread.native_handle(),
-                                          SCHED_FIFO, &scheduling);
         if (errorCode != 0) {
             // Tidy up everything on error
             wGpioDeinit();
-            W_LOG_ERROR("unable to set thread priority for GPIO reads"
-                        " (error %d), maybe need sudo?", errorCode);
         }
     }
 
@@ -651,25 +598,9 @@ void wGpioDeinit()
         W_LOG_INFO_END;
     }
 
-    // No longer running
-    gKeepGoing = false;
-
-    // Stop the GPIO read timer
-    if (gTimerFd >= 0) {
-        if (gReadThread.joinable()) {
-           gReadThread.join();
-        }
-        close(gTimerFd);
-        gTimerFd = -1;
-    }
-    // Stop the GPIO PWM timer
-    if (gPwmFd >= 0) {
-        if (gPwmThread.joinable()) {
-           gPwmThread.join();
-        }
-        close(gPwmFd);
-        gPwmFd = -1;
-    }
+    // Stop the threads and their timers
+    wUtilThreadTickedStop(&gTimerReadFd, &gThreadRead, &gKeepGoing);
+    wUtilThreadTickedStop(&gTimerPwmFd, &gThreadPwm, &gKeepGoing);
 
     for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gInputPin); x++) {
         line = lineGet(x);

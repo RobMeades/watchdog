@@ -137,7 +137,7 @@
 #ifndef W_GPIO_DEBOUNCE_THRESHOLD
 /** The number of times an input pin must have read a consistently
  * different level to the current level for us to believe that it
- * really has changed state.  With a GPIO tick timer of 1 ms and
+ * really has changed state.  With a GPIO tick-timer of 1 ms and
  * four input pins, a value of 3 here means that the pin must have
  * read the same level for a full 12 milliseconds before we believe
  * it.
@@ -145,8 +145,8 @@
 # define W_GPIO_DEBOUNCE_THRESHOLD 3
 #endif
 
-#ifndef W_GPIO_TICK_TIMER_PERIOD_US
-/** The GPIO tick timer period in microseconds: this is used to
+#ifndef W_GPIO_READ_TICK_TIMER_PERIOD_MS
+/** The GPIO tick-timer period in milliseconds: this is used to
  * debounce the input pins, reading one each time, so will
  * run around the four inputs once every fourth period, so using
  * 1 millisecond here would mean an input line is read every
@@ -154,15 +154,15 @@
  * mean that a GPIO would need to have read a consistent level
  * for 12 milliseconds.
  */
-# define W_GPIO_TICK_TIMER_PERIOD_US 1000
+# define W_GPIO_READ_TICK_TIMER_PERIOD_MS 1
 #endif
 
-#ifndef W_GPIO_PWM_TIMER_PERIOD_US
-/** The GPIO PWM timer period in microseconds: used to drive PWM
- * where, since we don't have a capacitor on the LED, we drive
+#ifndef W_GPIO_PWM_TICK_TIMER_PERIOD_MS
+/** The GPIO PWM tick-timer period in milliseconds: used to drive
+ * PWM where, since we don't have a capacitor on the LED, we drive
  * at quite a high rate.
  */
-# define W_GPIO_PWM_TIMER_PERIOD_US 1000
+# define W_GPIO_PWM_TICK_TIMER_PERIOD_MS 1
 #endif
 
 #ifndef W_GPIO_PWM_MAX_COUNT
@@ -203,7 +203,7 @@ int wGpioGet(unsigned int pin);
  */
 int wGpioSet(unsigned int pin, unsigned int level);
 
-/** Set the state of a GPIO PWN pin.
+/** Set the state of a GPIO PWM pin.
  *
  * @param pin          the GPIO pin number to set the state of.
  * @param levelPercent the level to set, as a percentage.

@@ -27,14 +27,11 @@
 #include <chrono>
 
 // The Linux/Posix stuff.
-#include <sys/timerfd.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <poll.h>
+#include <unistd.h> // For sleep()
 #include <assert.h>
 
 // Other parts of watchdog.
+#include <w_common.h>
 #include <w_util.h>
 #include <w_log.h>
 #include <w_msg.h>
@@ -693,91 +690,85 @@ static int updateLevelPulse(wLed_t led, wLedOverlayPulse_t **pulse,
 }
 
 // A loop to drive the dynamic behaviours of the LEDs.
-static void ledLoop()
+static void ledLoop(int timerFd, bool *keepGoing, void *context)
 {
-    if (gTimerFd >= 0) {
-        uint64_t numExpiries;
-        struct pollfd pollFd[1] = {};
-        struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-        sigset_t sigMask;
+    (void) context;
 
-        pollFd[0].fd = gTimerFd;
-        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-        sigemptyset(&sigMask);
-        sigaddset(&sigMask, SIGINT);
-
+    if (timerFd >= 0) {
         W_LOG_DEBUG("LED loop has started.");
 
-        while (gKeepGoing && wUtilKeepGoing()) {
-            // Block waiting for our tick timer to go off or for
+        while (keepGoing && wUtilKeepGoing()) {
+            // Block waiting for our tick-timer to go off or for
             // CTRL-C to land
-            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-                (read(gTimerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries)) &&
-                gContext.mutex.try_lock()) {
+            int numExpiries = wUtilBlockTimer(timerFd);
+            for (int x = 0; x < numExpiries; x++) {
 
-                // Set the level for a random blink, if there is one
-                int initialLevelPercent = randomBlink(gContext.randomBlink,
-                                                      gContext.nowTick);
-                // Update the LED pins
-                for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gContext.ledState); x++) {
-                    wLedState_t *state = &(gContext.ledState[x]);
-                    int levelPercent = initialLevelPercent;
-                    if (state->morse) {
-                        // If we are running a morse sequence, that
-                        // takes priority, including over the blink
-                        levelPercent = updateLevelMorse((wLed_t) x,
-                                                        &(state->morse),
-                                                        gContext.nowTick);
-                    }
-                    // Pulse overrides the mode
-                    if (state->pulse) {
-                        levelPercent = updateLevelPulse((wLed_t) x, &(state->pulse),
-                                                        gContext.nowTick,
-                                                        levelPercent);
-                    }
-                    if (levelPercent < 0) {
-                        // Do the modes etc. if the level hasn't been
-                        // set by a blink or by morse or by a pulse
-                        switch (state->modeType) {
-                            case W_LED_MODE_TYPE_CONSTANT:
-                            {
-                                wLedModeConstant_t *mode = &(state->mode.constant);
-                                // Progress any change of level
-                                levelPercent = updateLevelMode((wLed_t) x, state,
-                                                               gContext.nowTick,
-                                                               &(mode->level));
-                            }
-                            break;
-                            case W_LED_MODE_TYPE_BREATHE:
-                            {
-                                wLedModeBreathe_t *mode = &(state->mode.breathe);
-                                // Progress any change of level
-                                levelPercent = updateLevelMode((wLed_t) x, state,
-                                                               gContext.nowTick,
-                                                               &(mode->levelAverage),
-                                                               mode->levelAmplitudePercent,
-                                                               mode->rateMilliHertz,
-                                                               mode->offsetLeftToRightTicks);
-                            }
-                            break;
-                            default:
+                if (gContext.mutex.try_lock()) {
+
+                    // Set the level for a random blink, if there is one
+                    int initialLevelPercent = randomBlink(gContext.randomBlink,
+                                                          gContext.nowTick);
+                    // Update the LED pins
+                    for (unsigned int y = 0; y < W_UTIL_ARRAY_COUNT(gContext.ledState); y++) {
+                        wLedState_t *state = &(gContext.ledState[y]);
+                        int levelPercent = initialLevelPercent;
+                        if (state->morse) {
+                            // If we are running a morse sequence, that
+                            // takes priority, including over the blink
+                            levelPercent = updateLevelMorse((wLed_t) y,
+                                                            &(state->morse),
+                                                            gContext.nowTick);
+                        }
+                        // Pulse overrides the mode
+                        if (state->pulse) {
+                            levelPercent = updateLevelPulse((wLed_t) y, &(state->pulse),
+                                                            gContext.nowTick,
+                                                            levelPercent);
+                        }
+                        if (levelPercent < 0) {
+                            // Do the modes etc. if the level hasn't been
+                            // set by a blink or by morse or by a pulse
+                            switch (state->modeType) {
+                                case W_LED_MODE_TYPE_CONSTANT:
+                                {
+                                    wLedModeConstant_t *mode = &(state->mode.constant);
+                                    // Progress any change of level
+                                    levelPercent = updateLevelMode((wLed_t) y, state,
+                                                                   gContext.nowTick,
+                                                                   &(mode->level));
+                                }
                                 break;
+                                case W_LED_MODE_TYPE_BREATHE:
+                                {
+                                    wLedModeBreathe_t *mode = &(state->mode.breathe);
+                                    // Progress any change of level
+                                    levelPercent = updateLevelMode((wLed_t) y, state,
+                                                                   gContext.nowTick,
+                                                                   &(mode->levelAverage),
+                                                                   mode->levelAmplitudePercent,
+                                                                   mode->rateMilliHertz,
+                                                                   mode->offsetLeftToRightTicks);
+                                }
+                                break;
+                                default:
+                                    break;
+                            }
+                            // Wink overlays the mode
+                            if (state->wink) {
+                                levelPercent = updateLevelWink((wLed_t) y, &(state->wink),
+                                                               gContext.nowTick,
+                                                               levelPercent);
+                            }
                         }
-                        // Wink overlays the mode
-                        if (state->wink) {
-                            levelPercent = updateLevelWink((wLed_t) x, &(state->wink),
-                                                           gContext.nowTick,
-                                                           levelPercent);
+                        // Apply the new level
+                        if (levelPercent >= 0) {
+                            wGpioPwmSet(gLedToPin[y], levelPercent);
                         }
                     }
-                    // Apply the new level
-                    if (levelPercent >= 0) {
-                        wGpioPwmSet(gLedToPin[x], levelPercent);
-                    }
-                }
 
-                gContext.nowTick++;
-                gContext.mutex.unlock();
+                    gContext.nowTick++;
+                    gContext.mutex.unlock();
+                }
             }
         }
     }
@@ -1433,47 +1424,21 @@ int wLedInit()
             }
         }
         if (errorCode == 0) {
-            // Set up a tick to drive ledLoop()
-            errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+            // Set up the thread and tick-timer to drive ledLoop()
+            errorCode = wUtilThreadTickedStart(W_COMMON_THREAD_PRIORITY_LED,
+                                               W_LED_TICK_TIMER_PERIOD_MS,
+                                               &gKeepGoing,
+                                               ledLoop, "ledLoop",
+                                               &(gContext.thread));
             if (errorCode >= 0) {
-                struct itimerspec timerSpec = {};
-                timerSpec.it_value.tv_nsec = W_LED_TICK_TIMER_PERIOD_MS * 1000000;
-                timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
-                if (timerfd_settime(errorCode, 0, &timerSpec, nullptr) == 0) {
-                    gTimerFd = errorCode;
-                    errorCode = 0;
-                    // Start the LED loop
-                    try {
-                        // This will go bang if the thread cannot be created
-                        gKeepGoing = true;
-                        gContext.thread = std::thread(ledLoop);
-                    }
-                    catch (int x) {
-                        // Close the timer on error
-                        gKeepGoing = false;
-                        close(gTimerFd);
-                        gTimerFd = -1;
-                        errorCode = -x;
-                        W_LOG_ERROR("unable to start LED tick thread, error code %d.",
-                                    errorCode);
-                    }
-                } else {
-                    // Close the timer on error
-                    close(errorCode);
-                    errorCode = -errno;
-                    W_LOG_ERROR("unable to set LED tick timer, error code %d.",
-                                errorCode);
-                }
-            } else {
-                errorCode = -errno;
-                W_LOG_ERROR("unable to create LED tick timer, error code %d.",
-                            errorCode);
+                gTimerFd = errorCode;
+                errorCode = 0;
             }
-            if (errorCode != 0) {
-                // Tidy up on error
-                 wMsgQueueStop(gMsgQueueId);
-                 gMsgQueueId = -1;
-            }
+        }
+        if (errorCode != 0) {
+            // Tidy up on error
+             wMsgQueueStop(gMsgQueueId);
+             gMsgQueueId = -1;
         }
     }
 
@@ -1681,12 +1646,7 @@ void wLedDeinit()
              wMsgQueueStop(gMsgQueueId);
              gMsgQueueId = -1;
         }
-        gKeepGoing = false;
-        if (gContext.thread.joinable()) {
-            gContext.thread.join();
-        }
-        close(gTimerFd);
-        gTimerFd = -1;
+        wUtilThreadTickedStop(&gTimerFd, &(gContext.thread), &gKeepGoing);
         if (gContext.randomBlink) {
             free(gContext.randomBlink);
             gContext.randomBlink = nullptr;

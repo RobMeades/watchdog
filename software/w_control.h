@@ -37,7 +37,7 @@
 #endif
 
 #ifndef W_CONTROL_TICK_TIMER_PERIOD_MS
-/** The control tick timer period in milliseconds.  If you change
+/** The control tick-timer period in milliseconds.  If you change
  * this you may also need to change
  * W_CONTROL_FOCUS_MOVE_INTERVAL_TICKS below.  Cannot be too
  * fast as we will be stepping the motors forward in the
@@ -45,6 +45,13 @@
  * want to move fairly smarly: 10 ms is good.
  */
 # define W_CONTROL_TICK_TIMER_PERIOD_MS 10
+#endif
+
+#ifndef W_CONTROL_CFG_REFRESH_SECONDS
+/** How often to check the configuration to see if the lights or
+ * the motors should be off; once a second is good.
+ */
+# define W_CONTROL_CFG_REFRESH_SECONDS 1
 #endif
 
 #ifndef W_CONTROL_FOCUS_AVERAGE_LENGTH
@@ -70,17 +77,17 @@
 #endif
 
 #ifndef W_CONTROL_MOTOR_MOVE_GUARD_MS
-/** A guard pereiod to wait after moving, for things to
+/** A guard period to wait after moving, for things to
  * settle down before we take notice of focus changes again; needs
  * at least 5 seconds, otherwise the motion detection algorithm
  * tends to keep hold of static lines where there is a contrast
- * change (which of course are "moving" when the camera is moving) .
+ * change (which of course are "moving" when the camera is moving).
  */
 # define W_CONTROL_MOTOR_MOVE_GUARD_MS 5000
 #endif
 
 #ifndef W_CONTROL_MOTOR_MOVE_INTERVAL_MS
-/** The minumum number of milliseconds to wait between movements;
+/** The minimum number of milliseconds to wait between movements;
  * this must be at least W_CONTROL_MOTOR_MOVE_GUARD_MS plus
  * W_CONTROL_FOCUS_AVERAGE_LENGTH in milliseconds.
  */
@@ -98,7 +105,7 @@
 
 #ifndef W_CONTROL_STEP_INTERVAL_MAX_MS
 /** The maximum interval between steps, applied at the start
- * of the ramping period (will be zero at the end of the ramping
+ * of the ramping period (will be zero by the end of the ramping
  * period).
  */
 # define W_CONTROL_STEP_INTERVAL_MAX_MS 100
@@ -141,7 +148,7 @@
  * -------------------------------------------------------------- */
 
 /** Initialise the control loop; if control is already initialised
- * this function will do nothing and return success. wMsgInit()
+ * this function will do nothing and return success.  wMsgInit()
  * must have returned successfully before this is called.
  *
  * @return zero on success else negative error code.
@@ -155,9 +162,11 @@ int wControlInit();
  * @param staticCamera don't move the camera (noting that this does
  *                     not affect calibration, which wMotorInit()
  *                     will always carry out).
+ * @param cfgIgnore    ignore what the cfg API is saying, i.e.
+ *                     motors and lights are always on.
  * @return             zero on success else negative error code.
  */
-int wControlStart(bool staticCamera = false);
+int wControlStart(bool staticCamera = false, bool cfgIgnore = false);
 
 /** Stop control operations; you do not have to call this function
  * on exit, wControlDeinit() will tidy up appropriately.

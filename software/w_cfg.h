@@ -25,7 +25,7 @@
  * @brief The configuration API for the watchdog application; these
  * functions are thread-safe aside from gCfgInit() and gCfgDeinit(),
  * which should not be called at the same time as any other of these
- * APIs ore each other.
+ * APIs or each other.
  */
 
 /* ----------------------------------------------------------------
@@ -56,13 +56,13 @@
  * The "override" field can be used to stop or start "motors" and/or
  * "lights" until a given time.  The format for "offUntil" and
  * "onUntil" is ISO8601 except that anything smaller than seconds,
- * and any marker on the end, if present, will be ignored.
- * Only the first "motors"/"lights" item, and the first "offUntil"
- * or "onUntil" item within each, matters (duplicates, and an "offUntil"
- * if there is an "onUntil", and vice-versa, will be ignored).
- * The default configuration file contents below are intended to show
- * the format but don't do anything of use, i.e. the lights and motors
- * will remain on.
+ * and any marker on the end, if present, will be ignored.  A single
+ * "offUntil" or "onUntil" field for "motors", and single "offUntil"
+ * or "onUntil" field for "lights", is obeyed; an "offUntil" field when
+ * there has already been an "onUntil" field (and vice-versa) will be
+ * ignored.  The default configuration file contents below are
+ * intended to show the format but don't do anything of use, i.e. the
+ * lights and motors will remain on.
  *
  * "week" represents a weekly schedule (overridden by the standalone
  * "motors" and "lights" fields), in which the time format is
@@ -84,11 +84,9 @@
 {\n\
     \"override\": {\n\
         \"motors\": {\n\
-            \"offUntil\": \"2025-01-10T23:07:55\",\n\
-            \"onUntil\": \"2025-01-10T23:07:55\"\n\
+            \"offUntil\": \"2025-01-10T23:07:55\"\n\
         },\n\
         \"lights\": {\n\
-            \"offUntil\": \"2025-01-10T23:07:55\",\n\
             \"onUntil\": \"2025-01-10T23:07:55\"\n\
         }\n\
     },\n\
@@ -188,7 +186,7 @@
  * -------------------------------------------------------------- */
 
 /** Open a configuration file.  If the file does not exist it will
- * be created and filled with the given default contents. If
+ * be created and filled with the given default contents.  If
  * wCfgInit() has already been called this function will do nothing
  * and return success.
  *

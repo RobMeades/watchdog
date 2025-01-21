@@ -15,7 +15,7 @@ In writing the software here I was guided by:
 # Implementation Notes
 All of my stuff here is really in C rather than C++, despite the `.cpp` extension.  I did try moving to C++, 'cos I like the name-spacing, but you can't initialise flexible arrays (of which I use quite a few) in a C++ class and C++ contructors can't return errors, making them unsuitable for HW-oriented things that can fail, so you end up having to have `init()` methods anyway, `#define`s (which are nice 'cos you can modify them by passing values to the compiler command-line) aren't name-spaced in C++, etc.  Hence I've name-spaced the code in the usual C way (by prefixing function and variable names sensibly); that will have to do.
 
-The files, and structure, are as follows:
+The files, and structure, of the embedded stuff are as follows:
 
 - each API is formed by a pair of `.h`/.`cpp` files: so for instance the `wCamera` API is contained in the [w_camera.h](w_camera.h)/[w_camera.cpp](w_camera.cpp) file pair,
 - an API may include a pair of `wXxxInit()`/`wXxxDeinit()` functions that should be called at start/end of day by `main()`,
@@ -23,9 +23,12 @@ The files, and structure, are as follows:
 - the [wMsg](w_msg.h) API forms a key piece of infrastructure, allowing data and commands to be queued \[by the APIs themselves under a function-calling shim\], providing asynchronous behaviour.
 - the [wMotor](w_motor.h) API controls the stepper motors and the [wLed](w_led.h) API controls the LEDs that form the watchdog's eyes,
 - the [wGpio](w_gpio.h) API provides access to the Raspberry Pi's GPIO pins for [wMotor](w_motor.h) and [wLed](w_led.h),
+- the [wCfg](w_cfg.h) API manages a JSON configuration file (`watchdog.cfg`) which allows control of whether the motors or the lights can be operated, on the basis of a weekly schedule and/or manual overrides.
 - miscellaneous utils can be found in [wUtil](w_util.h), debug logging in [wLog](w_log.h) and a small number of common definitions in [wCommon](w_common.h),
 - to make the program more usable, [wCommandLine](w_command_line.h) provides command-line parsing and help,
-- [wControl](w_control.h) coordinates it all and [w_main.cpp](w_main.cpp) brings it all together.
+- [wControl](w_control.h) coordinates it all and [w_main.cpp](w_main.cpp) brings it all together as an executable thing.
+
+Along with the above, [index.html](index.html) provides a web interface, including a load of JavaScript in [index.js](index.js) and CSS styles in [styles.css](styles.css) to (a) display the streamed HLS video and (b) give read/write access to the `watchdog.cfg` configuration file from wherever.
 
 # Installation
 For the Pi, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.
@@ -295,7 +298,7 @@ LIBCAMERA_LOG_LEVELS=0 sudo ./watchdog
 Otherwise, the default (log level 1) is to run with information, warning and error messages from [libcamera](https://libcamera.org/) but not debug messages.
 
 # Serve
-To serve video, copy `*.png`, `*.html`, `.cfg` and `*.wsgi` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.  You will also need to modify the permissions on `watchdog.cfg` so that it is writeable by the group that Apache belongs to (so that the schedule can be written b by the web API): do this with:
+To serve video, copy `*.png`, `*.html`, `*.js`, `*.css` and `*.wsgi` from this directory, plus the built `watchdog` executable, to the directory you have told Apache to serve pages from and run `sudo ./watchdog -d video` from there to put your video output files in the `video` sub-directory.  You may need to modify the permissions of the `watchdog.cfg` file that is created when `watchdog` is first run so that the file is writeable by the group that Apache belongs to (in order that the schedule can be written-to by the web API): do this with:
 
 ```
 chmod -R g+rw watchdog.cfg

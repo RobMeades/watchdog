@@ -35,6 +35,7 @@
 #include <poll.h>
 
 // Other parts of watchdog.
+#include <w_common.h>
 #include <w_util.h>
 #include <w_log.h>
 
@@ -159,7 +160,7 @@ static bool queueMutexTryLockFor(std::mutex *mutex, std::chrono::nanoseconds wai
     while (mutex && !gotLock && !wUtilTimeoutExpired(startTime, wait)) {
         gotLock = mutex->try_lock();
         if (!gotLock) {
-           std::this_thread::sleep_for(std::chrono::microseconds(W_MSG_QUEUE_TICK_TIMER_PERIOD_US));
+           std::this_thread::sleep_for(std::chrono::microseconds(W_MSG_QUEUE_TICK_TIMER_PERIOD_MS));
         }
     }
 
@@ -250,25 +251,17 @@ static int msgTryPop(wMsgQueue_t *queue, wMsgContainer_t *msg)
 //   interval it is.
 static void msgLoop(wMsgQueue_t *queue)
 {
-    uint64_t numExpiries;
-    struct pollfd pollFd[1] = {0};
-    struct timespec timeSpec = {.tv_sec = 1, .tv_nsec = 0};
-    sigset_t sigMask;
     wMsgContainer_t msg;
 
     if ((gTimerFd >= 0) && queue) {
 
         W_LOG_DEBUG("%s: message loop has started.", queue->name);
 
-        pollFd[0].fd = gTimerFd;
-        pollFd[0].events = POLLIN | POLLERR | POLLHUP;
-        sigemptyset(&sigMask);
-        sigaddset(&sigMask, SIGINT);
         while (queue->keepGoing && gKeepGoing && wUtilKeepGoing()) {
             // Block waiting for the messaging timer to go off for up to
             // a time, or for CTRL-C to land
-            if ((ppoll(pollFd, 1, &timeSpec, &sigMask) == POLLIN) &&
-                (read(gTimerFd, &numExpiries, sizeof(numExpiries)) == sizeof(numExpiries))) {
+            int numExpiries = wUtilBlockTimer(gTimerFd);
+            for (int x = 0; x < numExpiries; x++) {
                 // Pop all the messages waiting for us
                 while (msgTryPop(queue, &msg) == 0) {
                     // Find the message handler for this message type
@@ -302,11 +295,14 @@ int wMsgInit()
 
     if (gTimerFd < 0) {
         // Set up a tick to drive msgLoop()
+        // Note: can't use the utility function here as we
+        // use a single timer with multiple threads
         errorCode = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
         if (errorCode >= 0) {
-            struct itimerspec timerSpec = {0};
-            timerSpec.it_value.tv_nsec = W_MSG_QUEUE_TICK_TIMER_PERIOD_US * 1000;
-            timerSpec.it_interval.tv_nsec = timerSpec.it_value.tv_nsec;
+            struct itimerspec timerSpec = {};
+            timerSpec.it_value.tv_sec = W_MSG_QUEUE_TICK_TIMER_PERIOD_MS / 1000;
+            timerSpec.it_value.tv_nsec = (W_MSG_QUEUE_TICK_TIMER_PERIOD_MS % 1000) * 1000000;
+            timerSpec.it_interval = timerSpec.it_value;
             if (timerfd_settime(errorCode, 0, &timerSpec, nullptr) == 0) {
                 gTimerFd = errorCode;
                 errorCode = 0;
@@ -316,12 +312,12 @@ int wMsgInit()
                 // Tidy up the timer we started on error
                 close(errorCode);
                 errorCode = -errno;
-                W_LOG_ERROR("unable to set messaging tick timer, error code %d.",
+                W_LOG_ERROR("unable to set messaging tick-timer, error code %d.",
                             errorCode);
             }
         } else {
             errorCode = -errno;
-            W_LOG_ERROR("unable to create messaging tick timer, error code %d.",
+            W_LOG_ERROR("unable to create messaging tick-timer, error code %d.",
                         errorCode);
         }
     }
@@ -357,12 +353,18 @@ int wMsgQueueStart(void *context, unsigned int sizeMax, const char *name)
                 // This will go bang if the thread cannot be created
                 queue->keepGoing = true;
                 queue->thread = std::thread(msgLoop, queue);
+                struct sched_param scheduling;
+                scheduling.sched_priority = W_COMMON_THREAD_REAL_TIME_PRIORITY(W_COMMON_THREAD_PRIORITY_MSG);
+                if (pthread_setschedparam(queue->thread.native_handle(),
+                                          SCHED_FIFO, &scheduling) != 0) {
+                    throw errno;
+                }
             }
             catch (int x) {
                 delete queue;
                 idOrErrorCode = -x;
-                W_LOG_ERROR("unable to start message thread, error code %d.",
-                            idOrErrorCode);
+                W_LOG_ERROR("unable to start or set priority of message thread,"
+                            " error code %d.", idOrErrorCode);
             }
             if (idOrErrorCode >= 0) {
                 try {

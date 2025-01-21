@@ -17,9 +17,12 @@
 #ifndef _W_UTIL_H_
 #define _W_UTIL_H_
 
-// This API is dependent on std::string and std::chrono.
+// This API is dependent on std::string, std::chrono std::thread and,
+// for wCommonThreadPriority_t, w_common.h
 #include <string>
 #include <chrono>
+#include <thread>
+#include <w_common.h>
 
 /** @file
  * @brief The utilities API for the watchdog application; this API is
@@ -59,6 +62,12 @@
  */
 #define W_UTIL_SYSTEM_SILENT " >>/dev/null 2>>/dev/null"
 
+#ifndef W_UTIL_POLL_TIMER_GUARD_MS
+/** The default poll guard timer in milliseconds, see wUtilBlockTimer().
+ */
+# define W_UTIL_POLL_TIMER_GUARD_MS 1000
+#endif
+
 #ifndef W_UTIL_MONITOR_TIMING_LENGTH
 /** The number of ticks to average timing over when monitoring.
  */
@@ -72,6 +81,23 @@
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
+
+/** Function signature for the thread function passed to
+ * wUtilThreadTickedStart().
+ *
+ * @param timerFd   the file descriptor of the timer that is to drive
+ *                  the thread.
+ * @param keepGoing a pointer to a flag which will be true when
+ *                  the function is called and which the function
+ *                  should monitor: if the flag is ever set to
+ *                  false the function should exit; will never be
+ *                  nullptr.
+ * @param context   the context pointer that was passed to 
+ *                  wUtilThreadTickedStart() when the the thread
+ *                  was created.
+ */
+typedef void (wUtilThreadFunction_t)(int timerFd, bool *keepGoing,
+                                     void *context);
 
 /** Structure to hold a start time, used in time-out calculations.
  */
@@ -107,11 +133,93 @@ void wUtilTerminationCaptureSet();
  */
 void wUtilTerminationSet();
 
-/** Return the program shoudl continue running or not.
+/** Return whether the program should continue running or not.
  *
  * @return true if the program should continue running, else false.
  */
 bool wUtilKeepGoing();
+
+/** Create and start a thread with the given priority, driven by
+ * a tick-timer of the given period.
+ *
+ * @param priority      the thread priority.
+ * @param periodMs      the tick-timer period in milliseconds.
+ * @param keepGoingFlag a pointer to a flag that will be set to
+ *                      true if this function returns successfully
+ *                      and may be set to false to cause the loop
+ *                      function to exit; cannot be nullptr.  This
+ *                      pointer will be passed to the loop function
+ *                      as its second parameter, so you probably
+ *                      shouldn't point it at a stack variable.
+ *                      loop() should return if keepGoingFlag is
+ *                      set to false.
+ * @param loop          the loop function that implements the thread;
+ *                      cannot be nullptr.
+ * @param name          a name for the thread; may be nullptr.  The
+ *                      length of the name may be limited by Linux
+ *                      pthread_setname_np(), e.g. to 16 characters;
+ *                      an error will be returned if the name is too
+ *                      long.
+ * @param thread        a place to put the thread; cannot be nullptr.
+ * @param context       a pointer to a user context that will be passed
+ *                      to loop() as its last parameter.
+ * @return              on success the file descriptor of the timer
+ *                      driving the thread, else negative error code;
+ *                      when loop() is called this file descriptor
+ *                      will be passed to it as its first parameter.
+ */
+int wUtilThreadTickedStart(wCommonThreadPriority_t priority,
+                           int periodMs,
+                           bool *keepGoingFlag,
+                           wUtilThreadFunction_t *loop, 
+                           const char *name,
+                           std::thread *thread,
+                           void *context = nullptr);
+
+/** Poll the given timer for expiry, returning when the timer
+ * has expired at least once or if CTRL-C is pressed or if
+ * the guard timer is hit.  A timed thread created by a call
+ * to wUtilThreadTickedStart() may call this function to determine
+ * if its timer has expired and then perform some action.
+ *
+ * @param timerFd the file descriptor of the timer to poll, must
+ *                be a non-negative number.
+ * @param guardMs the guard time in milliseconds.
+ * @return        the number of timer expiries that have occurred
+ *                since the last call to this function, else
+ *                negative error code; 0 means that the guard
+ *                timer has been hit or possibly CTRL-C has been
+ *                detected.
+ */
+int wUtilBlockTimer(int timerFd,
+                    int guardMs = W_UTIL_POLL_TIMER_GUARD_MS);
+
+/** Stop a thread and tick-timer that were created with
+ * wUtilThreadTickedStart().  When this function has returned
+ * the timer and thread no longer exist, wUtilThreadTickedStart()
+ * should be called to create them again.
+ *
+ * @param timerFd        a pointer to the file descriptor of the
+ *                       tick-timer that was orginally returned by
+ *                       wUtilThreadTickedStart().  On return,
+ *                       *timerFd will be set to -1.  If nullptr or
+ *                       a pointer to a negative value this function
+ *                       will do nothing
+ * @param thread         a pointer to the thread that was populated by
+ *                       wUtilThreadTickedStart(); ignored if timerFd
+ *                       is nullptr or a pointer to a negative value.
+ * @param keepGoingFlag  a pointer to the keep-going flag that was
+ *                       passed to wUtilThreadTickedStart(); ignored
+ *                       if timerFd is nullptr or a pointer to a
+ *                       negative value. If nullptr then thread must
+ *                       have already exited before this function
+ *                       is called, else this function will block
+ *                       until thread does exit.  If not nullptr,
+ *                       *keepGoingFlag will be set to false when this
+ *                       function returns.
+ */
+void wUtilThreadTickedStop(int *timerFd, std::thread *thread,
+                           bool *keepGoingFlag);
 
 /** Initialise a time-out with the current time.
  *

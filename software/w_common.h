@@ -46,9 +46,43 @@
 # define W_COMMON_FRAME_RATE_HERTZ 15
 #endif
 
+#ifndef W_COMMON_THREAD_REAL_TIME_PRIORITY_MAX
+/** The maximum real-time priority to use for any of the threads,
+ * where Linux/Posix defines 100 as the maximum real-time
+ * priority and 0 as the lowest real-time priority.  The members
+ * of wCommonThreadPriority_t and the macro
+ * W_COMMON_THREAD_REAL_TIME_PRIORITY() can be used to set the priority
+ * of the real-time threads in this process relative to this
+ * value.
+ */
+# define W_COMMON_THREAD_REAL_TIME_PRIORITY_MAX 50
+#endif
+
+/** Macro to obtain a real-time thread priority that can be used
+ * with sched_setscheduler().  The priority parameter should be
+ * a value from wCommonThreadPriority_t.
+ */
+# define W_COMMON_THREAD_REAL_TIME_PRIORITY(priority) (W_COMMON_THREAD_REAL_TIME_PRIORITY_MAX + priority)
+
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
+
+/** Thread priorities, for the threads which need one, relative to
+ * W_COMMON_THREAD_REAL_TIME_PRIORITY_MAX (so 0 is
+ * W_COMMON_THREAD_REAL_TIME_PRIORITY_MAX, -1 is one lower in
+ * priority, etc.), stored in this enum so that they are all in one
+ * place rather than scattered about the header files.  Use a value
+ * from this enum with W_COMMON_THREAD_REAL_TIME_PRIORITY() to get
+ * a real-time thread priority that can be passed to Linux.
+ */
+typedef enum {
+    W_COMMON_THREAD_PRIORITY_GPIO_READ = 0,
+    W_COMMON_THREAD_PRIORITY_GPIO_PWM = -1,
+    W_COMMON_THREAD_PRIORITY_LED = -2,
+    W_COMMON_THREAD_PRIORITY_CONTROL = -3,
+    W_COMMON_THREAD_PRIORITY_MSG = -4
+} wCommonThreadPriority_t;
 
 /** Function signature of something that processes a frame, used
  * by the camera and image processing APIs.
