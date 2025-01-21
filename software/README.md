@@ -24,11 +24,11 @@ The files, and structure, of the embedded stuff are as follows:
 - the [wMotor](w_motor.h) API controls the stepper motors and the [wLed](w_led.h) API controls the LEDs that form the watchdog's eyes,
 - the [wGpio](w_gpio.h) API provides access to the Raspberry Pi's GPIO pins for [wMotor](w_motor.h) and [wLed](w_led.h),
 - the [wCfg](w_cfg.h) API manages a JSON configuration file (`watchdog.cfg`) which allows control of whether the motors or the lights can be operated, on the basis of a weekly schedule and/or manual overrides.
-- miscellaneous utils can be found in [wUtil](w_util.h), debug logging in [wLog](w_log.h) and a small number of common definitions in [wCommon](w_common.h),
+- miscellaneous utils can be found in [wUtil](w_util.h) (in particular a function that starts a real-time task that is driven by an accurate periodic tick, a pattern used throughout the code), debug logging in [wLog](w_log.h) and a small number of common definitions in [wCommon](w_common.h),
 - to make the program more usable, [wCommandLine](w_command_line.h) provides command-line parsing and help,
 - [wControl](w_control.h) coordinates it all and [w_main.cpp](w_main.cpp) brings it all together as an executable thing.
 
-Along with the above, [index.html](index.html) provides a web interface, including a load of JavaScript in [index.js](index.js) and CSS styles in [styles.css](styles.css) to (a) display the streamed HLS video and (b) give read/write access to the `watchdog.cfg` configuration file from wherever.
+Along with the above, [index.html](index.html) provides a web interface, including a load of JavaScript in [index.js](index.js) and CSS styles in [styles.css](styles.css) to (a) display the streamed HLS video and (b) give read/write access to the `watchdog.cfg` configuration file from wherever, as prettily and accessibly and mobile-compatibilitily as I could manage in a week of sweating over mushy JavaScript.
 
 # Installation
 For the Pi, use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution to SD card (with your Wifi details pre-entered for ease of first use and SSH access enabled); insert the SD card into the Pi and power it up.
@@ -177,10 +177,10 @@ sudo apt install libapache2-mod-wsgi-py3
 
 Edit the file `/etc/apache2/sites-available/000-default.conf` to set `DocumentRoot` to wherever you plan to run the `watchdog` executable; best not to put this in your own home directory as permissions get awkward, put it somehere like `/home/http/`.
 
-To configure `mod_wsgi` to send requests to `cfg.wsgi`, add the following to the top of the same file, just below the `DocumentRoot` stuff (noting that the full path is needed to the `.wsgi` file and the file must be in the same folder as the file `watchdog.cfg`, which should be your `DocumentRoot`):
+To handle POSTing changes to the schedule JSON file from the web client, you need to configure `mod_wsgi` to send any requests directed at the URL `/watchdog.cfg` to our script, `cfg.wsgi`.  Do this by adding the following to the top of `/etc/apache2/sites-available/000-default.conf`, just below the `DocumentRoot` stuff; note that the full path is needed to the `.wsgi` file and that the `.wsgi` file must be in the same folder as the file `watchdog.cfg`, which should be your `DocumentRoot`:
 
 ```
-# Call the script cfg.wsgi when a POST request is made to the file /watchdog.cfg
+# Call the script cfg.wsgi when a POST/GET/whatever request is made to the file /watchdog.cfg
 WSGIScriptAlias /watchdog.cfg <your_folder>/cfg.wsgi
 ```
 

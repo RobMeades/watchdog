@@ -35,6 +35,9 @@ let gCfgData = {};
 // Track the state of the CTRL key.
 let gKeyIsPressedCtrl = false;
 
+// If we're on a mobile device it won't have hover.
+const gOnMoblieBrowser = !window.matchMedia('(hover: hover)').matches;
+
 // Event listener: for CTRL key handling.
 document.addEventListener('keyup', function(event) {
     if (event.key === 'Control' || event.key === 'Meta') {
@@ -956,11 +959,13 @@ function tableHandleKeydown(event) {
 
 // Event listener: handle cells of the table being selected.
 document.addEventListener('DOMContentLoaded', function() {
+    const dblClickOrTouchDurationMillis = 300;
     let clickTimerList = [];
     let isDragging = false;
     let startCell = null;
+    let touchLastTimeMillis = 0;
 
-    // Event listeners: for mouse-based cell selection
+    // Event listeners: for mouse-based cell selection.
     gTable.addEventListener('mousedown', handleMouseDown);
     gTable.addEventListener('mousemove', handleMouseMove);
     gTable.addEventListener('mouseup', handleMouseUp);
@@ -1031,7 +1036,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         // so that the pivot-point remains
                         // the same for future shift-clicks
                     // Ctrl
-                    } else if (event.ctrlKey || event.metaKey) {
+                    // On mobile we behave as if the CTRL key is always pressed
+                    // to allow mutley-selects without a keyboard
+                    } else if (event.ctrlKey || event.metaKey || gOnMoblieBrowser) {
                         gTableNumCellsSelected += tableToggleCellSelection(cell);
                         // Update the last selected cell
                         gTableLastSelectedCell = cell;
@@ -1063,13 +1070,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     }
-                }, 300);
+                }, dblClickOrTouchDurationMillis);
                 clickTimerList.push(clickTimer);
             }
         }
     });
 
-    // Event listener, double-click: do something with the selected cells
+    // Event listener, double-click: do something with the selected cells.
     gTable.addEventListener('dblclick', function(event) {
         const cell = event.target;
         // Cancel any single-click timers
@@ -1079,6 +1086,21 @@ document.addEventListener('DOMContentLoaded', function() {
             // Do the schedule change
             scheduleChangeDialog();
         }
+    });
+
+    // Event listener to capture a double-touch if there is no mouse.
+    gTable.addEventListener('touchstart', function(event) {
+        let date = new Date();
+        let timeMillis = date.getTime();
+        if (event.touches.length == 1 && 
+            timeMillis - touchLastTimeMillis < dblClickOrTouchDurationMillis &&
+            gTableNumCellsSelected > 0) {
+            // Disable browser's default zoom on double tap
+            event.preventDefault();
+            // Do the schedule change
+            scheduleChangeDialog();
+        }
+        touchLastTimeMillis = timeMillis;
     });
 });
 
