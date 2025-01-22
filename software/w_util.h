@@ -93,7 +93,7 @@
  *                  false the function should exit; will never be
  *                  nullptr.
  * @param context   the context pointer that was passed to 
- *                  wUtilThreadTickedStart() when the the thread
+ *                  wUtilThreadTickedStart() when the thread
  *                  was created.
  */
 typedef void (wUtilThreadFunction_t)(int timerFd, bool *keepGoing,
@@ -107,7 +107,7 @@ typedef struct {
 
 /** Structure to monitor timing; should be provided initialised to
  * zero and then wUtilMonitorTimingUpdate() should be called to
- * update it at every tick.  The interesting fields is then likely
+ * update it at every tick.  The interesting field is then likely
  * the "largest" gap field, being the largest gap between updates.
  */
 typedef struct {
@@ -178,7 +178,7 @@ int wUtilThreadTickedStart(wCommonThreadPriority_t priority,
 
 /** Poll the given timer for expiry, returning when the timer
  * has expired at least once or if CTRL-C is pressed or if
- * the guard timer is hit.  A timed thread created by a call
+ * the guard timer is hit.  A ticked thread created by a call
  * to wUtilThreadTickedStart() may call this function to determine
  * if its timer has expired and then perform some action.
  *
@@ -204,7 +204,7 @@ int wUtilBlockTimer(int timerFd,
  *                       wUtilThreadTickedStart().  On return,
  *                       *timerFd will be set to -1.  If nullptr or
  *                       a pointer to a negative value this function
- *                       will do nothing
+ *                       will do nothing.
  * @param thread         a pointer to the thread that was populated by
  *                       wUtilThreadTickedStart(); ignored if timerFd
  *                       is nullptr or a pointer to a negative value.

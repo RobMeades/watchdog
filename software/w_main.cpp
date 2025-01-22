@@ -102,11 +102,11 @@ int main(int argc, char *argv[])
         // Initialise configuration
         errorCode = wCfgInit(commandLineParameters.cfgFilePath);
         if (errorCode == 0) {
-            // We should now be able to initialise GPIOs
+            // Initialise GPIOs
             errorCode = wGpioInit();
         }
         if (errorCode == 0) {
-            // We should now be able to initialise the motors
+            // Initialise the motors
             errorCode = wMotorInit(commandLineParameters.doNotOperateMotors);;
         }
         if (errorCode == 0) {
@@ -193,7 +193,7 @@ int main(int argc, char *argv[])
         W_LOG_INFO_END;
 
     } else {
-        // Print help about the commad line, including the defaults
+        // Print help about the command line, including the defaults
         wCommandLinePrintHelp(&commandLineParameters);
     }
 
