@@ -274,8 +274,8 @@ You might also want to edit the Apache configuration file and re-direct its logg
 
 ```
 ErrorLog  "| /usr/bin/logger -thttpd -plocal6.err"
-CustomLog "| /usr/bin/logger -thttpd -plocal6.notice" extended_ncsa
- ```
+CustomLog "| /usr/bin/logger -thttpd -plocal6.notice"
+```
 
 Obviously restart Apache afterwards for the change to take effect.
 
