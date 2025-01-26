@@ -591,20 +591,12 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                 // want to ignore a configuration change
                 refreshCfgTicks += numExpiries;
                 if (refreshCfgTicks >= msToTicks(W_CONTROL_CFG_REFRESH_SECONDS * 1000)) {
-                    // Before we do the refresh, check if motors were allowed
-                    bool motorsWereAllowed = motorsAllowed();
                     wCfgRefresh();
-                    if (motorsAllowed()) {
-                        if (!motorsWereAllowed) {
-                            // Motors are now allowed but didn't used to be
-                            W_LOG_INFO("CONFIGURATION CHANGE motors on.");
-                        }
-                    } else {
-                        if (motorsWereAllowed) {
-                            // Motors are no longer allowed, do an organised stop
-                            W_LOG_INFO("CONFIGURATION CHANGE motors off.");
-                            motorsOff(steps);
-                        }
+                    if (!motorsAllowed()) {
+                        motorsOff(steps);
+                    }
+                    if (!lightsAllowed()) {
+                        wLedModeConstantSet(W_LED_BOTH, 0, 0, W_CONTROL_LED_RAMP_RATE_MS);
                     }
                     refreshCfgTicks = 0;
                 }
@@ -668,8 +660,11 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                             if (gContext.intervalCountTicks >= msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
                                 // If there is no interval to wait,
                                 // create a new step list if required
-                                if (stepListSet(&focusPointView, stepsPerPixelX100, steps)) {
-                                    wLedModeConstantSet(W_LED_BOTH, 0, 100, 500);
+                                if (stepListSet(&focusPointView, stepsPerPixelX100, steps) &&
+                                    lightsAllowed()) {
+                                    wLedModeConstantSet(W_LED_BOTH, 0,
+                                                        W_CONTROL_LED_ACTIVE_PERCENT,
+                                                        W_CONTROL_LED_RAMP_RATE_MS);
                                 }
                             } else {
                                 if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_GUARD_MS)) {
@@ -693,7 +688,11 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                                 if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
                                     W_LOG_DEBUG("inter-movement wait (%d ms) now over.",
                                                 W_CONTROL_MOTOR_MOVE_INTERVAL_MS);
-                                    wLedModeConstantSet(W_LED_BOTH, 0, 10, 500);
+                                    if (lightsAllowed()) {
+                                        wLedModeConstantSet(W_LED_BOTH, 0,
+                                                            W_CONTROL_LED_IDLE_PERCENT,
+                                                            W_CONTROL_LED_RAMP_RATE_MS);
+                                    }
                                 }
                             }
 
@@ -872,8 +871,10 @@ int wControlStart(bool staticCamera, bool cfgIgnore)
             if (errorCode == 0) {
                 // We're up
                 if (lightsAllowed()) {
-                    wLedModeConstantSet(W_LED_BOTH, 0, 10, 1000);
-                    wLedOverlayRandomBlinkSet(5);
+                    wLedModeConstantSet(W_LED_BOTH, 0,
+                                        W_CONTROL_LED_IDLE_PERCENT,
+                                        W_CONTROL_LED_RAMP_RATE_MS);
+                    wLedOverlayRandomBlinkSet(W_CONTROL_LED_RANDOM_BLINK_RATE_PER_MINUTE);
                 }
             } else {
                  wImageProcessingFocusConsume(nullptr);

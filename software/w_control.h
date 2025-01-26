@@ -103,6 +103,32 @@
 # define W_CONTROL_MOVE_RAMP_PERCENT 30
 #endif
 
+#ifndef W_CONTROL_LED_RAMP_RATE_MS
+/** Ramp rate for the LEDs, to make things look more organic.
+ */
+# define W_CONTROL_LED_RAMP_RATE_MS 1000
+#endif
+
+#ifndef W_CONTROL_LED_IDLE_PERCENT
+/** The brightness of the LEDs when idle: jsut 10% is enough
+ * with these ultra-bright ones.
+ */
+# define W_CONTROL_LED_IDLE_PERCENT 10
+#endif
+
+#ifndef W_CONTROL_LED_ACTIVE_PERCENT
+/** The brightness of the LEDs when active.
+ */
+# define W_CONTROL_LED_ACTIVE_PERCENT 100
+#endif
+
+#ifndef W_CONTROL_LED_RANDOM_BLINK_RATE_PER_MINUTE
+/** The blink rate per minute; by default a range
+ * of up to 10 seconds will be added to this.
+ */
+# define W_CONTROL_LED_RANDOM_BLINK_RATE_PER_MINUTE 5
+#endif
+
 #ifndef W_CONTROL_STEP_INTERVAL_MAX_MS
 /** The maximum interval between steps, applied at the start
  * of the ramping period (will be zero by the end of the ramping

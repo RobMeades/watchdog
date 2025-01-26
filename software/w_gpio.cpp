@@ -393,8 +393,8 @@ static void pwmLoop(int timerFd, bool *keepGoing, void *context)
         while (*keepGoing && wUtilKeepGoing()) {
             // Block waiting for the PWM timer to go off for up to a time,
             // or for CTRL-C to land
-            // Change the level of a PWM pin only at the end of a PWM period
-            // to avoid any chance of flicker
+            // Allow the commanded level of a PWM pin to change only at the
+            // end of a PWM count period
             memcpy((void *) gpioPwmPinCopy, gPwmPin, sizeof(gPwmPin));
             int numExpiries = wUtilBlockTimer(timerFd);
             for (int x = 0; x < numExpiries; x++) {

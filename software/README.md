@@ -314,7 +314,7 @@ sudo systemctl enable watchdog
 
 Note: if you get the `.service` file onto the Pi with `sftp` or the like then you will need to convert the line-endings to Linux or `systemd` won't like it, see "A Note On Developing" below for how to do that.
 
-Check that the watchdog has atarted with:
+Check that the watchdog has started with:
 
 ```
 sudo systemctl status watchdog
