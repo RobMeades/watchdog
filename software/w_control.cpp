@@ -476,7 +476,7 @@ static bool step(wControlSteps_t *steps, bool staticCamera,
         if (movingAtStart && !movingAtEnd) {
             W_LOG_DEBUG_START("movement completed");
             if (intervalCountTicks) {
-                W_LOG_DEBUG_MORE(", waiting at least %d ms.",
+                W_LOG_DEBUG_MORE(", waiting at least %d ms",
                                  W_CONTROL_MOTOR_MOVE_INTERVAL_MS);
                 // If there was something on either list when we were called
                 // but there is nothing on either list anymore then start
@@ -579,7 +579,7 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
             W_LOG_ERROR("unable to get initial range for motors!");
         }
 
-        while (keepGoing && wUtilKeepGoing()) {
+        while (*keepGoing && wUtilKeepGoing()) {
             // Block waiting for our tick-timer to go off or for
             // CTRL-C to land
             int numExpiries = wUtilBlockTimer(timerFd);

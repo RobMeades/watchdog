@@ -447,6 +447,7 @@ static int calibrate(wMotor_t *motor)
 {
     int errorCode = -EINVAL;
     int steps = 0;
+    int throwSteps = 0;
 
     if (motor) {
         errorCode = 0;
@@ -455,37 +456,48 @@ static int calibrate(wMotor_t *motor)
         errorCode = move(motor, -motor->safetyLimit, &steps, true);
         if (errorCode == 0) {
             if (steps > (int) -motor->safetyLimit) {
-                steps = 0;
-                // Move the full safety distance to the max limit switch
-                errorCode = move(motor, motor->safetyLimit, &steps, true);
-                if (errorCode == 0) {
-                    if (steps < ((int) motor->safetyLimit)) {
-                        // steps is now the distance between the minimum
-                        // and maximum limits: set the current position
-                        // and the limits; the margin will be just inside
-                        // the limit switches so that we can move without
-                        // stressing them and we know that our movement
-                        // has become innaccurate if we hit them
-                        // Make the range a +/- one about a central origin
-                        steps >>= 1;
-                        motor->now = steps;
-                        steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
-                        motor->max = steps;
-                        motor->min = -steps;
-                        errorCode = 0;
-                        motor->calibrated = true;
-                        W_LOG_INFO("%s: calibrated range +/- %d step(s).",
-                                   motor->name, steps);
-                    } else {
-                        W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
-                                    " from the max limit did not reach the min"
-                                    " limit switch.", motor->name,
-                                    motor->safetyLimit);
+                // Now move so that we're just off the limit switch;
+                // this allows for any "throw" in a gear system
+                errorCode = stepAwayFromLimit(motor);
+                if (errorCode >= 0) {
+                    throwSteps = errorCode;
+                    steps = 0;
+                    // Move the full safety distance to the max limit switch
+                    errorCode = move(motor, motor->safetyLimit, &steps, true);
+                    if (errorCode == 0) {
+                        if (steps < ((int) motor->safetyLimit)) {
+                            // steps is now the distance between the minimum
+                            // and maximum limits: set the current position
+                            // and the limits; the margin will be just inside
+                            // the limit switches so that we can move without
+                            // stressing them and we know that our movement
+                            // has become innaccurate if we hit them
+                            // Make the range a +/- one about a central origin
+                            steps >>= 1;
+                            motor->now = steps;
+                            steps -= W_MOTOR_LIMIT_MARGIN_STEPS;
+                            motor->max = steps;
+                            motor->min = -steps;
+                            errorCode = 0;
+                            motor->calibrated = true;
+                            W_LOG_INFO_START("%s: calibrated range +/- %d step(s)",
+                                             motor->name, steps);
+                            if (throwSteps > 0) {
+                                W_LOG_INFO_MORE(" (ignoring %d throw steps)", throwSteps);
+                            }
+                            W_LOG_INFO_MORE(".");
+                            W_LOG_INFO_END;
+                        } else {
+                            W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s)"
+                                        " from the min limit did not reach the max"
+                                        " limit switch.", motor->name,
+                                        motor->safetyLimit);
+                        }
                     }
                 }
             } else {
                 W_LOG_ERROR("%s: unable to calibrate, moving %+d step(s) did"
-                            " not reach the max limit switch.", motor->name,
+                            " not reach the min limit switch.", motor->name,
                             motor->safetyLimit);
             }
         }

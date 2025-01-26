@@ -39,7 +39,7 @@
  * this you may also need to change W_LED_MORSE_DURATION_UNIT_MS
  * below.
  */
-# define W_LED_TICK_TIMER_PERIOD_MS 5
+# define W_LED_TICK_TIMER_PERIOD_MS 20
 #endif
 
 #ifndef W_LED_MORSE_MAX_SIZE
@@ -60,7 +60,7 @@
  *
  * The duration is chosen as a multiple of W_LED_TICK_TIMER_PERIOD_MS.
  */
-# define W_LED_MORSE_DURATION_UNIT_MS (W_LED_TICK_TIMER_PERIOD_MS * 40)
+# define W_LED_MORSE_DURATION_UNIT_MS (W_LED_TICK_TIMER_PERIOD_MS * 10)
 #endif
 
 #ifndef W_LED_MORSE_DURATION_MULTIPLIER_DOT
@@ -115,7 +115,7 @@
 #ifndef W_LED_PULSE_DURATION_MS
 /** THe default duration of a single pulse in milliseconds.
  */
-# define W_LED_PULSE_DURATION_MS 250
+# define W_LED_PULSE_DURATION_MS 500
 #endif
 
 #ifndef W_LED_RANDOM_BLINK_RATE_PER_MINUTE
@@ -263,8 +263,10 @@ int wLedOverlayPulseSet(wLed_t led,
 /** Add a random blink overlay (i.e. both LEDs switching off for a brief period)
  * as an overlay to the current mode.
  *
- * @param ratePerMinute  the number of blinks per minute, on average.
- * @param rangeSeconds   the timing variation between blinks in seconds.
+ * @param ratePerMinute  the number of blinks per minute.
+ * @param rangeSeconds   the timing variation between blinks in seconds;
+ *                       up to this number of seconds will be added
+ *                       between blinks, randomly calculated.
  * @param durationMs     the duration of the wink in milliseconds.
  * @return               zero on success else negative error code.
  */

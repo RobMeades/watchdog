@@ -131,7 +131,7 @@ typedef struct {
     uint64_t intervalTicks;
     uint64_t rangeTicks;
     uint64_t durationTicks;
-    uint64_t lastBlinkTicks;
+    uint64_t nextBlinkTicks;
 } wLedOverlayRandomBlink_t;
 
 /** The Morse elements (clearer than just using true and false).
@@ -371,16 +371,14 @@ static int randomBlink(wLedOverlayRandomBlink_t *randomBlink,
     int levelPercent = -1;
 
     if (randomBlink) {
-        if ((randomBlink->lastBlinkTicks > 0) &&
-            (randomBlink->lastBlinkTicks < nowTick) && 
-            (nowTick - randomBlink->lastBlinkTicks < randomBlink->durationTicks)) {
-            levelPercent = 0;
-        } else {
-            if (nowTick > randomBlink->lastBlinkTicks +
-                          randomBlink->intervalTicks +
-                          (randomBlink->rangeTicks * rand() / RAND_MAX)) {
-                randomBlink->lastBlinkTicks = nowTick;
+        if (randomBlink->nextBlinkTicks < nowTick) {
+            if (nowTick - randomBlink->nextBlinkTicks < randomBlink->durationTicks) {
+                // In a blink
                 levelPercent = 0;
+            } else {
+                // Past the blink, set the next one
+                randomBlink->nextBlinkTicks = nowTick + randomBlink->intervalTicks +
+                                              ((randomBlink->rangeTicks * rand()) / RAND_MAX);
             }
         }
     }
@@ -697,7 +695,7 @@ static void ledLoop(int timerFd, bool *keepGoing, void *context)
     if (timerFd >= 0) {
         W_LOG_DEBUG("LED loop has started.");
 
-        while (keepGoing && wUtilKeepGoing()) {
+        while (*keepGoing && wUtilKeepGoing()) {
             // Block waiting for our tick-timer to go off or for
             // CTRL-C to land
             int numExpiries = wUtilBlockTimer(timerFd);
@@ -1264,8 +1262,7 @@ static void msgHandlerLedOverlayRandomBlink(void *msgBody,
         if (ledContext->randomBlink) {
             wLedOverlayRandomBlink_t *randomBlink = ledContext->randomBlink;
             *randomBlink = *overlay;
-            // Adding rangeTicks / 2 here to avid underrun in randomBlink() 
-            randomBlink->lastBlinkTicks = ledContext->nowTick + (randomBlink->rangeTicks / 2);
+            randomBlink->nextBlinkTicks = ledContext->nowTick + randomBlink->intervalTicks;
         } else {
             W_LOG_ERROR("unable to allocate %d byte(s) for random blink!",
                         sizeof(wLedOverlayRandomBlink_t));
@@ -1687,8 +1684,9 @@ int wLedTest()
     }
 
     if ((errorCode == 0) && wUtilKeepGoing()) {
-        W_LOG_INFO("%stesting blinking for 15 seconds.", prefix);
-        errorCode = wLedOverlayRandomBlinkSet(10, 2);
+        W_LOG_INFO("%stesting blinking (every 3 seconds with a lateness of"
+                   " up to 3 seconds) for 15 seconds.", prefix);
+        errorCode = wLedOverlayRandomBlinkSet(20, 3);
         if (errorCode == 0) {
             sleep(15);
         }
@@ -1870,8 +1868,8 @@ int wLedTest()
         errorCode = wLedModeConstantSet();
         if (errorCode == 0) {
             sleep(2);
-            W_LOG_INFO("%s%s LED brought down by 90%% over two seconds.", prefix, gLedStr[W_LED_LEFT]);
-            errorCode = wLedLevelScaleSet(W_LED_LEFT, 10, 2000);
+            W_LOG_INFO("%s%s LED brought down by 99%% over two seconds.", prefix, gLedStr[W_LED_LEFT]);
+            errorCode = wLedLevelScaleSet(W_LED_LEFT, 1, 2000);
             if (errorCode == 0) {
                 sleep(5);
                 W_LOG_INFO("%s%s LED brought down by 70%% over two seconds.", prefix, gLedStr[W_LED_RIGHT]);
@@ -1890,6 +1888,14 @@ int wLedTest()
                     }
                 }
             }
+        }
+    }
+
+    if ((errorCode == 0) && wUtilKeepGoing()) {
+        // Switch both LEDs off between tests
+        errorCode = wLedModeConstantSet(W_LED_BOTH, 0, 0);
+        if (errorCode == 0) {
+            sleep(2);
         }
     }
 

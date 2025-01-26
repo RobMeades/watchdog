@@ -322,8 +322,8 @@ int wCameraInit()
                                   W_CAMERA_WIDTH_PIXELS,
                                   W_CAMERA_HEIGHT_PIXELS);
 
-#if W_CAMERA_UPSIDE_DOWN
-            gContext->cameraCfg->orientation = libcamera::Orientation::Rotate0 * libcamera::Transform::VFlip;
+#if W_CAMERA_ROTATED_180
+            gContext->cameraCfg->orientation = libcamera::Orientation::Rotate180;
 #endif
 
             // Validate and apply the configuration

@@ -186,8 +186,8 @@ static const char *gBiasStr[] = {"none", "pull down", "pull up"};
 static uint64_t gInputReadCount = 0;
 
 // Monitor the start and stop time of GPIO reading, purely for information.
-static std::chrono::system_clock::time_point gInputReadStart;
-static std::chrono::system_clock::time_point gInputReadStop;
+static std::chrono::system_clock::time_point gInputReadStart = {};
+static std::chrono::system_clock::time_point gInputReadStop = {};
 
 // Remember the number of times the GPIO read thread has not been called
 // dead on time, purely for information.
@@ -337,7 +337,7 @@ static void readLoop(int timerFd, bool *keepGoing, void *context)
 
     gInputReadStart = std::chrono::system_clock::now();
     W_LOG_DEBUG("GPIO read loop has started");
-    while (keepGoing && wUtilKeepGoing()) {
+    while (*keepGoing && wUtilKeepGoing()) {
 
         // Block waiting for the tick-timer to go off for up to a time,
         // or for CTRL-C to land
@@ -390,7 +390,7 @@ static void pwmLoop(int timerFd, bool *keepGoing, void *context)
 
     if (gpioPwmPinCopy) {
         W_LOG_DEBUG("GPIO PWM loop has started");
-        while (keepGoing && wUtilKeepGoing()) {
+        while (*keepGoing && wUtilKeepGoing()) {
             // Block waiting for the PWM timer to go off for up to a time,
             // or for CTRL-C to land
             // Change the level of a PWM pin only at the end of a PWM period
@@ -584,9 +584,13 @@ void wGpioDeinit()
 {
     struct gpiod_line *line;
 
-    if (gKeepGoing) {
-        // If we have run, print some diagnostic info
-        uint64_t gpioReadsPerInput = gInputReadCount / W_UTIL_ARRAY_COUNT(gInputPin);
+    // Stop the threads and their timers
+    wUtilThreadTickedStop(&gTimerReadFd, &gThreadRead, &gKeepGoing);
+    wUtilThreadTickedStop(&gTimerPwmFd, &gThreadPwm, &gKeepGoing);
+
+    // If we have run, print some diagnostic info
+    uint64_t gpioReadsPerInput = gInputReadCount / W_UTIL_ARRAY_COUNT(gInputPin);
+    if (gpioReadsPerInput > 0) {
         W_LOG_INFO_START("each GPIO input read (and debounced) every %lld ms",
                          (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds> (gInputReadStop - gInputReadStart).count() *
                          W_GPIO_DEBOUNCE_THRESHOLD / gpioReadsPerInput);
@@ -597,11 +601,6 @@ void wGpioDeinit()
         W_LOG_INFO_MORE(".");
         W_LOG_INFO_END;
     }
-
-    // Stop the threads and their timers
-    wUtilThreadTickedStop(&gTimerReadFd, &gThreadRead, &gKeepGoing);
-    wUtilThreadTickedStop(&gTimerPwmFd, &gThreadPwm, &gKeepGoing);
-
     for (unsigned int x = 0; x < W_UTIL_ARRAY_COUNT(gInputPin); x++) {
         line = lineGet(x);
         if (line) {

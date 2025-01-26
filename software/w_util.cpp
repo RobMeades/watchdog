@@ -60,9 +60,9 @@ static void terminateSignalHandler(int signal)
 }
 
 // Stop a thread and timer.
-static void cleanUpThreadTimed(int *timerFd,
-                               std::thread *thread = nullptr,
-                               bool *keepGoingFlag = nullptr)
+static void cleanUpThreadTicked(int *timerFd,
+                                std::thread *thread = nullptr,
+                                bool *keepGoingFlag = nullptr)
 {
     if ((timerFd != nullptr) && (*timerFd >= 0)) {
         if (thread != nullptr) {
@@ -140,7 +140,7 @@ int wUtilThreadTickedStart(wCommonThreadPriority_t priority,
             }
             catch (int x) {
                 // Tidy up on error
-                cleanUpThreadTimed(&timerFdOrErrorCode);
+                cleanUpThreadTicked(&timerFdOrErrorCode);
                 timerFdOrErrorCode = -x;
                 W_LOG_ERROR("unable to start or set schedule of thread,"
                             " error code %d.", timerFdOrErrorCode);
@@ -152,14 +152,14 @@ int wUtilThreadTickedStart(wCommonThreadPriority_t priority,
             scheduling.sched_priority = W_COMMON_THREAD_REAL_TIME_PRIORITY(priority);
             if (pthread_setschedparam(thread->native_handle(),
                                       SCHED_FIFO, &scheduling) != 0) {
-                cleanUpThreadTimed(&timerFdOrErrorCode, thread, keepGoingFlag);
+                cleanUpThreadTicked(&timerFdOrErrorCode, thread, keepGoingFlag);
                 timerFdOrErrorCode = -errno;
             }
         }
         if (timerFdOrErrorCode >= 0) {
             // Set the thread name
             if (name && (pthread_setname_np(thread->native_handle(), name) < 0)) {
-                cleanUpThreadTimed(&timerFdOrErrorCode, thread, keepGoingFlag);
+                cleanUpThreadTicked(&timerFdOrErrorCode, thread, keepGoingFlag);
                 timerFdOrErrorCode = -errno;
             }
         }
@@ -171,7 +171,7 @@ int wUtilThreadTickedStart(wCommonThreadPriority_t priority,
 // Stop a thread and timer.
 void wUtilThreadTickedStop(int *timerFd, std::thread *thread, bool *keepGoingFlag)
 {
-    cleanUpThreadTimed(timerFd, thread, keepGoingFlag);
+    cleanUpThreadTicked(timerFd, thread, keepGoingFlag);
 }
 
 // Poll the given timer for expiry.
