@@ -441,6 +441,14 @@ function statusDisplayThing(timeNowMillis, statusCache, thingName,
             }
         }
     }
+    if (!str) {
+        // If there is no schedule and no override, obey the default
+        if (offNotOn) {
+            str = 'off';
+        } else {
+            str = 'on';
+        }
+    }
 
     if (indicatorElement) {
         // Remove any existing colour classes from the indicator
@@ -615,10 +623,10 @@ gOverrideSubmitButton.addEventListener('click', async () => {
                     gOverrideTypeLightsButton.innerHTML, "lights");
     }
 
-    let notification = null;
     if (gOverrideMotorsChanged || gOverrideLightsChanged) {
         if (Object.keys(overrideObject).length !== 0) {
             let newOverrideObject = {};
+            let notification = null;
             newOverrideObject['override'] = overrideObject;
             // Make a copy of gCfgData and merge the override there
             let newCfgData = {...structuredClone(gCfgData), ...newOverrideObject};
@@ -638,12 +646,18 @@ gOverrideSubmitButton.addEventListener('click', async () => {
             } catch (error) {
                 notification = 'Error "' + error + '" sending data';
             } 
+            if (notification != null) {
+                showNotification(notification);
+            }
         }
     } else {
-        notification = 'To change the schedule double-click or <CTRL>-enter'
-    }
-    if (notification != null) {
-        showNotification(notification);
+        // The user may have pressed the override submit button
+        // mistaking it for a schedule change submit button:
+        // go with the flow
+        if (gTableNumCellsSelected > 0) {
+            // Do the schedule change
+            scheduleChangeDialog();
+        }
     }
 });
 

@@ -259,6 +259,8 @@ static int parseJson(const char *buffer, unsigned int sizeBytes)
         if (json) {
             // If the JSON is parseable, we're good as far as errors are concerned
             errorCode = 0;
+            // Reset gCfg in case it was previously set
+            memset(&gCfg, 0, sizeof(gCfg));
             // Get the first "week" item, if present, in case we need to use it
             const cJSON *weekJson = cJSON_GetObjectItemCaseSensitive(json, "week");
             // Get the first "override" item, if present, in case we need to use it
