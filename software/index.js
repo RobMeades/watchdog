@@ -615,31 +615,35 @@ gOverrideSubmitButton.addEventListener('click', async () => {
                     gOverrideTypeLightsButton.innerHTML, "lights");
     }
 
-    if (Object.keys(overrideObject).length !== 0) {
-        let newOverrideObject = {};
-        newOverrideObject['override'] = overrideObject;
-        // Make a copy of gCfgData and merge the override there
-        let newCfgData = {...structuredClone(gCfgData), ...newOverrideObject};
-        let notification = null;
-        try {
-            const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
-            if (response.ok) {
-                notification = 'Override successfully written';
-                // Update our stored configuration to match
-                gCfgData = newCfgData;
-                // Update the status cache
-                statusCacheSet(gCfgData);
-                // Reset the values to make it clear they've been done
-                overrideInputReset();
-            } else {
-                notification = 'Error from server "' + response.status + '"';
-            }
-        } catch (error) {
-            notification = 'Error "' + error + '" sending data';
-        } 
-        if (notification != null) {
-            showNotification(notification);
+    let notification = null;
+    if (gOverrideMotorsChanged || gOverrideLightsChanged) {
+        if (Object.keys(overrideObject).length !== 0) {
+            let newOverrideObject = {};
+            newOverrideObject['override'] = overrideObject;
+            // Make a copy of gCfgData and merge the override there
+            let newCfgData = {...structuredClone(gCfgData), ...newOverrideObject};
+            try {
+                const response = await fetchHttpPost(JSON.stringify(newCfgData, null, 2), gCfgFileName);
+                if (response.ok) {
+                    notification = 'Override successfully written';
+                    // Update our stored configuration to match
+                    gCfgData = newCfgData;
+                    // Update the status cache
+                    statusCacheSet(gCfgData);
+                    // Reset the values to make it clear they've been done
+                    overrideInputReset();
+                } else {
+                    notification = 'Error from server "' + response.status + '"';
+                }
+            } catch (error) {
+                notification = 'Error "' + error + '" sending data';
+            } 
         }
+    } else {
+        notification = 'To change the schedule double-click or <CTRL>-enter'
+    }
+    if (notification != null) {
+        showNotification(notification);
     }
 });
 
