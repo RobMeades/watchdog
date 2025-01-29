@@ -303,9 +303,9 @@ static int stepAwayFromLimit(wMotor_t *motor)
     return stepsOrErrorCode;
 }
 
-// Try to move the given number of steps, returning
-// the number actually stepped in stepsTaken; being short
-// on steps does not constitute an error.  Will only move
+// Try to move the given number of steps, returning the
+// number actually stepped in stepsTaken; being short on
+// steps does not constitute an error.  Will only move
 // if calibrated unless evenIfUnCalibrated is true.
 // This advances motor->now if the motor is calibrated.
 // IMPORTANT: gMutex must be locked before this is called.
@@ -317,29 +317,44 @@ static int move(wMotor_t *motor, int steps, int *stepsTaken,
 
     if (motor) {
         if (motor->calibrated || evenIfUnCalibrated) {
+            bool calibrationRequired = false;
             errorCode = 0;
             if (steps > 0) {
                 if (motor->calibrated) {
-                    // Limit the steps against the calibrated maximum
+                    // Limit the steps against the calibrated
+                    // and user maximums
                     if (motor->now + steps > motor->max) {
                         steps = motor->max - motor->now;
+                        calibrationRequired = true;
+                    }
+                    if ((motor->userMax > 0) &&
+                        (motor->now + steps > motor->userMax)) {
+                        steps = motor->userMax - motor->now;
                     }
                 } else {
                     // Limit the steps against the hard-coded safety
                     if (steps > (int) motor->safetyLimit) {
                         steps = motor->safetyLimit;
+                        calibrationRequired = true;
                     }
                 }
             } else if (steps < 0) {
                 if (motor->calibrated) {
-                    // Limit the steps against the calibrated minimum
+                    // Limit the steps against the calibrated
+                    // and user minimums
                     if (motor->now + steps < motor->min) {
                         steps = motor->min - motor->now;
+                        calibrationRequired = true;
+                    }
+                    if ((motor->userMin < 0) && 
+                        (motor->now + steps < motor->userMin)) {
+                        steps = motor->userMin - motor->now;
                     }
                 } else {
                     // Limit the steps against the hard-coded safety
                     if (steps < -((int) motor->safetyLimit)) {
                         steps = -motor->safetyLimit;
+                        calibrationRequired = true;
                     }
                 }
             }
@@ -354,12 +369,12 @@ static int move(wMotor_t *motor, int steps, int *stepsTaken,
                 if (stepsCompleted < steps) {
                     W_LOG_WARN_START("%s: only %+d step(s) taken (%d short)",
                                      motor->name, stepsCompleted, steps - stepsCompleted);
-                    if (motor->calibrated) {
+                    if (calibrationRequired && motor->calibrated) {
                         W_LOG_WARN_MORE(" motor now needs calibration");
                     }
                     W_LOG_WARN_MORE(".");
                     W_LOG_WARN_END;
-                    if (motor->calibrated) {
+                    if (calibrationRequired && motor->calibrated) {
 #if W_MOTOR_CALIBRATE_ONE_CALIBRATE_ALL
                         // If one motor has become uncalibrated we declare
                         // all uncalibrated
@@ -399,18 +414,36 @@ static int moveToRest(wMotor_t *motor, int *stepsTaken = nullptr)
     if (motor) {
         if (motor->calibrated) {
             errorCode = 0;
-            switch (motor->restPosition) {
-                case W_MOTOR_REST_POSITION_CENTRE:
-                    steps = -motor->now;
+            if (motor->userRestSet) {
+                steps = motor->userRest - motor->now;
+            } else {
+                switch (motor->restPosition) {
+                    case W_MOTOR_REST_POSITION_CENTRE:
+                        steps = -motor->now;
+                        break;
+                    case W_MOTOR_REST_POSITION_MAX:
+                    {
+                        int motorMax = motor->max;
+                        if ((motor->userMax > 0) &&
+                            (motor->userMax < motor->max)) {
+                            motorMax = motor->userMax;
+                        }
+                        steps = motorMax - motor->now;
+                    }
                     break;
-                case W_MOTOR_REST_POSITION_MAX:
-                    steps = motor->max - motor->now;
+                    case W_MOTOR_REST_POSITION_MIN:
+                    {
+                        int motorMin = motor->min;
+                        if ((motor->userMin < 0) &&
+                            (motor->userMin > motor->min)) {
+                            motorMin = motor->userMin;
+                        }
+                        steps = motorMin - motor->now;
+                    }
                     break;
-                case W_MOTOR_REST_POSITION_MIN:
-                    steps = motor->min - motor->now;
-                    break;
-                default:
-                    break;
+                    default:
+                        break;
+                }
             }
 
             if (steps != 0) {
@@ -441,6 +474,29 @@ static int moveToRest(wMotor_t *motor, int *stepsTaken = nullptr)
     return errorCode;
 }
 
+// Limit the user rest position; should be called after calibration
+// of if a user max/min has been set.  ONLY HAS AN EFFECT if the
+// motor is calibrated.
+static void limitUserRest(wMotor_t *motor)
+{
+    if (motor && motor->calibrated) {
+        int x = motor->max;
+        if ((motor->userMax > 0) && (x > motor->userMax)) {
+            x = motor->userMax;
+        }
+        if (motor->userRest > x) {
+            motor->userRest = x;
+        }
+        x = motor->min;
+        if ((motor->userMin < 0) && (x < motor->userMin)) {
+            x = motor->userMin;
+        }
+        if (motor->userRest < x) {
+            motor->userRest = x;
+        }
+    }
+}
+
 // Calibrate the movement range of a motor.
 // IMPORTANT: gMutex must be locked before this is called.
 static int calibrate(wMotor_t *motor)
@@ -468,7 +524,7 @@ static int calibrate(wMotor_t *motor)
                         if (steps < ((int) motor->safetyLimit)) {
                             // steps is now the distance between the minimum
                             // and maximum limits: set the current position
-                            // and the limits; the margin will be just inside
+                            // and the limits.  The margin will be just inside
                             // the limit switches so that we can move without
                             // stressing them and we know that our movement
                             // has become innaccurate if we hit them
@@ -480,6 +536,7 @@ static int calibrate(wMotor_t *motor)
                             motor->min = -steps;
                             errorCode = 0;
                             motor->calibrated = true;
+                            limitUserRest(motor);
                             W_LOG_INFO_START("%s: calibrated range +/- %d step(s)",
                                              motor->name, steps);
                             if (throwSteps > 0) {
@@ -658,12 +715,78 @@ int wMotorRangeGet(wMotorType_t type)
         rangeOrErrorCode = -EBADF;
         if (motor->calibrated) {
             rangeOrErrorCode = motor->max - motor->min;
+            int rangeUser = motor->userMax - motor->userMin;
+            if ((rangeUser > 0) && (rangeUser < rangeOrErrorCode)) {
+                rangeOrErrorCode = rangeUser;
+            }
         }
 
         gMutex.unlock();
     }
 
     return rangeOrErrorCode;
+}
+
+// Set the range of a motor.
+int wMotorRangeSet(wMotorType_t type, int maxSteps, int minSteps)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        wMotor_t *motor = &(gMotor[type]);
+        motor->userMax = maxSteps;
+        motor->userMin = minSteps;
+        // Re-limit the user rest position, if there is one
+        limitUserRest(motor);
+        errorCode = 0;
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Set the rest position of a motor.
+int wMotorRestSet(wMotorType_t type, int steps)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        wMotor_t *motor = &(gMotor[type]);
+        motor->userRest = steps;
+        limitUserRest(motor);
+        motor->userRestSet = true;
+        errorCode = 0;
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
+}
+
+// Reset the rest position of a motor to default.
+int wMotorRestReset(wMotorType_t type)
+{
+    int errorCode = -EINVAL;
+
+    if (type < W_UTIL_ARRAY_COUNT(gMotor)) {
+
+        gMutex.lock();
+
+        wMotor_t *motor = &(gMotor[type]);
+        motor->userRestSet = false;
+        errorCode = 0;
+
+        gMutex.unlock();
+    }
+
+    return errorCode;
 }
 
 // Deinitialise the motors.

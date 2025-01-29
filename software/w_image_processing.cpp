@@ -232,6 +232,7 @@ typedef struct {
     std::atomic<bool> resetBackgroundSubtractor;
     wCommonFrameFunction_t *outputCallback;
     wImageProcessingFocusFunction_t *focusCallback;
+    void *focusCallbackContext;
 } wImageProcessingContext_t;
 
 /** Image processing message types; just the one.
@@ -590,7 +591,8 @@ static void msgHandlerImageProcessingImageBuffer(void *msgBody,
     int areaPixels = findFocusFrame(largeContours, &point);
     if ((areaPixels > 0) && (frameToViewAndLimit(&point, &point) == 0) &&
         imageProcessingContext->focusCallback) {
-        imageProcessingContext->focusCallback(point, areaPixels);
+        imageProcessingContext->focusCallback(point, areaPixels,
+                                              imageProcessingContext->focusCallbackContext);
     }
 
 #if 1
@@ -772,12 +774,14 @@ int wImageProcessingInit()
 }
 
 // Become a consumer of the focus point.
-int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback)
+int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback,
+                                 void *context)
 {
     int errorCode = -EBADF;
 
     if (gContext) {
         gContext->focusCallback = focusCallback;
+        gContext->focusCallbackContext = context;
         errorCode = 0;
     }
 

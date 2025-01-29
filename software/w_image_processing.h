@@ -51,9 +51,12 @@
  *                    centre of the screen with the axes just like
  *                    a conventional X/Y graph.
  * @param areaPixels  the area of the focus point in pixels.
+ * @param context     the context parameter that was passed to
+ (                    wImageProcessingFocusConsume().
  */
 typedef int (wImageProcessingFocusFunction_t)(cv::Point pointView,
-                                              int areaPixels);
+                                              int areaPixels,
+                                              void *context);
 
 /* ----------------------------------------------------------------
  * FUNCTIONS
@@ -79,9 +82,12 @@ int wImageProcessingInit();
  *                       store the new focus point and return
  *                       as quickly as possible.  Use nullptr to
  *                       remove a previous focus callback.
+ * @param context        user context that will be passed to
+ *                       focusCallback as its last parameter.
  * @return               zero on success else negative error code.
  */
-int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback);
+int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback,
+                                 void *context = nullptr);
 
 /** Set the focus point to be drawn on the processed image.
  *

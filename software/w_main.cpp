@@ -106,8 +106,28 @@ int main(int argc, char *argv[])
             errorCode = wGpioInit();
         }
         if (errorCode == 0) {
-            // Initialise the motors
-            errorCode = wMotorInit(commandLineParameters.doNotOperateMotors);;
+            // Initialise the motors and set any user rest/range values
+            errorCode = wMotorInit(commandLineParameters.doNotOperateMotors);
+            if (errorCode == 0) {
+                errorCode = wMotorRestSet(W_MOTOR_TYPE_VERTICAL,
+                                          commandLineParameters.restVerticalSteps);
+            }
+            if (errorCode == 0) {
+                wMotorMoveToRest(W_MOTOR_TYPE_VERTICAL);
+                errorCode = wMotorRestSet(W_MOTOR_TYPE_ROTATE,
+                                          commandLineParameters.restHorizontalSteps);
+            }
+            if (errorCode == 0) {
+                wMotorMoveToRest(W_MOTOR_TYPE_ROTATE);
+                errorCode = wMotorRangeSet(W_MOTOR_TYPE_VERTICAL,
+                                           commandLineParameters.lookUpLimitSteps,
+                                           commandLineParameters.lookDownLimitSteps);
+            }
+            if (errorCode == 0) {
+                errorCode = wMotorRangeSet(W_MOTOR_TYPE_ROTATE,
+                                           commandLineParameters.lookRightLimitSteps,
+                                           commandLineParameters.lookLeftLimitSteps);
+            }
         }
         if (errorCode == 0) {
             // Initialise messaging
@@ -162,7 +182,8 @@ int main(int argc, char *argv[])
             // by starting control operations, which will request the video
             // encode to start encoding, which will in turn start the image
             // processing code, which will in turn start the camera
-            errorCode = wControlStart(commandLineParameters.flagStaticCamera);
+            errorCode = wControlStart(commandLineParameters.flagStaticCamera,
+                                      commandLineParameters.motionContinuousSeconds);
 
             W_LOG_INFO("running, press CTRL-C to stop.");
             while ((errorCode == 0) && wUtilKeepGoing()) {

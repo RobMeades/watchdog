@@ -68,7 +68,7 @@ typedef struct {
  */
 typedef struct {
     int stepUnit; // +1 for positive, -1 for negative
-    std::list<int> durationTicksList; // Duration is signed as we use negative values in a count-down
+    std::list<int64_t> durationTicksList; // Duration is signed as we use negative values in a count-down
 } wControlSteps_t;
 
 /** Context for control message handlers.
@@ -79,8 +79,12 @@ typedef struct {
     std::mutex mutex;
     std::atomic<bool> staticCamera;
     std::atomic<bool> cfgIgnore;
+    std::atomic<int> motionContinuousSeconds;
     std::atomic<bool> moving;
-    std::atomic<int> intervalCountTicks;
+    std::atomic<int64_t> intervalCountTicks;
+    std::atomic<int> motionCount;
+    std::atomic<int> motionContinuousThresholdSeconds;
+    std::atomic<int> motionContinuousCountSeconds;
     wControlPointView_t focus;
 } wControlContext_t;
 
@@ -143,9 +147,11 @@ static wControlContext_t gContext = {};
 // Handle a focus change: conforms to the function signature of
 // wImageProcessingFocusFunction_t and just puts the focus change
 // on our queue.
-static int focusCallback(cv::Point pointView, int areaPixels)
+static int focusCallback(cv::Point pointView, int areaPixels, void *context)
 {
     int queueLengthOrErrorCode = -EBADF;
+
+    (void) context;
 
     if (gMsgQueueId >= 0) {
         wControlMsgBodyFocusChange_t msg = {.pointView = pointView,
@@ -156,6 +162,17 @@ static int focusCallback(cv::Point pointView, int areaPixels)
     }
 
     return queueLengthOrErrorCode;
+}
+
+// Reset our focus data
+static void resetFocus(wControlPointView_t *focus)
+{
+    if (focus) {
+        focus->number = 0;
+        focus->totalPointView = {0, 0};
+        focus->oldestPointView = nullptr;
+        focus->averagePointView = {0, 0};
+    }
 }
 
 // Work out the distance squared to a point x, y from the origin.
@@ -173,7 +190,7 @@ static int64_t msToTicks(int64_t milliseconds)
 
 // Convert a time in ticks of the control loop into milliseconds;
 // this is only used for debug prints.
-static int ticksToMs(int ticks)
+static int ticksToMs(int64_t ticks)
 {
     return ticks * W_CONTROL_TICK_TIMER_PERIOD_MS;
 }
@@ -376,14 +393,14 @@ static bool stepListSet(const cv::Point *focus,
                 // For each step, create a duration, ramping up at the
                 // start and down at the end
                 unsigned int rampUpDownSteps = ((numberOfSteps[m] * W_CONTROL_MOVE_RAMP_PERCENT) / 100) >> 1;
-                unsigned int durationAdderTicks = msToTicks(W_CONTROL_STEP_INTERVAL_MAX_MS) / rampUpDownSteps;
+                int64_t durationAdderTicks = msToTicks(W_CONTROL_STEP_INTERVAL_MAX_MS) / rampUpDownSteps;
                 unsigned int rampUpStopStep = rampUpDownSteps;
                 unsigned int rampDownStartStep = numberOfSteps[m] - rampUpDownSteps;
                 // Clear the list
                 (steps + m)->durationTicksList.clear();
                 for (unsigned int s = 0; s < numberOfSteps[m]; s++) {
                     // Work out the duration of this step
-                    int durationTicks = 1;
+                    int64_t durationTicks = 1;
                     if (s < rampUpStopStep) {
                         durationTicks += durationAdderTicks * (rampUpStopStep - s);
                     } else if (s > rampDownStartStep) {
@@ -417,8 +434,8 @@ static bool stepListSet(const cv::Point *focus,
 // Perform a step: steps must be a pointer to an array
 // of size W_MOTOR_TYPE_MAX_NUM.
 static bool step(wControlSteps_t *steps, bool staticCamera,
-                 std::atomic<int> *intervalCountTicks,
-                 int *motorRecalibrateCountTicks,
+                 std::atomic<int64_t> *intervalCountTicks,
+                 int64_t *motorRecalibrateCountTicks,
                  unsigned int *calibrationAttemptFailureCount)
 {
     bool movingAtStart = false;
@@ -430,7 +447,7 @@ static bool step(wControlSteps_t *steps, bool staticCamera,
             if (!item->durationTicksList.empty()) {
                 movingAtStart = true;
                 // Get the duration of the next step
-                int durationTicks = item->durationTicksList.front();
+                int64_t durationTicks = item->durationTicksList.front();
                 item->durationTicksList.pop_front();
                 // If the duration is positive, perform the step
                 if (durationTicks > 0) {
@@ -495,10 +512,10 @@ static bool step(wControlSteps_t *steps, bool staticCamera,
 // motorCalibrateAndMoveToRest()) on the basis of a counter and
 // a limit. steps, if present, must be a pointer to an array
 // of size W_MOTOR_TYPE_MAX_NUM.
-static bool timedMotorMove(int *tickCount, int limitTicks,
+static bool timedMotorMove(int64_t *tickCount, int64_t limitTicks,
                            int (*function)(wMotorType_t, unsigned int *),
                            unsigned int *calibrationAttemptFailureCount = nullptr,
-                           std::atomic<int> *intervalCountTicks = nullptr,
+                           std::atomic<int64_t> *intervalCountTicks = nullptr,
                            wControlSteps_t *steps = nullptr)
 {
     bool called = false;
@@ -559,10 +576,11 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
     if (timerFd >= 0) {
         W_LOG_DEBUG("control loop has started.");
 
-        int refreshCfgTicks = 0;
-        int returnToRestCountTicks = 0;
-        int inactivityReturnToRestCountTicks = 0;
-        int motorRecalibrateCountTicks = 0;
+        int64_t motionStartTicks = 0;
+        int64_t refreshCfgTicks = 0;
+        int64_t returnToRestCountTicks = 0;
+        int64_t inactivityReturnToRestCountTicks = 0;
+        int64_t motorRecalibrateCountTicks = 0;
         bool activityFlag = false;
         unsigned int calibrationAttemptFailureCount = 0;
         // These arrays have the same order as wMotorType_t, i.e.
@@ -596,7 +614,7 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                         motorsOff(steps);
                     }
                     if (!lightsAllowed()) {
-                        wLedModeConstantSet(W_LED_BOTH, 0, 0, W_CONTROL_LED_RAMP_RATE_MS);
+                        wLedModeConstantSet(W_LED_BOTH, 0, 0, W_CONTROL_LED_RAMP_DOWN_RATE_MS);
                     }
                     refreshCfgTicks = 0;
                 }
@@ -656,6 +674,41 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                             cv::Point focusPointView = gContext.focus.averagePointView;
                             gContext.mutex.unlock();
 
+                            motionStartTicks += numExpiries;
+                            if (motionStartTicks >= msToTicks(1000)) {
+                                // Have there been any focus changes in the last second?
+                                if (gContext.motionCount > 0) {
+                                    // If there has been motion, count it
+                                    if (gContext.motionContinuousCountSeconds == 0) {
+                                        W_LOG_DEBUG("motion detected.");
+                                    }
+                                    gContext.motionContinuousCountSeconds++;
+                                } else {
+                                    // No motion in that time, reset the count
+                                    if (gContext.motionContinuousCountSeconds > 0) {
+                                        // Set the threshold to minus the interval count,
+                                        // so that we will be sensitive to movement immediately
+                                        // after it has stopped and will still be after the
+                                        // interval has expired
+                                        gContext.motionContinuousThresholdSeconds = -(W_CONTROL_MOTOR_MOVE_INTERVAL_MS / 1000);
+                                        W_LOG_DEBUG("motion stopped after %d second(s), threshold"
+                                                    " now %d second(s).",
+                                                    (int) gContext.motionContinuousCountSeconds,
+                                                    (int) (gContext.motionContinuousThresholdSeconds));
+                                    }
+                                    if (gContext.motionContinuousThresholdSeconds < gContext.motionContinuousSeconds) {
+                                        // Increment the threshold again every second after motion has stopped
+                                        gContext.motionContinuousThresholdSeconds++;
+                                        W_LOG_DEBUG("threshold now %d second(s).",
+                                                    (int) (gContext.motionContinuousThresholdSeconds));
+                                    }
+                                    gContext.motionContinuousCountSeconds = 0;
+                                }
+                                // Start a new time period
+                                gContext.motionCount = 0;
+                                motionStartTicks = 0;
+                            }
+
                             // Not moving, check the interval counter
                             if (gContext.intervalCountTicks >= msToTicks(W_CONTROL_MOTOR_MOVE_INTERVAL_MS)) {
                                 // If there is no interval to wait,
@@ -664,7 +717,7 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                                     lightsAllowed()) {
                                     wLedModeConstantSet(W_LED_BOTH, 0,
                                                         W_CONTROL_LED_ACTIVE_PERCENT,
-                                                        W_CONTROL_LED_RAMP_RATE_MS);
+                                                        W_CONTROL_LED_RAMP_UP_RATE_MS);
                                 }
                             } else {
                                 if (gContext.intervalCountTicks == msToTicks(W_CONTROL_MOTOR_MOVE_GUARD_MS)) {
@@ -675,12 +728,9 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                                     // we have already moved towards, IYSWIM
                                     gContext.mutex.lock();
                                     wControlPointView_t *focus = &(gContext.focus);
-                                    focus->number = 0;
-                                    focus->totalPointView = {0, 0};
-                                    focus->oldestPointView = nullptr;
-                                    focus->averagePointView = {0, 0};
-                                    gContext.mutex.unlock();
+                                    resetFocus(focus);
                                     focusPointView = focus->averagePointView;
+                                    gContext.mutex.unlock();
                                     W_LOG_DEBUG("focus point reset.");
                                 }
                                 // Increment the interval count
@@ -691,7 +741,7 @@ static void controlLoop(int timerFd, bool *keepGoing, void *context)
                                     if (lightsAllowed()) {
                                         wLedModeConstantSet(W_LED_BOTH, 0,
                                                             W_CONTROL_LED_IDLE_PERCENT,
-                                                            W_CONTROL_LED_RAMP_RATE_MS);
+                                                            W_CONTROL_LED_RAMP_DOWN_RATE_MS);
                                     }
                                 }
                             }
@@ -768,32 +818,41 @@ static void msgHandlerControlFocusChange(void *msgBody,
         controlContext->mutex.lock();
 
         wControlPointView_t *focus = &(controlContext->focus);
-        cv::Point *pointView = &(msg->pointView);
-        // Calculate the new total, and hence the average
-        if (focus->oldestPointView == nullptr) {
-            // Haven't yet filled the buffer up, just add the
-            // new point and update the total
-            focus->pointView[focus->number] = *pointView;
-            focus->number++;
-            focus->totalPointView += *pointView;
-            if (focus->number >= W_UTIL_ARRAY_COUNT(focus->pointView)) {
-                focus->oldestPointView = &(focus->pointView[0]);
+        // Increment the motion count
+        controlContext->motionCount++;
+        // If we've been continuously getting focus changes for long enough,
+        // include the focus change in our average
+        if (controlContext->motionContinuousCountSeconds >= controlContext->motionContinuousThresholdSeconds) {
+            cv::Point *pointView = &(msg->pointView);
+            // Calculate the new total, and hence the average
+            if (focus->oldestPointView == nullptr) {
+                // Haven't yet filled the buffer up, just add the
+                // new point and update the total
+                focus->pointView[focus->number] = *pointView;
+                focus->number++;
+                focus->totalPointView += *pointView;
+                if (focus->number >= W_UTIL_ARRAY_COUNT(focus->pointView)) {
+                    focus->oldestPointView = &(focus->pointView[0]);
+                }
+            } else {
+                // The buffer is full, need to rotate it
+                focus->totalPointView -= *focus->oldestPointView;
+                *focus->oldestPointView = *pointView;
+                focus->totalPointView += *pointView;
+                focus->oldestPointView++;
+                if (focus->oldestPointView >= focus->pointView + W_UTIL_ARRAY_COUNT(focus->pointView)) {
+                    focus->oldestPointView = &(focus->pointView[0]);
+                }
+            }
+
+            if (focus->number > 0) {
+                // Note: the average becomes an unsigned value unless the
+                // denominator is cast to an integer
+                focus->averagePointView = focus->totalPointView / (int) focus->number;
             }
         } else {
-            // The buffer is full, need to rotate it
-            focus->totalPointView -= *focus->oldestPointView;
-            *focus->oldestPointView = *pointView;
-            focus->totalPointView += *pointView;
-            focus->oldestPointView++;
-            if (focus->oldestPointView >= focus->pointView + W_UTIL_ARRAY_COUNT(focus->pointView)) {
-                focus->oldestPointView = &(focus->pointView[0]);
-            }
-        }
-
-        if (focus->number > 0) {
-            // Note: the average becomes an unsigned value unless the
-            // denominator is cast to an integer
-            focus->averagePointView = focus->totalPointView / (int) focus->number;
+            // Reset the focus averaging to remove stale data
+            resetFocus(focus);
         }
 
         controlContext->mutex.unlock();
@@ -855,16 +914,23 @@ int wControlInit()
 }
 
 // Start control operations.
-int wControlStart(bool staticCamera, bool cfgIgnore)
+int wControlStart(bool staticCamera, int motionContinuousSeconds,
+                  int lookUpLimitSteps, int lookDownLimitSteps,
+                  int lookRightLimitSteps, int lookLeftLimitSteps,
+                  bool cfgIgnore)
 {
     int errorCode = -EBADF;
 
-    if (gTimerFd >= 0) {
+    if ((gTimerFd >= 0) && (motionContinuousSeconds >= 0)) {
         gContext.staticCamera = staticCamera;
         gContext.cfgIgnore = cfgIgnore;
         gContext.intervalCountTicks = INT_MAX;
+        gContext.motionContinuousSeconds = motionContinuousSeconds;
+        gContext.motionContinuousThresholdSeconds = motionContinuousSeconds;
+        gContext.motionCount = 0;
+        gContext.motionContinuousCountSeconds = 0;
         // Set ourselves up as a consumer of focus from the image processing
-        errorCode = wImageProcessingFocusConsume(focusCallback);
+        errorCode = wImageProcessingFocusConsume(focusCallback, &gContext);
         if (errorCode == 0) {
             // Start video encoding
             errorCode = wVideoEncodeStart();
@@ -873,7 +939,7 @@ int wControlStart(bool staticCamera, bool cfgIgnore)
                 if (lightsAllowed()) {
                     wLedModeConstantSet(W_LED_BOTH, 0,
                                         W_CONTROL_LED_IDLE_PERCENT,
-                                        W_CONTROL_LED_RAMP_RATE_MS);
+                                        W_CONTROL_LED_RAMP_UP_RATE_MS);
                     wLedOverlayRandomBlinkSet(W_CONTROL_LED_RANDOM_BLINK_RATE_PER_MINUTE);
                 }
             } else {

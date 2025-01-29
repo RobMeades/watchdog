@@ -42,6 +42,13 @@ typedef struct {
     std::string cfgFilePath;
     bool flagStaticCamera;
     bool doNotOperateMotors;
+    int motionContinuousSeconds;
+    int restVerticalSteps;
+    int restHorizontalSteps;
+    int lookUpLimitSteps;
+    int lookDownLimitSteps;
+    int lookRightLimitSteps;
+    int lookLeftLimitSteps;
 } wCommandLineParameters_t;
 
 /* ----------------------------------------------------------------

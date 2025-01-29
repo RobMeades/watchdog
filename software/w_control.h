@@ -103,10 +103,20 @@
 # define W_CONTROL_MOVE_RAMP_PERCENT 30
 #endif
 
-#ifndef W_CONTROL_LED_RAMP_RATE_MS
-/** Ramp rate for the LEDs, to make things look more organic.
+#ifndef W_CONTROL_LED_RAMP_UP_RATE_MS
+/** Ramp-up rate for the LEDs, to make things look more organic.
  */
-# define W_CONTROL_LED_RAMP_RATE_MS 1000
+# define W_CONTROL_LED_RAMP_UP_RATE_MS 1000
+#endif
+
+#ifndef W_CONTROL_LED_RAMP_DOWN_RATE_MS
+/** Ramp-down rate for the LEDs; this is separate to the ramp-up
+ * rate as it needs to be longer to prevent the watchdog detecting
+ * changes in the magnitude of the reflection of its own eyes, when
+ * going idle, as movement, resulting in self-retriggering; 5 seconds
+ * is good.
+ */
+# define W_CONTROL_LED_RAMP_DOWN_RATE_MS 5000
 #endif
 
 #ifndef W_CONTROL_LED_IDLE_PERCENT
@@ -185,14 +195,49 @@ int wControlInit();
  * and wVideoEncodeInit() must have been called and returned success
  * for this function to succeed.
  *
- * @param staticCamera don't move the camera (noting that this does
- *                     not affect calibration, which wMotorInit()
- *                     will always carry out).
- * @param cfgIgnore    ignore what the cfg API is saying, i.e.
- *                     motors and lights are always on.
- * @return             zero on success else negative error code.
+ * Note that there is no normally no reason to set any of the
+ * limit values; these will be determined automatically by this
+ * API during calibration.  Only set a value if you have a particular
+ * need to constrain movement in a direction.
+ *
+ * @param staticCamera            don't move the camera (noting that
+ *                                this does  not affect calibration,
+ *                                which wMotorInit() will always carry
+ *                                out).
+ * @param motionContinuousSeconds motion must have been occurring for
+ *                                at least this number of seconds before
+ *                                control will react to it; useful, for
+ *                                instance, for ignoring fast moving objects
+ *                                like cars.
+ * @param lookUpLimitSteps        use this as the look-up limit for normal
+ *                                operation, in stepper-motor steps; it
+ *                                will be ignored during calibration, zero
+ *                                means no limit, value is an offset from the
+ *                                calibrated up/down centre.
+ * @param lookDownLimitSteps      use this as the look-down limit for normal
+ *                                operation, in stepper-motor steps; it
+ *                                will be ignored during calibration, zero
+ *                                means no limit, value is and offset from the
+ *                                calibrated up/down centre.
+ * @param lookRightLimitSteps     use this as the look-right limit for normal
+ *                                operation, in stepper-motor steps; it
+ *                                will be ignored during calibration, zero
+ *                                means no limit, value is an offset from the
+ *                                calibrated left/right centre.
+ * @param lookLeftLimitSteps      use this as the look-left limit for normal
+ *                                operation, in stepper-motor steps; it
+ *                                will be ignored during calibration, zero
+ *                                means no limit, value is an offset from the
+ *                                calibrated left/right centre.
+ * @param cfgIgnore               ignore what the cfg API is saying, i.e.
+ *                                motors and lights are always on.
+ * @return                        zero on success else negative error code.
  */
-int wControlStart(bool staticCamera = false, bool cfgIgnore = false);
+int wControlStart(bool staticCamera = false,
+                  int motionContinuousSeconds = 0,
+                  int lookUpLimitSteps = 0, int lookDownLimitSteps = 0,
+                  int lookLeftLimitSteps = 0, int lookRightLimitSteps = 0,
+                  bool cfgIgnore = false);
 
 /** Stop control operations; you do not have to call this function
  * on exit, wControlDeinit() will tidy up appropriately.

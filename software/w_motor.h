@@ -132,6 +132,10 @@ typedef struct {
     int senseDirection; // 1 if a 1 at pinDirection moves towards max, else -1
     wMotorRestPosition_t restPosition;
     int lastUnitStep; // Needed since Linux doesn't allow the state of an output pin to be read
+    int userMax;  // The user-override maximum limit in steps (see wMotorRangeSet())
+    int userMin;  // The user-override maximum limit in steps (see wMotorRangeSet())
+    int userRestSet; // If true then userRest has meaning
+    int userRest;
     bool calibrated; // Ignore the remaining values if this is false
     int max;      // The positive calibrated limit in steps
     int min;      // The negative calibrated limit in steps
@@ -148,11 +152,11 @@ typedef struct {
  * will both function.  wGpioInit() must have returned successfully
  * before this is called.
  *
- * @param doNotOperateMotors if true, the motors will not be operated,
- *                           even for calibration; used for debug/
- *                           maintenance only as the API will not
- *                           do anything useful with this flag set.
- * @return                   zero on success else negative error code.
+ * @param doNotOperateMotors  if true, the motors will not be operated,
+ *                            even for calibration; used for debug/
+ *                            maintenance only as the API will not
+ *                            do anything useful with this flag set.
+ * @return                    zero on success else negative error code.
  */
 int wMotorInit(bool doNotOperateMotors = false);
 
@@ -214,12 +218,60 @@ std::string wMotorNameGet(wMotorType_t type);
 int wMotorCalibrate(wMotorType_t type);
 
 /** Get the calibrated range of a motor; will return an error if
- * a motor is uncalibrated.
+ * a motor is uncalibrated.  If a user range has been set with
+ * wMotorRangeSet() and it is less than the calibrated range
+ * then the user range will be reported.
  *
  * @param type the motor type to get the range of.
  * @return     the range in steps else negative error code.
  */
 int wMotorRangeGet(wMotorType_t type);
+
+/** Set the range of a motor; this should only be used, e.g.
+ * in conjunction with wMotorRangeGet(), to reduce the range
+ * of a motor if required.  Should minSteps or maxSteps fall
+ * outside of the range of the motor, estalibished during
+ * calibration, the value will be ignored.
+ *
+ * @param type     the motor type to set the range for.
+ * @param maxSteps the maximum steps value, a positive offset
+ *                 from the central zero established during
+ *                 calibration, use zero to remove an existing
+ *                 user maximum range setting and allow the
+ *                 calibrated value to take over.
+ * @param minSteps the minimum steps value, a negative offset
+ *                 from the central zero established during
+ *                 calibration, use zero to remove an existing
+ *                 user minimum range setting and allow the
+ *                 calibrated value to take over.
+ * @return         zero on success else negative error code.
+ */
+int wMotorRangeSet(wMotorType_t type, int maxSteps = 0,
+                   int minSteps = 0);
+
+/** Set the rest position of a motor; the position is set in
+ * steps relative to the centre of the motors calibrated
+ * range.  Use wMotorRestReset() to revert the rest position
+ * to whatever is the default, removing this setting.
+ *
+ * @param type  the motor type to set the rest position of.
+ * @param steps the rest position in steps; if the value is
+ *              outside of the calibrated range it will stop
+ *              at the limit, so for instance you could use
+ *              INT_MAX or INT_MIN to set the upper or lower
+ *              limit to be the rest position; 0 is the centre;
+ *              should the motor be re-calibrated the centre
+ *              will be trimmed to fit, always getting smaller.
+ * @return      zero on success else negative error code.
+ */
+int wMotorRestSet(wMotorType_t type, int steps);
+
+/** Reset the rest position of a motor to default.
+ *
+ * @param type  the motor type to reset the rest position of.
+ * @return      zero on success else negative error code.
+ */
+int wMotorRestReset(wMotorType_t type);
 
 /** Deinitialise the motors: this will disable the motors and no
  * movement will be possible until motorInit() is called once
