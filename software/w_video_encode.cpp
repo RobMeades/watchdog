@@ -390,11 +390,7 @@ int wVideoEncodeInit(std::string outputDirectory, std::string outputFileName)
             // W_HLS_SEGMENT_DURATION_SECONDS and then the HLS muxer picks that up and uses it
             // as the segment size, which is much better, since it ensures a key-frame at the
             // start of every segment.
-            if ((av_dict_set(&hlsOptions, "hls_base_url",
-                             std::string(W_HLS_BASE_URL W_UTIL_DIR_SEPARATOR +
-                                         outputDirectory +
-                                         W_UTIL_DIR_SEPARATOR).c_str(), 0) == 0) &&
-                (av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
+            if ((av_dict_set(&hlsOptions, "hls_segment_type", "mpegts", 0) == 0) &&
                 (av_dict_set_int(&hlsOptions, "hls_list_size", W_HLS_LIST_SIZE, 0) == 0) &&
                 (av_dict_set_int(&hlsOptions, "hls_allow_cache", 0, 0) == 0) &&
                 (av_dict_set(&hlsOptions, "hls_flags", "delete_segments+" // Delete segments no longer in .m3u8 file

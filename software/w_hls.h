@@ -65,12 +65,6 @@
 # define W_HLS_LIST_SIZE 15
 #endif
 
-#ifndef W_HLS_BASE_URL
-/** The URL to serve from (must NOT end with a "/").
- */
-# define W_HLS_BASE_URL "http://10.10.1.16"
-#endif
-
 /* ----------------------------------------------------------------
  * TYPES
  * -------------------------------------------------------------- */
