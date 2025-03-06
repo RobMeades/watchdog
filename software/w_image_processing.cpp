@@ -647,7 +647,7 @@ static void msgHandlerImageProcessingImageBuffer(void *msgBody,
                 W_DRAWING_DATE_TIME_TEXT_THICKNESS);
     // Create a rectangle of the same size, positioned on the main image
     cv::Rect dateTimeRegion = cv::Rect(W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_X,
-                                       msg->height - W_DRAWING_DATE_TIME_HEIGHT_PIXELS -
+                                       W_DRAWING_DATE_TIME_HEIGHT_PIXELS +
                                        W_DRAWING_DATE_TIME_REGION_OFFSET_PIXELS_Y,
                                        W_DRAWING_DATE_TIME_WIDTH_PIXELS,
                                        W_DRAWING_DATE_TIME_HEIGHT_PIXELS); 
