@@ -52,7 +52,7 @@
 /** The area of the video stream.
  */
 #define W_CAMERA_AREA_PIXELS (W_CAMERA_WIDTH_PIXELS * \
-                                     W_CAMERA_HEIGHT_PIXELS)
+                              W_CAMERA_HEIGHT_PIXELS)
 
 #ifndef W_CAMERA_FRAME_RATE_HERTZ
 /** Frames per second.
@@ -92,8 +92,9 @@ int wCameraStart(wCommonFrameFunction_t *outputCallback);
  */
 uint64_t wCameraFrameCountGet();
 
-/** Stop the camera; there is no need to call this, wCameraDeinit()
- * will perform all necessary clean-up in any case.
+/** Stop the camera; there is no need to call this, unless you want
+ * to call wCameraStart() again to change callback function;
+ * wCameraDeinit() will perform all necessary clean-up.
  *
  * @return zero on success else negative error code.
  */

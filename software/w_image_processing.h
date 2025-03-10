@@ -92,7 +92,7 @@ int wImageProcessingFocusConsume(wImageProcessingFocusFunction_t *focusCallback,
 /** Set the focus point to be drawn on the processed image.
  *
  * @param pointView   a pointer to the focus point in view
- *                    coordinates (i.e just like an X/Y graph
+ *                    coordinates (i.e. just like an X/Y graph
  *                    with the origin in the centre of the screen),
  *                    use nullptr to set the focus point as
  *                    invalid (in which case it will not be

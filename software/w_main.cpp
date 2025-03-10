@@ -15,12 +15,7 @@
  */
 
 /** @file
- * @brief The watchdog application, main().  This would normally be
- * split into multiple files with proper APIs between the image processing,
- * image streaming and control parts (there are queues between them for
- * this purpose) but since I'm editing on a PC and running on a
- * headless Raspberry Pi, having a single .cpp file that I can sftp
- * between the two makes life a lot simpler  Sorry software gods.
+ * @brief The watchdog application, main().
  *
  * This code makes use of:
  *
@@ -36,9 +31,8 @@
  *   (99% of people seem to use it via the command-line) and support
  *   only via IRC.
  * - libgpiod: to read/write GPIO pins.  Note that the Raspberry Pi 5
- *   is different to all of the other Pis where GPIOs are concerned,
- *   see http://git.munts.com/muntsos/doc/AppNote11-link-gpiochip.pdf,
- *   in case this happens again.
+ *   is different to the other Pis where GPIOs are concerned, see
+ *   http://git.munts.com/muntsos/doc/AppNote11-link-gpiochip.pdf.
  *
  * Note: to run with maximum debug from libcamera, execute this program
  * as:
@@ -49,7 +43,7 @@
  *
  * LIBCAMERA_LOG_LEVELS=3 sudo ./watchdog
  *
- * The default is to run with  log level 1, which includes
+ * The default is to run with log level 1, which includes
  * information, warning and errors from libcamera, but not pure debug.
  */
 
