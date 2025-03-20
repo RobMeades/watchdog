@@ -173,7 +173,7 @@ int wCommandLineParse(int argc, char *argv[],
                             errorCode = 0;
                         }
                     }
-                // Test for vertical rest
+                // Test for vertical rest option
                 } else if (std::string(argv[x]) == "-rv") {
                     x++;
                     if (x < argc) {
@@ -259,32 +259,32 @@ void wCommandLinePrintChoices(wCommandLineParameters_t *choices)
                       <<  choices->motionContinuousSeconds
                       << " second(s)";
         }
-        if (choices->restVerticalSteps > 0) {
+        if (choices->restVerticalSteps != 0) {
             std::cout << ", vertical rest position is "
                       <<  choices->restVerticalSteps
                       << " steps(s) relative to centre";
         }
-        if (choices->restHorizontalSteps > 0) {
+        if (choices->restHorizontalSteps != 0) {
             std::cout << ", horizontal rest position is "
                       <<  choices->restHorizontalSteps
                       << " steps(s) relative to centre";
         }
-        if (choices->lookUpLimitSteps > 0) {
+        if (choices->lookUpLimitSteps != 0) {
             std::cout << ", look-up limit is "
                       <<  choices->lookUpLimitSteps
                       << " steps(s) relative to centre";
         }
-        if (choices->lookDownLimitSteps > 0) {
+        if (choices->lookDownLimitSteps != 0) {
             std::cout << ", look-down limit is "
                       <<  choices->lookDownLimitSteps
                       << " steps(s) relative to centre";
         }
-        if (choices->lookRightLimitSteps > 0) {
+        if (choices->lookRightLimitSteps != 0) {
             std::cout << ", look-right limit is "
                       <<  choices->lookRightLimitSteps
                       << " steps(s) relative to centre";
         }
-        if (choices->lookLeftLimitSteps > 0) {
+        if (choices->lookLeftLimitSteps != 0) {
             std::cout << ", look-left limit is "
                       <<  choices->lookLeftLimitSteps
                       << " steps(s) relative to centre";
